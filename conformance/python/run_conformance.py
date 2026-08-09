@@ -7,11 +7,12 @@ This proves an implementation with no shared code path (see
 and rules hashes, and reaches the same structural-rejection decisions as the
 Rust reference. It exits non-zero on any disagreement.
 
-Scope of THIS increment (issue #5, first step): canonicalization, ids, hashes,
-strict decoding, and structural log integrity. It does not re-derive verdicts
-(the per-record rule battery, retraction, and taint); cases that hinge on that
-are reported as `deferred` rather than skipped silently, and are the subject of
-the next increment. Run from anywhere:
+This now covers both increments of issue #5: canonicalization, ids, hashes,
+strict decoding, and structural log integrity (`bellbook_conformance.py`), plus
+the full verdict rule battery, retraction, and transitive taint
+(`bellbook_verdict.py`) - every record case's verdict and every receipt case's
+status, reason, and retracted/tainted sets are re-derived independently. Run
+from anywhere:
 
     python3 conformance/python/run_conformance.py
 """
@@ -26,6 +27,7 @@ import sys
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 import bellbook_conformance as bb  # noqa: E402
+import bellbook_verdict as bv  # noqa: E402
 
 ROOT = pathlib.Path(__file__).resolve().parents[2]
 VECTORS = ROOT / "spec" / "test-vectors-v0.2.json"
@@ -154,63 +156,123 @@ def _verify_signature(sv: dict) -> list[str]:
 # ---------------------------------------------------------------------------
 
 
+def _require_signature_or_skip(where: str, skipped: list[str], name: str) -> None:
+    """A case whose verdict needs a present signature verified. In CI
+    (`BELLBOOK_REQUIRE_SIGNATURE`) this is a hard failure; elsewhere it degrades
+    to a recorded skip, exactly as the signed test vector does."""
+    if os.environ.get("BELLBOOK_REQUIRE_SIGNATURE"):
+        raise Failed(
+            f"{where}: `cryptography` is required (BELLBOOK_REQUIRE_SIGNATURE set) "
+            "to verify the record's signature but could not be loaded"
+        )
+    skipped.append(name)
+
+
 def run_record_cases() -> tuple[int, list[str]]:
     cases = load(CORPUS / "record-cases.json")["cases"]
     check(len(cases) > 0, "record-cases.json is empty")
     ids = 0
+    verdicts = 0
+    sig_skipped: list[str] = []
     for c in cases:
+        # 1. Every stored id recomputes from content.
         for r in c["prior"] + [c["candidate"]]:
             check(
                 bb.record_id(r) == bb.bytes32(r["id"]),
                 f"record case `{c['name']}`: recomputed id differs from stored",
             )
             ids += 1
+        # 2. Independently re-derive the verdict and compare to the stored one.
+        rules = bv.Rules(c["rules"])
+        state = bv.build_state_unchecked(c["prior"])
+        expected = {"result": c["expect"]["result"], "reason": c["expect"].get("reason")}
+        try:
+            with _quiet_native_stderr():
+                got = bv.verify_record(c["candidate"], c["prior"], rules, state)
+        except bv.SignatureUnavailable:
+            _require_signature_or_skip(f"record case `{c['name']}`", sig_skipped, c["name"])
+            continue
+        check(
+            got == expected,
+            f"record case `{c['name']}`: re-derived verdict {got} differs from stored {expected}",
+        )
+        verdicts += 1
     notes = [
         f"recomputed {ids} record ids across {len(cases)} record cases (all match)",
-        "verdict re-derivation for record cases is the next increment (deferred)",
+        f"independently re-derived {verdicts} verdicts (result + reason) matching the stored verdict",
     ]
-    return ids, notes
+    if sig_skipped:
+        notes.append(
+            "signature cases skipped (`cryptography` unavailable): " + ", ".join(sig_skipped)
+        )
+    return ids + verdicts, notes
 
 
 def run_receipt_cases() -> tuple[int, list[str]]:
     cases = load(CORPUS / "receipt-cases.json")["cases"]
     check(len(cases) > 0, "receipt-cases.json is empty")
-    reproduced = 0
-    notes: list[str] = []
+    assertions = 0
+    statuses = {"Clean": 0, "Tainted": 0, "Invalid": 0}
+    sig_skipped: list[str] = []
     for c in cases:
         rc = c["receipt"]
         records = rc["records"]
         expect = c["expect"]
-        struct = bb.check_structure(records)
-        if not struct.ok:
-            # Our structural layer rejects -> the corpus must also call it Invalid.
-            check(
-                expect["status"] == "Invalid",
-                f"receipt case `{c['name']}`: we reject structurally but corpus says {expect['status']}",
-            )
-            reproduced += 1
-        elif expect["status"] == "Invalid":
-            # Structurally intact but Invalid: detectable only by re-deriving the
-            # verdict (e.g. a forged verdict). Beyond this increment.
-            notes.append(f"`{c['name']}`: Invalid via verdict re-derivation (deferred)")
-        else:
-            # Clean or Tainted: structurally valid. Hashes and count must agree.
-            check(
-                bb.head_hash(records) == bb.bytes32(expect["head_hash"]),
-                f"receipt case `{c['name']}`: head_hash differs",
-            )
-            check(
-                bb.rules_hash(rc["rules"]) == bb.bytes32(expect["rules_hash"]),
-                f"receipt case `{c['name']}`: rules_hash differs",
-            )
-            check(
-                len(records) == expect["record_count"],
-                f"receipt case `{c['name']}`: record_count differs",
-            )
-            reproduced += 1
-            if expect["status"] == "Tainted":
-                notes.append(f"`{c['name']}`: structure+hashes match; taint set deferred")
-    return reproduced, notes
+
+        # Structural cross-checks: head hash, rules hash, and record count are
+        # reproduced independently for every case (including Invalid ones -
+        # validate() reports them regardless of replay outcome).
+        check(
+            bb.head_hash(records) == bb.bytes32(expect["head_hash"]),
+            f"receipt case `{c['name']}`: head_hash differs",
+        )
+        check(
+            bb.rules_hash(rc["rules"]) == bb.bytes32(expect["rules_hash"]),
+            f"receipt case `{c['name']}`: rules_hash differs",
+        )
+        check(
+            len(records) == expect["record_count"],
+            f"receipt case `{c['name']}`: record_count differs",
+        )
+        assertions += 3
+
+        # Semantic reproduction: full replay yields the same status, reason, and
+        # retracted/tainted sets as the reference.
+        try:
+            with _quiet_native_stderr():
+                report = bv.validate_receipt(records, rc["rules"])
+        except bv.SignatureUnavailable:
+            _require_signature_or_skip(f"receipt case `{c['name']}`", sig_skipped, c["name"])
+            continue
+        check(
+            report["status"] == expect["status"],
+            f"receipt case `{c['name']}`: status {report['status']} differs from {expect['status']}",
+        )
+        check(
+            report["reason"] == expect.get("reason"),
+            f"receipt case `{c['name']}`: reason {report['reason']} differs from {expect.get('reason')}",
+        )
+        expect_ret = sorted(bb.bytes32(x).hex() for x in expect.get("retracted", []))
+        expect_tai = sorted(bb.bytes32(x).hex() for x in expect.get("tainted", []))
+        check(
+            report["retracted"] == expect_ret,
+            f"receipt case `{c['name']}`: retracted set differs",
+        )
+        check(
+            report["tainted"] == expect_tai,
+            f"receipt case `{c['name']}`: tainted set differs",
+        )
+        assertions += 4
+        statuses[report["status"]] = statuses.get(report["status"], 0) + 1
+
+    notes = [
+        "independently replayed each receipt: status, reason, retracted and tainted "
+        f"sets match ({statuses['Clean']} Clean, {statuses['Tainted']} Tainted, "
+        f"{statuses['Invalid']} Invalid)",
+    ]
+    if sig_skipped:
+        notes.append("signature cases skipped (`cryptography` unavailable): " + ", ".join(sig_skipped))
+    return assertions, notes
 
 
 def run_malformed_cases() -> tuple[int, list[str]]:
@@ -261,7 +323,9 @@ def main() -> int:
     print(f"\nAll independent checks passed ({total} assertions).")
     print("Independent implementation agrees with the Rust reference on")
     print("canonicalization, record ids, head/rules hashes, strict decoding,")
-    print("and structural log integrity across the vectors and the full corpus.")
+    print("structural log integrity, and the full verdict rule battery")
+    print("(per-record verdicts, retraction, and taint) across the vectors")
+    print("and the entire conformance corpus.")
     return 0
 
 
