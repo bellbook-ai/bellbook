@@ -78,18 +78,19 @@ failures surface in `Report.problem`, not `Report.reason`.
 
 ## Reason-code coverage
 
-Of the 20 `ReasonCode` variants, three are intentionally not triggered here and
-are exercised by the crate's own integration suite instead, because they cannot
-be expressed in the portable wire format this corpus uses:
+The corpus triggers 17 of the 20 `ReasonCode` variants as verdicts. The other
+three are excluded for two different reasons:
 
-- **`Refused`** is a reason a `Refusal` *record* may cite in its payload, not a
-  verdict the verifier emits. No verdict carries it.
-- **`InvalidCheckpoint`** arises only on the trusted-checkpoint replay path.
-  Checkpoints are opaque and never travel inside a receipt, so no receipt or
-  record case can carry one.
-- **`RefCrossSpace`** requires a reference into a second space; a single-space
-  log (which is what a receipt is) cannot carry it.
+- **`Refused`** is never emitted as a verdict at all - it is a reason a
+  `Refusal` *record* may cite in its own payload. No verdict carries it, so
+  there is nothing to trigger.
+- **`InvalidCheckpoint`** and **`RefCrossSpace`** *are* genuine verdict reasons,
+  but neither can be expressed in the portable wire format this corpus uses:
+  `InvalidCheckpoint` arises only on the trusted-checkpoint replay path, and
+  checkpoints are opaque and never travel inside a receipt; `RefCrossSpace`
+  needs a reference into a second space, which a single-space log (what a
+  receipt is) cannot carry. The crate's own integration suite exercises both.
 
-The `conformance` test asserts that the remaining 17 verdict reasons each have
-at least one triggering case, so a future reason code added to the verifier
+The `conformance` test asserts that the 17 wire-expressible verdict reasons each
+have at least one triggering case, so a future reason code added to the verifier
 without a corpus case fails the build.
