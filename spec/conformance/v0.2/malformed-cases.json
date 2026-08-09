@@ -10,7 +10,7 @@
       "expect": {
         "status": "Invalid",
         "reason": null,
-        "problem_contains": "unparseable receipt: unknown field `extra`, expected one of `spec_version`, `rules`, `records` at line 1 column 8"
+        "problem_contains": "unparseable receipt: unknown field `extra`"
       }
     },
     {
@@ -21,7 +21,7 @@
       "expect": {
         "status": "Invalid",
         "reason": null,
-        "problem_contains": "unsupported spec version \"0.3\" (this validator implements \"0.2\")"
+        "problem_contains": "unsupported spec version"
       }
     },
     {
@@ -32,7 +32,7 @@
       "expect": {
         "status": "Invalid",
         "reason": null,
-        "problem_contains": "unparseable receipt: expected ident at line 1 column 2"
+        "problem_contains": "unparseable receipt"
       }
     },
     {
@@ -43,7 +43,7 @@
       "expect": {
         "status": "Invalid",
         "reason": null,
-        "problem_contains": "unparseable receipt: EOF while parsing a list at line 1 column 7498"
+        "problem_contains": "unparseable receipt"
       }
     },
     {
@@ -59,7 +59,7 @@
       "expect": {
         "status": "Invalid",
         "reason": null,
-        "problem_contains": "receipt exceeds size limit (14997 > 32 bytes)"
+        "problem_contains": "receipt exceeds size limit"
       }
     },
     {
@@ -75,7 +75,7 @@
       "expect": {
         "status": "Invalid",
         "reason": null,
-        "problem_contains": "receipt exceeds record limit (12 > 1)"
+        "problem_contains": "receipt exceeds record limit"
       }
     }
   ]

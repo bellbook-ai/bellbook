@@ -12,8 +12,8 @@ and releases follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Machine-readable conformance corpus under `spec/conformance/v0.2/`
   (record, receipt, and malformed-document cases) with a runner that
   re-derives every outcome from the stored inputs. It triggers a case for
-  every rejection reason the verifier emits as a verdict and documents the
-  three reason codes the portable format cannot express. Regenerate with
+  every verdict rejection reason the portable format can express and
+  documents the three reason codes it cannot. Regenerate with
   `UPDATE_CONFORMANCE=1`.
 
 ## [0.2.0] - 2026-08-09

@@ -46,8 +46,8 @@ verdict equals `expect`. Covers author-role acceptance and rejection, the
 signature matrix (missing / invalid / pinned-and-valid), schema binding,
 payload canonicality, request lifecycle, capability and approval resolution
 (including expiry and single-use exact approvals), authority binding, and
-evidence thresholds. Collectively these cases trigger **every rejection reason
-the verifier can emit as a verdict** (see coverage note below).
+evidence thresholds. Collectively these cases trigger **every verdict rejection
+reason the portable wire format can express** (see coverage note below).
 
 ### `receipt-cases.json`
 

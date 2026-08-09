@@ -829,8 +829,8 @@ derived-state hashes. It covers author-role binding, the signature
 matrix, capability and approval resolution (including expiry and
 single-use exact approvals), retraction taint (which follows `Use` and
 `Require` refs but not `Cause`), validation-limit failures, and at least
-one triggering case for every rejection reason the verifier emits as a
-verdict. A conformant validator re-derives each stored outcome from the
+one triggering case for every verdict rejection reason the portable format
+can express. A conformant validator re-derives each stored outcome from the
 stored input. The corpus README documents the wire encoding and the three
 reason codes (`Refused`, `InvalidCheckpoint`, `RefCrossSpace`) that the
 single-space, checkpoint-free receipt format cannot express and that the

@@ -7,15 +7,13 @@
 //! the *stored* corpus, so an independent implementation (see issue #5) can
 //! reproduce the same behavior byte for byte.
 //!
-//! Two case families:
+//! Three case families:
 //!   * record cases   - `verify_record(candidate, prior, rules, state)` == expected verdict.
 //!   * receipt cases  - `validate(receipt_bytes)` report status/reason/hashes.
 //!   * malformed cases - hostile raw documents that fail structurally.
 //!
 //! Coverage is asserted: every emitted `ReasonCode` that is expressible in the
 //! portable wire format has at least one triggering case.
-
-#![allow(clippy::type_complexity)]
 
 use bellbook::*;
 use std::collections::BTreeSet;
@@ -773,6 +771,8 @@ fn build_record_cases() -> Vec<RecordCase> {
             cand(action_proposal_with_authority(rid, "tool", &[cid]))
         },
     ));
+    // Shares the CapabilityMissing reason with reject-capability-missing (there
+    // is no CapabilityExpired code) but exercises the expiry branch.
     cases.push(record_case(
         "reject-capability-expired",
         "An Action naming a capability whose expiry time has passed.",
@@ -828,6 +828,8 @@ fn build_record_cases() -> Vec<RecordCase> {
             cand(p)
         },
     ));
+    // Shares the ApprovalMissing reason with reject-approval-missing but
+    // exercises the single-use consumption path (the approval was spent).
     cases.push(record_case(
         "reject-exact-approval-single-use",
         "A second Action reusing an exact approval that a first Action already consumed.",
@@ -1046,11 +1048,40 @@ fn build_malformed_cases() -> Vec<MalformedCase> {
         ValidationStatus::Clean
     );
 
-    let structural = |status: ValidationStatus, problem: &str| MalformedExpect {
-        status,
-        reason: None,
-        problem_contains: Some(problem.into()),
-    };
+    // Build a malformed case from a validate() report. `problem_substr` is a
+    // short, stable fragment of the structural-failure message - deliberately
+    // NOT the whole `problem` string, which carries volatile serde offsets and
+    // generated sizes. The generator asserts the fragment is actually present.
+    fn malformed(
+        name: &str,
+        description: &str,
+        input: String,
+        limits: Option<CaseLimits>,
+        report: &Report,
+        problem_substr: &str,
+    ) -> MalformedCase {
+        let problem = report.problem.clone().unwrap_or_default();
+        assert!(
+            problem.contains(problem_substr),
+            "malformed `{name}`: problem {problem:?} does not contain {problem_substr:?}"
+        );
+        assert_eq!(
+            report.status,
+            ValidationStatus::Invalid,
+            "malformed `{name}` status"
+        );
+        MalformedCase {
+            name: name.into(),
+            description: description.into(),
+            input,
+            limits,
+            expect: MalformedExpect {
+                status: report.status,
+                reason: report.reason,
+                problem_contains: Some(problem_substr.into()),
+            },
+        }
+    }
 
     // Extra top-level field -> strict decoding rejects.
     {
@@ -1060,17 +1091,14 @@ fn build_malformed_cases() -> Vec<MalformedCase> {
             .insert("extra".into(), serde_json::json!(true));
         let input = serde_json::to_string(&v).unwrap();
         let report = validate(input.as_bytes());
-        cases.push(MalformedCase {
-            name: "strict-decode-extra-top-level-field".into(),
-            description: "A receipt document with an unknown top-level field.".into(),
+        cases.push(malformed(
+            "strict-decode-extra-top-level-field",
+            "A receipt document with an unknown top-level field.",
             input,
-            limits: None,
-            expect: MalformedExpect {
-                status: report.status,
-                reason: report.reason,
-                problem_contains: report.problem.clone(),
-            },
-        });
+            None,
+            &report,
+            "unparseable receipt: unknown field `extra`",
+        ));
     }
 
     // Wrong spec version.
@@ -1081,54 +1109,42 @@ fn build_malformed_cases() -> Vec<MalformedCase> {
             .insert("spec_version".into(), serde_json::json!("0.3"));
         let input = serde_json::to_string(&v).unwrap();
         let report = validate(input.as_bytes());
-        assert_eq!(report.status, ValidationStatus::Invalid);
-        cases.push(MalformedCase {
-            name: "wrong-spec-version".into(),
-            description: "A receipt declaring an unsupported spec version.".into(),
+        cases.push(malformed(
+            "wrong-spec-version",
+            "A receipt declaring an unsupported spec version.",
             input,
-            limits: None,
-            expect: MalformedExpect {
-                status: report.status,
-                reason: report.reason,
-                problem_contains: report.problem.clone(),
-            },
-        });
+            None,
+            &report,
+            "unsupported spec version",
+        ));
     }
 
     // Not JSON at all.
     {
         let input = "this is not a receipt".to_string();
         let report = validate(input.as_bytes());
-        assert_eq!(report.status, ValidationStatus::Invalid);
-        cases.push(MalformedCase {
-            name: "not-json".into(),
-            description: "Arbitrary bytes that do not parse as JSON.".into(),
+        cases.push(malformed(
+            "not-json",
+            "Arbitrary bytes that do not parse as JSON.",
             input,
-            limits: None,
-            expect: MalformedExpect {
-                status: report.status,
-                reason: report.reason,
-                problem_contains: report.problem.clone(),
-            },
-        });
+            None,
+            &report,
+            "unparseable receipt",
+        ));
     }
 
     // Truncated JSON.
     {
         let input = clean_json[..clean_json.len() / 2].to_string();
         let report = validate(input.as_bytes());
-        assert_eq!(report.status, ValidationStatus::Invalid);
-        cases.push(MalformedCase {
-            name: "truncated-json".into(),
-            description: "The receipt document cut in half.".into(),
+        cases.push(malformed(
+            "truncated-json",
+            "The receipt document cut in half.",
             input,
-            limits: None,
-            expect: MalformedExpect {
-                status: report.status,
-                reason: report.reason,
-                problem_contains: report.problem.clone(),
-            },
-        });
+            None,
+            &report,
+            "unparseable receipt",
+        ));
     }
 
     // Exceeds max_bytes.
@@ -1140,18 +1156,14 @@ fn build_malformed_cases() -> Vec<MalformedCase> {
             max_refs_per_record: 4096,
         };
         let report = validate_with_limits(clean_json.as_bytes(), &to_limits(&limits));
-        assert_eq!(report.status, ValidationStatus::Invalid);
-        cases.push(MalformedCase {
-            name: "exceeds-max-bytes".into(),
-            description: "A valid receipt rejected because it exceeds a tiny byte budget.".into(),
-            input: clean_json.clone(),
-            limits: Some(limits),
-            expect: MalformedExpect {
-                status: report.status,
-                reason: report.reason,
-                problem_contains: report.problem.clone(),
-            },
-        });
+        cases.push(malformed(
+            "exceeds-max-bytes",
+            "A valid receipt rejected because it exceeds a tiny byte budget.",
+            clean_json.clone(),
+            Some(limits),
+            &report,
+            "receipt exceeds size limit",
+        ));
     }
 
     // Exceeds max_records.
@@ -1163,21 +1175,16 @@ fn build_malformed_cases() -> Vec<MalformedCase> {
             max_refs_per_record: 4096,
         };
         let report = validate_with_limits(clean_json.as_bytes(), &to_limits(&limits));
-        assert_eq!(report.status, ValidationStatus::Invalid);
-        cases.push(MalformedCase {
-            name: "exceeds-max-records".into(),
-            description: "A valid multi-record receipt rejected under a one-record budget.".into(),
-            input: clean_json.clone(),
-            limits: Some(limits),
-            expect: MalformedExpect {
-                status: report.status,
-                reason: report.reason,
-                problem_contains: report.problem.clone(),
-            },
-        });
+        cases.push(malformed(
+            "exceeds-max-records",
+            "A valid multi-record receipt rejected under a one-record budget.",
+            clean_json.clone(),
+            Some(limits),
+            &report,
+            "receipt exceeds record limit",
+        ));
     }
 
-    let _ = structural; // keep helper available for future cases
     cases
 }
 
@@ -1354,11 +1361,18 @@ fn conformance_corpus() {
     );
 }
 
-/// Every `ReasonCode` that can be produced through the portable wire format.
-/// `InvalidCheckpoint` and `RefCrossSpace` are excluded and documented in the
-/// corpus README: checkpoints are opaque and never travel in a receipt, and a
-/// cross-space reference needs a multi-space log the single-space wire form
-/// cannot carry. Both are exercised by the crate's own integration suite.
+/// Every verdict `ReasonCode` that is expressible through the portable wire
+/// format. Three of the 20 variants are excluded and documented in the corpus
+/// README:
+///   - `Refused` is a reason a `Refusal` record cites in its payload; the
+///     verifier never emits it as a verdict.
+///   - `InvalidCheckpoint` arises only on the trusted-checkpoint replay path;
+///     checkpoints are opaque and never travel inside a receipt.
+///   - `RefCrossSpace` needs a reference into a second space, which a
+///     single-space receipt cannot carry.
+///
+/// The latter two are genuine verdict reasons; they are exercised by the
+/// crate's own integration suite instead.
 fn wire_expressible_reasons() -> Vec<ReasonCode> {
     vec![
         ReasonCode::UnknownSchema,
