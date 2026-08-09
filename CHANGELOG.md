@@ -9,7 +9,7 @@ and releases follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 No changes yet.
 
-## [0.2.0] - Unreleased
+## [0.2.0] - 2026-08-09
 
 First public release. Implements Bellbook spec version 0.2, the first
 published compatibility epoch.
