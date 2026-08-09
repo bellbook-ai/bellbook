@@ -821,6 +821,21 @@ version, including the strict receipt decoding requirements above.
 There is no badge program and no registry - the claim is defined so that
 it can be checked, disputed, and falsified by anyone holding the vectors.
 
+Beyond the per-kind hashing vectors, `spec/conformance/<version>/`
+publishes a machine-readable **conformance corpus**: accept and reject
+cases that pair a portable input (records and rules, or a raw receipt
+document) with the expected verdict, receipt status, reason code, and
+derived-state hashes. It covers author-role binding, the signature
+matrix, capability and approval resolution (including expiry and
+single-use exact approvals), retraction taint (which follows `Use` and
+`Require` refs but not `Cause`), validation-limit failures, and at least
+one triggering case for every verdict rejection reason the portable format
+can express. A conformant validator re-derives each stored outcome from the
+stored input. The corpus README documents the wire encoding and the three
+reason codes (`Refused`, `InvalidCheckpoint`, `RefCrossSpace`) that the
+single-space, checkpoint-free receipt format cannot express and that the
+reference implementation's own test suite exercises instead.
+
 ## 13. Known limitations
 
 - **Integrity, not confidentiality.** Records and receipts carry full
