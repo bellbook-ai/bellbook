@@ -60,12 +60,18 @@ corpus, all independently:
   needs the `cryptography` package (Ed25519). In CI it is required; elsewhere
   those specific cases degrade to a clear skip. Every unsigned case - which is
   all receipt cases and most record cases - is pure standard library.
-- **Payload typing.** The canonical-payload rule is reproduced as a canonical
-  round-trip plus a per-schema top-level field-set check (a stored payload
-  always serializes its full field set, so this catches unknown or missing
-  top-level fields the way serde's `deny_unknown_fields` does). Field *typing*
-  of nested payload structs (a plan task, an attachment) is covered by the
-  round-trip rather than a typed decode; no corpus case turns on that.
+- **Payload typing.** The canonical-payload rule is reproduced as a typed
+  decode - every payload field, including nested plan tasks and attachments, is
+  checked for its serde type and enum-variant membership, and the exact field
+  set is enforced - plus a JCS round-trip confirming the bytes are the canonical
+  serialization. Envelope enums (kind, author type, evidence, ref types) are
+  validated structurally before any rule runs, so an unknown variant is a clean
+  rejection, matching the reference's typed decode.
+- **Numbers.** Canonicalization is integer-only (inherited from the JCS module),
+  matching the wire format's typed payloads. The one free-form field,
+  `ActionData.params` (`serde_json::Value`), is accepted as-is; a floating-point
+  number inside it would be rejected here rather than canonicalized, so it is out
+  of scope. No corpus case exercises it.
 - **Checkpoints** are a host-side acceleration and never travel in a receipt, so
   the checkpoint replay path is out of scope here (receipts always verify from
   genesis).

@@ -20,12 +20,14 @@ skips or fails them per `BELLBOOK_REQUIRE_SIGNATURE`. Everything with no present
 signature - which is every receipt case and most record cases - is pure
 standard library.
 
-Scope note: the canonical-payload rule is reproduced as a canonical round-trip
-plus a per-schema top-level field-set check (a stored payload always serializes
-its complete field set, so this catches unknown/missing top-level fields the way
-serde's `deny_unknown_fields` does). Field typing of *nested* payload structs
-(a plan task, an attachment) is covered only by the round-trip, not by a typed
-decode; no corpus case turns on that distinction.
+Scope note: the canonical-payload rule is reproduced as a typed decode (every
+payload field, including nested plan tasks and attachments, is checked for its
+serde type and enum-variant membership, and the exact field set is enforced)
+*plus* a JCS round-trip that confirms the bytes are the canonical serialization.
+Together these reject the same payloads the reference's typed `serde` decode
+does. Envelope enums (kind, author type, evidence, ref types) are validated
+structurally before any rule runs, so an unknown variant is a clean rejection
+rather than a lookup crash.
 """
 
 from __future__ import annotations
@@ -78,25 +80,131 @@ def schema_id_hex(name: str) -> str:
 
 SCHEMA_ID_TO_NAME = {schema_id_hex(n): n for n in ALL_SCHEMAS}
 
-# The complete serialized field set of each schema's payload. serde serializes
-# every struct field (including `None` as null and empty vecs), so a stored,
-# canonical payload always carries exactly these top-level keys.
-PAYLOAD_FIELDS = {
-    SCHEMA_REQUEST: frozenset({"objective", "scope", "attachments", "parent_request_id"}),
-    SCHEMA_ACTION: frozenset({"request_id", "action_class", "scope", "exec_mode", "params"}),
-    SCHEMA_RESPONSE: frozenset({"request_id", "content", "turn_index", "closes_request"}),
-    SCHEMA_RESULT: frozenset({"action_id", "status", "output"}),
-    SCHEMA_RESULT_EXTERNAL: frozenset({"action_id", "status", "output"}),
-    SCHEMA_RESULT_EFFECT_CONFIRMATION: frozenset({"action_id", "status", "output"}),
-    SCHEMA_CAPABILITY: frozenset({"actor_id", "action_class", "scope", "mode", "expiry"}),
-    SCHEMA_APPROVAL: frozenset({"target_action", "action_class", "scope", "actor_id", "expiry"}),
-    SCHEMA_SUMMARY: frozenset({"summary_type", "subject", "scope", "claim_payload"}),
-    SCHEMA_REFUSAL: frozenset({"target_id", "target_kind", "reason_code"}),
-    SCHEMA_USAGE: frozenset({"actor", "used_record", "consuming_record", "role", "outcome"}),
-    SCHEMA_VERDICT: frozenset({"result", "reason"}),
-    SCHEMA_PLAN: frozenset({"request_id", "tasks", "status"}),
-    SCHEMA_RETRACTION: frozenset({"target_id", "reason"}),
+# Enum variant sets (serde rejects any other string at decode). Most enums use
+# the PascalCase variant name; the plan enums are `#[serde(rename_all =
+# "snake_case")]` (src/record/payloads.rs, src/record/kind.rs).
+EXEC_MODE = frozenset({"Internal", "External"})
+CAP_MODE = frozenset({"Auto", "Ask", "Deny"})
+RESULT_STATUS = frozenset({"Success", "Failure"})
+SUMMARY_TYPE = frozenset({"Procedure", "Pattern", "Lesson", "StateSnapshot"})
+USAGE_OUTCOME = frozenset({"Done", "NotDone", "NoChange"})
+REFUSAL_TARGET = frozenset({"Action", "Request", "VerifiedEffect"})
+VERDICT_RESULT = frozenset({"Accept", "Reject"})
+REASON_CODE = frozenset({
+    "UnknownSchema", "KindSchemaMismatch", "SignatureMissing", "SignatureInvalid",
+    "RefUnresolved", "RefCrossSpace", "RequestMissing", "CapabilityMissing",
+    "CapabilityDenied", "ApprovalMissing", "ApprovalExpired", "ActionClosed",
+    "ReplacementInvalid", "ExternalReceiptRequired", "EvidenceBelowThreshold",
+    "Refused", "InvalidPayload", "InvalidCheckpoint", "AuthorRoleInvalid",
+    "AuthorityRefMissing",
+})
+PLAN_STATUS = frozenset({"running", "completed", "abandoned"})
+TASK_STATUS = frozenset({"pending", "running", "done", "failed", "skipped"})
+PLAN_TASK_KIND = frozenset(
+    {"generic", "inspect", "search", "extract", "verify", "write", "summarize"}
+)
+TASK_DONE_WHEN = frozenset(
+    {"tool_success", "non_empty_result", "content_retrieved", "final_response"}
+)
+FAILURE_POLICY = frozenset({"continue", "ask_user", "abort"})
+
+# Envelope enums (validated structurally, as serde does when it decodes a
+# Record; an unknown value here is a decode rejection, not a rule violation).
+KINDS = frozenset(
+    {
+        "Request", "Action", "Response", "Result", "Summary", "Approval",
+        "Capability", "Usage", "Refusal", "Verdict", "Plan", "Retraction",
+    }
+)
+AUTHOR_TYPES = frozenset({"User", "Provider", "System", "Executor", "Verifier"})
+EVIDENCES = frozenset({"Deterministic", "Verified", "Reported", "Inferred", "Assumed"})
+REF_TYPES = frozenset({"Cause", "Use", "Require", "Replace"})
+
+# Typed field descriptors for each payload struct, mirroring the serde types so
+# an unknown enum variant or a mistyped field rejects exactly as the reference's
+# typed decode does. A stored payload also serializes its complete field set, so
+# an exact-key-set check reproduces `deny_unknown_fields` and missing fields.
+_STRUCT_SPECS = {
+    "Attachment": {"path": "str", "content": "str"},
+    "PlanTask": {
+        "id": "str",
+        "description": "str",
+        "kind": ("enum", PLAN_TASK_KIND),
+        "tool_hint": ("opt", "str"),
+        "inputs_from": ("vec", "str"),
+        "produces": ("opt", "str"),
+        "done_when": ("enum", TASK_DONE_WHEN),
+        "status": ("enum", TASK_STATUS),
+        "result_record_id": ("opt", "hash"),
+        "depends_on": ("vec", "str"),
+        "on_failure": ("enum", FAILURE_POLICY),
+    },
 }
+
+_PAYLOAD_SPECS = {
+    SCHEMA_REQUEST: {
+        "objective": "str",
+        "scope": "hash",
+        "attachments": ("vec", ("struct", "Attachment")),
+        "parent_request_id": ("opt", "hash"),
+    },
+    SCHEMA_ACTION: {
+        "request_id": "hash",
+        "action_class": "str",
+        "scope": "hash",
+        "exec_mode": ("enum", EXEC_MODE),
+        "params": "value",
+    },
+    SCHEMA_RESPONSE: {
+        "request_id": "hash",
+        "content": "str",
+        "turn_index": "u32",
+        "closes_request": "bool",
+    },
+    SCHEMA_RESULT: {"action_id": "hash", "status": ("enum", RESULT_STATUS), "output": "str"},
+    SCHEMA_CAPABILITY: {
+        "actor_id": "str",
+        "action_class": "str",
+        "scope": "hash",
+        "mode": ("enum", CAP_MODE),
+        "expiry": ("opt", "u64"),
+    },
+    SCHEMA_APPROVAL: {
+        "target_action": ("opt", "hash"),
+        "action_class": ("opt", "str"),
+        "scope": "hash",
+        "actor_id": ("opt", "str"),
+        "expiry": ("opt", "u64"),
+    },
+    SCHEMA_SUMMARY: {
+        "summary_type": ("enum", SUMMARY_TYPE),
+        "subject": "hash",
+        "scope": "hash",
+        "claim_payload": "bytes",
+    },
+    SCHEMA_REFUSAL: {
+        "target_id": "hash",
+        "target_kind": ("enum", REFUSAL_TARGET),
+        "reason_code": ("opt", ("enum", REASON_CODE)),
+    },
+    SCHEMA_USAGE: {
+        "actor": "str",
+        "used_record": "hash",
+        "consuming_record": "hash",
+        "role": "str",
+        "outcome": ("enum", USAGE_OUTCOME),
+    },
+    SCHEMA_VERDICT: {"result": ("enum", VERDICT_RESULT), "reason": ("opt", ("enum", REASON_CODE))},
+    SCHEMA_PLAN: {
+        "request_id": "hash",
+        "tasks": ("vec", ("struct", "PlanTask")),
+        "status": ("enum", PLAN_STATUS),
+    },
+    SCHEMA_RETRACTION: {"target_id": "hash", "reason": "str"},
+}
+# The three Result schemas share the ResultData shape.
+_PAYLOAD_SPECS[SCHEMA_RESULT_EXTERNAL] = _PAYLOAD_SPECS[SCHEMA_RESULT]
+_PAYLOAD_SPECS[SCHEMA_RESULT_EFFECT_CONFIRMATION] = _PAYLOAD_SPECS[SCHEMA_RESULT]
 
 # ---------------------------------------------------------------------------
 # Ordinals and normative tables (src/record/kind.rs, evidence.rs).
@@ -474,14 +582,56 @@ def build_state_unchecked(records: list[dict]) -> State:
 
 
 # ---------------------------------------------------------------------------
-# Canonical-payload rule (src/verify/verifier/record_checks.rs).
+# Typed payload decode + canonical-payload rule (record_checks.rs).
 # ---------------------------------------------------------------------------
+
+
+def _is_uint(v: Any, bits: int) -> bool:
+    return isinstance(v, int) and not isinstance(v, bool) and 0 <= v <= (1 << bits) - 1
+
+
+def _conforms(value: Any, desc: Any) -> bool:
+    """Whether `value` decodes to the serde type described by `desc` - the check
+    the reference's typed `serde` decode performs (unknown enum variants and
+    mistyped fields reject)."""
+    if desc == "str":
+        return isinstance(value, str)
+    if desc == "bool":
+        return isinstance(value, bool)
+    if desc == "u32":
+        return _is_uint(value, 32)
+    if desc == "u64":
+        # u64 on the wire, but JCS caps integers at the I-JSON safe bound and
+        # rejects negatives, so that is the effective accepted range.
+        return isinstance(value, int) and not isinstance(value, bool) and 0 <= value <= bb.MAX_SAFE_INTEGER
+    if desc == "hash":
+        return isinstance(value, list) and len(value) == 32 and all(_is_uint(b, 8) for b in value)
+    if desc == "bytes":
+        return isinstance(value, list) and all(_is_uint(b, 8) for b in value)
+    if desc == "value":  # serde_json::Value - any JSON is accepted.
+        return True
+    tag = desc[0]
+    if tag == "enum":
+        return isinstance(value, str) and value in desc[1]
+    if tag == "opt":
+        return value is None or _conforms(value, desc[1])
+    if tag == "vec":
+        return isinstance(value, list) and all(_conforms(x, desc[1]) for x in value)
+    if tag == "struct":
+        return _struct_conforms(value, _STRUCT_SPECS[desc[1]])
+    raise AssertionError(f"unknown descriptor {desc!r}")
+
+
+def _struct_conforms(value: Any, spec: dict) -> bool:
+    if not isinstance(value, dict) or set(value.keys()) != set(spec.keys()):
+        return False
+    return all(_conforms(value[field], d) for field, d in spec.items())
 
 
 def _decodes_canonically(record: dict) -> bool:
     """Payload must be the exact JCS canonical serialization of its schema's
-    type, and carry exactly that type's top-level fields (see the module
-    docstring on scope)."""
+    type: it must decode to that type (typed field/enum check) AND re-serialize
+    byte-for-byte to the stored bytes (canonical form)."""
     name = SCHEMA_ID_TO_NAME.get(schema_hex(record))
     if name is None:
         return False
@@ -490,12 +640,41 @@ def _decodes_canonically(record: dict) -> bool:
         value = json.loads(raw)
     except (UnicodeDecodeError, json.JSONDecodeError):
         return False
-    if not isinstance(value, dict) or set(value.keys()) != PAYLOAD_FIELDS[name]:
+    if not _struct_conforms(value, _PAYLOAD_SPECS[name]):
         return False
     try:
         return bb.jcs(value) == raw
     except bb.DecodeError:
         return False
+
+
+def envelope_ok(record: dict) -> bool:
+    """Structural validity of a record's envelope enums (kind, author type,
+    evidence, ref types). serde rejects an unknown variant when it decodes the
+    Record, before any rule runs; reproducing that here keeps hostile input a
+    clean rejection instead of a KeyError on an enum-ordinal lookup."""
+    if record.get("kind") not in KINDS:
+        return False
+    author = record.get("author")
+    if not isinstance(author, dict) or author.get("type") not in AUTHOR_TYPES:
+        return False
+    if record.get("evidence") not in EVIDENCES:
+        return False
+    refs = record.get("refs")
+    if not isinstance(refs, list) or any(r.get("type") not in REF_TYPES for r in refs):
+        return False
+    return True
+
+
+def _structurally_decodes(record: dict) -> bool:
+    """A record is structurally decodable (the reference deserializes the whole
+    receipt with serde before replay): full wire-shape decode plus valid
+    envelope enums. Hostile shapes become a clean rejection, never a crash."""
+    try:
+        bb.decode_record(record)
+    except bb.DecodeError:
+        return False
+    return envelope_ok(record)
 
 
 # ---------------------------------------------------------------------------
@@ -1065,7 +1244,16 @@ def check_verdict_record(record: dict, prior: Prior, rules: Rules) -> Optional[s
 
 
 def verify_record(record: dict, prior_records: list[dict], rules: Rules, state: State) -> dict:
-    """Reproduce verify_record: the VerdictData that should be committed."""
+    """Reproduce verify_record: the VerdictData that should be committed.
+
+    The reference's `verify_record` takes an already-decoded `Record`, so an
+    envelope that would not survive serde decode cannot reach it. Reproducing
+    that here (a structurally undecodable candidate or prior rejects, never
+    crashes) keeps hostile input from tracebacking on an enum-ordinal lookup."""
+    if not _structurally_decodes(record) or not all(
+        _structurally_decodes(p) for p in prior_records
+    ):
+        return {"result": "Reject", "reason": "InvalidPayload"}
     prior = prior_index(prior_records)
     reason = check_record(record, prior, rules, state)
     if reason is None:
@@ -1163,7 +1351,14 @@ def verify_log(records: list[dict], rules: Rules) -> LogVerdict:
 
 
 def validate_receipt(records: list[dict], rules_wire: dict) -> dict:
-    """Reproduce receipt validate()'s status/reason/taint (src/receipt.rs)."""
+    """Reproduce receipt validate()'s status/reason/taint (src/receipt.rs).
+
+    The reference deserializes the whole receipt (validating every record's wire
+    shape and enums) before replay; a record that fails that is a structural
+    `Invalid` with no reason code, exactly like an unparseable receipt."""
+    for r in records:
+        if not _structurally_decodes(r):
+            return {"status": "Invalid", "reason": None, "retracted": [], "tainted": []}
     rules = Rules(rules_wire)
     v = verify_log(records, rules)
     if v.result == "Reject":
