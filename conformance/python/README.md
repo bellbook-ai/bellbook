@@ -29,9 +29,11 @@ corpus, all independently:
   change the id and fail verification. (The signature check uses the
   `cryptography` package; in CI it is required, and elsewhere it degrades to a
   clear skip. Everything else is pure standard library.)
-- **Strict wire decoding** - unknown fields, wrong spec version, non-JSON,
-  truncated input, and validation-limit overruns are all rejected, agreeing with
-  the reference on every malformed case.
+- **Strict wire decoding** - unknown fields, missing fields, duplicate keys
+  (at any nesting level), mistyped nested fields (a non-string signature
+  `key_id`, a non-byte `sig`), wrong spec version, non-JSON, truncated input,
+  and validation-limit overruns are all rejected, agreeing with the reference
+  on every malformed case.
 - **Structural log integrity** - recomputed id chain, genesis time, gap-free
   time, and subject/verdict pairing; reproduces the structural `Invalid` cases
   (tampered id, dropped verdict).

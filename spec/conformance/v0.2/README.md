@@ -72,9 +72,10 @@ Hostile raw documents. Each case:
 
 The runner feeds `input` bytes to `validate` (or `validate_with_limits` when
 `limits` is set) and asserts the resulting `Report`. Covers strict-decoding
-failures (unknown fields), an unsupported spec version, non-JSON and truncated
-input, and validation-limit rejections (`max_bytes`, `max_records`). Structural
-failures surface in `Report.problem`, not `Report.reason`.
+failures (unknown fields, duplicate keys, and mistyped nested fields such as a
+non-string signature `key_id`), an unsupported spec version, non-JSON and
+truncated input, and validation-limit rejections (`max_bytes`, `max_records`).
+Structural failures surface in `Report.problem`, not `Report.reason`.
 
 ## Reason-code coverage
 

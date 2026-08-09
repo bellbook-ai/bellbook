@@ -7,7 +7,8 @@ the v0.2 specification that must be identical across implementations:
   * RFC 8785 (JCS) canonicalization of records,
   * SHA-256 content-addressed record ids,
   * the head hash and rules hash,
-  * strict wire decoding (unknown fields reject),
+  * strict wire decoding (unknown fields, duplicate keys, and mistyped
+    fields reject),
   * structural log integrity (genesis time, gap-free time, id chain,
     subject/verdict pairing).
 
@@ -35,8 +36,9 @@ SIGNING_DOMAIN = "bellbook.record-signature.v0.2"
 MAX_SAFE_INTEGER = 9_007_199_254_740_991
 
 # The exact, ordered field set of each wire object. Decoding rejects any object
-# that is missing a field or carries an unknown one - the Python mirror of
-# serde's `deny_unknown_fields`.
+# that is missing a field, carries an unknown one, or repeats a field - the
+# Python mirror of serde's `deny_unknown_fields` plus its duplicate-key
+# rejection (serde fails a repeated field with "duplicate field").
 RECORD_FIELDS = frozenset(
     {"id", "space", "thread", "time", "author", "kind", "schema", "data", "refs", "evidence"}
 )
@@ -49,6 +51,21 @@ RECEIPT_FIELDS = frozenset({"spec_version", "rules", "records"})
 
 class DecodeError(Exception):
     """A strict-decoding failure (the Python analogue of a structural reject)."""
+
+
+def _no_duplicate_keys(pairs: list) -> dict:
+    """`object_pairs_hook` for `json.loads` that rejects any object carrying the
+    same key twice. Python's default decoder is last-value-wins, which would
+    silently accept documents the reference rejects: every wire struct is
+    `#[serde(deny_unknown_fields)]`, and serde's derived decoder fails a
+    duplicated field with "duplicate field". Applying this at parse time covers
+    every nesting level (records, authors, refs, rules, signatures) at once."""
+    obj: dict = {}
+    for key, value in pairs:
+        if key in obj:
+            raise DecodeError(f"duplicate field `{key}`")
+        obj[key] = value
+    return obj
 
 
 # ---------------------------------------------------------------------------
@@ -211,7 +228,18 @@ def decode_record(obj: Any) -> dict:
     if not isinstance(author["type"], str):
         raise DecodeError("author type must be a string")
     if author.get("signature") is not None:
-        _require_exact_object(author["signature"], SIGNATURE_FIELDS, SIGNATURE_FIELDS, "signature")
+        sig = _require_exact_object(
+            author["signature"], SIGNATURE_FIELDS, SIGNATURE_FIELDS, "signature"
+        )
+        # `Signature { key_id: String, sig: Vec<u8> }` - the reference rejects a
+        # non-string key_id or a non-byte-array sig at decode, so a matching
+        # stored id can never launder a mistyped signature past this validator.
+        if not isinstance(sig["key_id"], str):
+            raise DecodeError("signature key_id must be a string")
+        if not isinstance(sig["sig"], list) or any(
+            not _is_int(b) or b < 0 or b > 255 for b in sig["sig"]
+        ):
+            raise DecodeError("signature sig must be an array of bytes 0..=255")
     if not _is_int(rec["time"]):
         raise DecodeError("time must be an integer")
     if not isinstance(rec["kind"], str):
@@ -239,7 +267,7 @@ def decode_receipt(text: str) -> dict:
     """Strictly decode a receipt document. Raises DecodeError on any structural
     problem (unparseable JSON, unknown/missing fields, wrong spec version)."""
     try:
-        obj = json.loads(text)
+        obj = json.loads(text, object_pairs_hook=_no_duplicate_keys)
     except json.JSONDecodeError as e:
         raise DecodeError(f"unparseable receipt: {e}") from e
     receipt = _require_exact_object(obj, RECEIPT_FIELDS, RECEIPT_FIELDS, "receipt")
