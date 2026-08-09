@@ -1147,6 +1147,41 @@ fn build_malformed_cases() -> Vec<MalformedCase> {
         ));
     }
 
+    // Duplicate top-level field: a genuine repeated key (which serde_json::Value
+    // would collapse) is injected as raw text. Serde's derived decoder rejects
+    // the repeat with "duplicate field", part of the reference's strict decoding.
+    {
+        let input = format!("{{\"spec_version\":\"0.2\",{}", &clean_json[1..]);
+        let report = validate(input.as_bytes());
+        cases.push(malformed(
+            "duplicate-top-level-field",
+            "A receipt document that declares `spec_version` twice; strict decoding rejects the duplicate key.",
+            input,
+            None,
+            &report,
+            "duplicate field",
+        ));
+    }
+
+    // Mistyped nested signature fields: a numeric `key_id` and a non-byte-array
+    // `sig`. The typed `Signature` decoder rejects them at decode, before any id
+    // recomputation could observe the tampering.
+    {
+        let mut v: serde_json::Value = serde_json::from_str(&clean_json).unwrap();
+        v["records"][0]["author"]["signature"] =
+            serde_json::json!({ "key_id": 123, "sig": "notbytes" });
+        let input = serde_json::to_string(&v).unwrap();
+        let report = validate(input.as_bytes());
+        cases.push(malformed(
+            "malformed-signature-field-types",
+            "A record whose signature carries a numeric key_id and a non-byte sig; strict decoding rejects the mistyped fields.",
+            input,
+            None,
+            &report,
+            "invalid type",
+        ));
+    }
+
     // Exceeds max_bytes.
     {
         let limits = CaseLimits {

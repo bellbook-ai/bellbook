@@ -69,3 +69,21 @@ jobs:
       # covers the library itself: check, not test.
       - name: Check (MSRV)
         run: cargo check --locked --all-features
+
+  conformance-py:
+    # An independent, from-scratch Python validator (no Rust code path) that
+    # reproduces the published vectors and the conformance corpus. Proves
+    # cross-implementation agreement on canonicalization, ids, hashes, strict
+    # decoding, and structural integrity. Uses the runner's preinstalled
+    # Python 3. `cryptography` is required here so the signed-vector Ed25519
+    # check actually runs (BELLBOOK_REQUIRE_SIGNATURE fails the job if it is
+    # ever silently skipped); it degrades to a skip only outside CI.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Install cryptography (for the signed-vector check)
+        run: python3 -m pip install --user cryptography
+      - name: Independent conformance validator
+        run: python3 conformance/python/run_conformance.py
+        env:
+          BELLBOOK_REQUIRE_SIGNATURE: "1"
