@@ -1,0 +1,103 @@
+//! Schema ID constants derived from SHA-256(utf8(schema_name)).
+
+use crate::base::hash::{sha256_utf8, Hash256};
+
+/// SHA-256 of a frozen UTF-8 schema name (see [`schema_id`]); stored in
+/// `Record.schema` and looked up in the verifier's kind-schema map.
+pub type SchemaId = Hash256;
+
+/// Derive a SchemaId from a schema name string.
+pub fn schema_id(name: &str) -> SchemaId {
+    sha256_utf8(name)
+}
+
+/// The specification version this crate implements (SPEC.md §14). Carried
+/// by portable artifacts - head attestations and receipts - so verifiers
+/// can key their rule-sets by epoch.
+pub const SPEC_VERSION: &str = "0.2";
+
+/// Name whose hash is the default [`SpaceId`](crate::record::record::SpaceId):
+/// a convenience for single-space deployments; hosts with their own trust
+/// domains should derive space ids from their own names instead.
+pub const DEFAULT_SPACE_NAME: &str = "bellbook.default_space.v1";
+
+/// The default [`SpaceId`](crate::record::record::SpaceId): the hash of
+/// [`DEFAULT_SPACE_NAME`].
+#[inline]
+pub fn default_space() -> Hash256 {
+    sha256_utf8(DEFAULT_SPACE_NAME)
+}
+
+// Frozen schema names
+/// Schema name for Request records.
+pub const SCHEMA_REQUEST: &str = "bellbook.request.v1";
+/// Schema name for Action records.
+pub const SCHEMA_ACTION: &str = "bellbook.action.v1";
+/// Schema name for Response records.
+pub const SCHEMA_RESPONSE: &str = "bellbook.response.v1";
+/// Schema name for internal-execution Result records.
+pub const SCHEMA_RESULT: &str = "bellbook.result.v1";
+/// Schema name for external-receipt Result records (base evidence `Verified`);
+/// required for `ExecMode::External` actions.
+pub const SCHEMA_RESULT_EXTERNAL: &str = "bellbook.result.external_receipt.v1";
+/// Schema name for effect-confirmation Result records (the only valid target
+/// of a `VerifiedEffect` refusal).
+pub const SCHEMA_RESULT_EFFECT_CONFIRMATION: &str = "bellbook.result.effect_confirmation.v1";
+/// Schema name for Capability records.
+pub const SCHEMA_CAPABILITY: &str = "bellbook.capability.v1";
+/// Schema name for Approval records.
+pub const SCHEMA_APPROVAL: &str = "bellbook.approval.v1";
+/// Schema name for Summary records.
+pub const SCHEMA_SUMMARY: &str = "bellbook.summary.v1";
+/// Schema name for Refusal records.
+pub const SCHEMA_REFUSAL: &str = "bellbook.refusal.v1";
+/// Schema name for Usage records.
+pub const SCHEMA_USAGE: &str = "bellbook.usage.v1";
+/// Schema name for Verdict records (base evidence `Deterministic`).
+pub const SCHEMA_VERDICT: &str = "bellbook.verdict.v1";
+/// Schema name for Plan records.
+pub const SCHEMA_PLAN: &str = "bellbook.plan.v1";
+/// Schema name for Retraction records.
+pub const SCHEMA_RETRACTION: &str = "bellbook.retraction.v1";
+
+/// All frozen schema names (for reverse lookup and documentation).
+pub const ALL_SCHEMAS: &[&str] = &[
+    SCHEMA_REQUEST,
+    SCHEMA_ACTION,
+    SCHEMA_RESPONSE,
+    SCHEMA_RESULT,
+    SCHEMA_RESULT_EXTERNAL,
+    SCHEMA_RESULT_EFFECT_CONFIRMATION,
+    SCHEMA_CAPABILITY,
+    SCHEMA_APPROVAL,
+    SCHEMA_SUMMARY,
+    SCHEMA_REFUSAL,
+    SCHEMA_USAGE,
+    SCHEMA_VERDICT,
+    SCHEMA_PLAN,
+    SCHEMA_RETRACTION,
+];
+
+/// Resolve a schema hash to its registered frozen name, if known.
+pub fn schema_name_for_id(id: &SchemaId) -> Option<&'static str> {
+    ALL_SCHEMAS.iter().copied().find(|n| schema_id(n) == *id)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_schema_id_determinism() {
+        let id1 = schema_id(SCHEMA_REQUEST);
+        let id2 = schema_id(SCHEMA_REQUEST);
+        assert_eq!(id1, id2);
+    }
+
+    #[test]
+    fn test_different_schemas_different_ids() {
+        let id1 = schema_id(SCHEMA_REQUEST);
+        let id2 = schema_id(SCHEMA_ACTION);
+        assert_ne!(id1, id2);
+    }
+}

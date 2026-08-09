@@ -1,0 +1,27 @@
+name: audit
+# RustSec advisory scan: weekly, and whenever the dependency set changes.
+on:
+  schedule:
+    - cron: "27 6 * * 1"
+  push:
+    paths:
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - ".github/workflows/audit.yml"
+  pull_request:
+    paths:
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - ".github/workflows/audit.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  cargo-audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - run: cargo install cargo-audit --version 0.22.2 --locked
+      - run: cargo audit

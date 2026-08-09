@@ -1,0 +1,30 @@
+name: Feature request
+description: Propose a focused improvement to Bellbook
+title: "feature: "
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: Describe the concrete integration or verification problem to solve.
+    validations:
+      required: true
+  - type: textarea
+    id: outcome
+    attributes:
+      label: Desired outcome
+      description: Describe the observable result without prescribing unnecessary implementation detail.
+    validations:
+      required: true
+  - type: textarea
+    id: compatibility
+    attributes:
+      label: Compatibility and specification impact
+      description: Note whether this could affect record schemas, canonical bytes, verification rules, receipts, or stored logs.
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: Optional existing approaches or workarounds.

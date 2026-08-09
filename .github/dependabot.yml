@@ -1,0 +1,15 @@
+# Dependabot version updates. Security alerts and security updates are
+# enabled separately in the repository settings (see issue #10); this
+# file covers routine version bumps so every dependency change arrives
+# through a reviewed PR.
+version: 2
+updates:
+  - package-ecosystem: cargo
+    directory: "/"
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: weekly

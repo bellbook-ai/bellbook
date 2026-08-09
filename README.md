@@ -1,0 +1,229 @@
+# Bellbook
+
+[![CI](https://github.com/bellbook-ai/bellbook/actions/workflows/ci.yml/badge.svg)](https://github.com/bellbook-ai/bellbook/actions/workflows/ci.yml)
+[![crates.io](https://img.shields.io/crates/v/bellbook.svg)](https://crates.io/crates/bellbook)
+[![docs.rs](https://img.shields.io/docsrs/bellbook)](https://docs.rs/bellbook)
+[![License: MIT OR Apache-2.0](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue.svg)](#license)
+
+**A tamper-evident, replay-verifiable record of captured agent activity.**
+
+Bellbook is a small embeddable Rust library with one durable primitive: a typed
+`Record` in an append-only log. Activity the host captures is written down as
+a typed entry - what was requested, what was done, what came back, what was
+approved, what was refused, and the verdict on whether it followed the rules.
+Modifying hash-covered record content or the committed sequence becomes
+detectable. Detecting complete replacement from genesis requires an external
+anchor. A verifier can replay the whole record to confirm its internal
+consistency: no action without a verdict, no gaps, and no forged record ids.
+
+In one line: it turns *"the agent says it did X"* into *"here is
+tamper-evident, replay-verifiable evidence of the agent activity that was
+recorded."*
+
+One honest boundary up front: Bellbook proves **consistency, not
+completeness**. It verifies that captured history is intact,
+rule-conforming, and honestly graded; whether *everything* the agent did
+was captured depends on how the host instruments its runtime
+([SPEC §13](SPEC.md#13-known-limitations)). And it provides
+**integrity, not confidentiality**: records and receipts carry full
+payloads in the clear, so a receipt inherits the sensitivity of
+everything committed - never put credentials in records, and treat
+sharing a receipt as disclosure (see SECURITY.md).
+
+## Where Bellbook fits
+
+Bellbook is an evidence layer, not an identity provider or runtime
+policy engine. Identity systems establish who an agent is and what
+access it holds. Policy engines decide whether an action may execute.
+Bellbook preserves captured requests, authority, actions, and results as a
+portable receipt that another party can verify independently. Spec v0.2 does
+not include a record for an external policy engine's decision. Bellbook's own
+`Verdict` records are its deterministic
+judgment that the *ledger followed its rules*; they are never a
+substitute for an external policy engine's permit/deny decision, and
+the separately scoped `PolicyDecision` work is not implemented in v0.2.
+See [docs/ECOSYSTEM.md](docs/ECOSYSTEM.md) for how surrounding systems
+relate to Bellbook and
+[docs/INTEROPERABILITY.md](docs/INTEROPERABILITY.md) for the boundary
+definitions.
+
+Not a logger, not a database, not a runtime - an evidence kernel your process
+embeds.
+
+## How it works
+
+- **Content-addressed records.** A record's `id` is the SHA-256 of its
+  RFC 8785 (JCS) canonical id form (only id excluded; a completed signature
+  is included), so an
+  independent implementation in any language computes identical ids
+  ([test vectors](spec/test-vectors-v0.2.json)). Records reference earlier
+  records by that hash through typed refs (`Cause`, `Use`, `Require`,
+  `Replace`), forming a DAG. Edit any byte of history and every id and ref
+  that depends on it breaks.
+- **Every record is judged.** Committing a record runs a deterministic
+  verifier and appends a `Verdict` (`Accept`/`Reject` + reason) immediately
+  after it. Rejected records stay in the log - the log records what was
+  *attempted*, not just what was allowed.
+- **The whole log replays.** `verify_log` walks the log from genesis (or a
+  checkpoint): recomputes every id, enforces gap-free logical time
+  (`time == prev + 1`), requires every non-verdict record to be immediately
+  followed by its verdict, and **re-derives every verdict** from the replay
+  start onward to compare with what's stored - a forged verdict is caught,
+  not trusted. (Records inside a checkpoint prefix are attested by the
+  prefix hash instead of re-derivation.)
+- **Governance is in-band.** Capabilities, approvals, refusals, and expiries
+  are records too, so "was this action allowed at the time?" is answered by
+  the log itself, deterministically. Author roles are enforced and actor
+  identities are bound to roles in the rules; pin an actor's signing keys
+  in `author_keys` and its records must be validly signed, so the agent
+  cannot author its own approvals, even by claiming to be the user -
+  that guarantee is cryptographic exactly when the claimed identity has
+  pinned keys, and configuration-level otherwise. Exact approvals are
+  bound to one actor's one action and are single-use, every action must
+  name the exact authority that allowed it, retracted authority stops
+  authorizing, and retraction itself is ownership-bound.
+- **Evidence classes.** Every record carries how its content is known - an
+  ordered five-class lattice, strongest to weakest: `Deterministic`
+  (verifier-derived), `Verified` (a signed attestation from a key-pinned
+  external party - origin verified, never the real-world effect),
+  `Reported` (asserted by an external party), `Inferred` (derived by
+  reasoning), `Assumed` (unverified assumption) - and derived records
+  inherit the *weakest* evidence among the sources they declare
+  (`Use`/`Require` refs), so evidence can never be inflated. Rules can
+  set per-kind minimum-evidence thresholds.
+- **Ed25519 signatures.** Records can carry a detached signature over a
+  Bellbook-v0.2-domain-separated, id-free signing form; the completed signature
+  is then included in the final record id, so signatures and head attestations
+  cannot be substituted without detection. Rules configure which kinds require
+  one and which keys each actor may sign with; verification is strict and
+  real, not a stub.
+- **Retraction with taint.** A `Retraction` record asserts an earlier
+  record's content was wrong - append-only, nothing erased. Records that
+  epistemically depended on it (via `Use`/`Require` refs) are marked
+  tainted; a tainted chain still replays and verifies, and the report
+  surfaces exactly which claims no longer rest on anything.
+- **Honest threat model.** Tamper-*evident*, not tamper-proof: replay
+  detects any interior edit to committed history, but the ledger's owner
+  can rewrite the whole log from genesis. SPEC §11 states this plainly and
+  defines the mitigations - key-pinned signatures and a canonical
+  [head attestation](SPEC.md#111-head-attestation-format) to anchor
+  externally.
+- **Crash-safe, verified single writer.** `LogWriter` holds an exclusive
+  file lock, refuses existing history that does not replay under its opening
+  rules, rejects stale or fabricated derived state, keeps raw append and its
+  time source private, and uses an intent-file protocol to restore an
+  interrupted record/verdict pair exactly once. Opening and appending are
+  bounded to 64 MiB by default; trusted larger logs can opt into an explicit
+  higher limit.
+
+`batch_commit` preserves the atomicity of each subject/verdict pair but is not
+a transaction across the entire batch: an error on a later proposal leaves
+earlier pairs durable. Integrations that retry batches should use
+`checked_batch_commit` with the expected head.
+
+## Quickstart
+
+```rust
+use bellbook::*;
+
+let space = default_space();
+// Bind actor identities to roles: every non-Verdict record needs a
+// registered author (pin keys in `author_keys` to authenticate them).
+let rules = VerifierRules::new(space, 200)
+    .with_author_role("human", AuthorType::User)
+    .with_author_role("agent", AuthorType::Provider);
+let mut writer = LogWriter::open(dir, &rules)?;
+let mut state = State::default();
+
+let (id, verdict) = writer.commit(proposal, &rules, &mut state)?;
+assert_eq!(verdict.result, VerdictResult::Accept);
+
+// Replay-verify the entire log - recomputes ids, times, and every verdict.
+let report = verify_log(writer.records(), &rules, None);
+assert_eq!(report.result, VerdictResult::Accept);
+```
+
+Run the full working demo (commit → verify → tamper → detect):
+
+```
+cargo run --example quickstart
+```
+
+See [SPEC.md](SPEC.md) for the record model, verification rules, commit
+protocol, and storage format.
+
+## Feature flags
+
+| Flag | Default | Effect |
+|------|---------|--------|
+| `persist` | on | File-backed log through the verified `LogWriter` API, with locking through `fs4` and a configurable 64 MiB default file-size bound. Raw storage mutation is internal. Disable for the pure in-memory model, verifier, and receipt validation (no file-I/O dependency). |
+
+## Validating a receipt
+
+A log exports as a portable, self-contained `Receipt`; anyone can verify
+it offline - ids, chain, every verdict re-derived, signatures, evidence,
+taint - with no Rust knowledge required. The CLI ships with the crate
+(`cargo install bellbook`, or `cargo run --bin bellbook -- …` from a
+checkout):
+
+```
+bellbook validate receipt.json          # human-readable report
+bellbook validate receipt.json --json   # same report as JSON
+```
+
+Exit codes: `0` clean, `1` invalid, `2` valid-but-tainted. See SPEC §12
+for the receipt format and the normative truth rules. One honesty note:
+**Clean is relative to the rules embedded in the receipt** (compare the
+reported `rules_hash` against a rule set you trust) - under default rules
+it means "internally consistent", not "meets a shared security
+baseline".
+
+## Status
+
+**Bellbook 0.2 is an early release. Its implemented compatibility contract is
+defined by [SPEC.md](SPEC.md) and the committed v0.2 test vectors.**
+It ships exactly what is implemented and tested today: the
+content-addressed (JCS-canonical) record model, the deterministic verifier
+with replayable `verify_log` (identity-to-role binding, authority binding
+and revocation, single-use exact approvals, explicit request lifecycle,
+advisory plan consistency checks), Ed25519
+signatures, retraction with taint, derived state with
+incremental/full-build equivalence, checkpoints, the crash-safe writer
+with idempotent compare-and-append, and portable receipts with the
+offline `bellbook validate` CLI - fully tested (every rejection reason
+code has a triggering test), clippy-clean, no `unsafe`, no panics in
+library code.
+
+Open work, **not implemented in v0.2**:
+
+1. **`bellbook-core-v1` baseline profile** - a fixed minimum rule set
+   (required signatures, pinned keys, evidence thresholds) for comparing
+   receipts under shared rules.
+2. **Broader conformance corpus** - negative and state-transition
+   vectors beyond the per-kind hashing vectors, and an independent
+   validator implementation.
+3. **`PolicyDecision` record + `bellbook-policy-enforced-v1` profile** -
+   first-class capture of external policy-engine permit/deny decisions,
+   kept strictly separate from Bellbook's own Verdicts, followed by a
+   reference adapter for an open-source authorization engine (see
+   [docs/ECOSYSTEM.md](docs/ECOSYSTEM.md)).
+4. **Profile-aware receipts** - receipts declare claimed profiles;
+   the validator reports per-profile conformance instead of trusting
+   the declaration.
+5. **Python bindings** - PyO3/maturin wheels wrapping this same core
+   (validation-first), once the v0.2 format is frozen by a release.
+6. **Interop mapping** - a short document mapping Bellbook records
+   outward to OpenTelemetry logs, W3C PROV, in-toto statements, and
+   SCITT receipts, rather than inventing adjacent layers (the boundary
+   definitions are already in
+   [docs/INTEROPERABILITY.md](docs/INTEROPERABILITY.md)).
+
+## License
+
+Licensed under either of [Apache License, Version 2.0](LICENSE-APACHE) or
+[MIT license](LICENSE-MIT) at your option.
+
+Unless you explicitly state otherwise, any contribution intentionally
+submitted for inclusion in the work by you, as defined in the Apache-2.0
+license, shall be dual licensed as above, without any additional terms or
+conditions.
