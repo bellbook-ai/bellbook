@@ -15,6 +15,12 @@ and releases follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   every verdict rejection reason the portable format can express and
   documents the three reason codes it cannot. Regenerate with
   `UPDATE_CONFORMANCE=1`.
+- Independent, from-scratch Python validator under `conformance/python/`
+  (not a binding over the Rust core) that reproduces the test vectors and
+  the conformance corpus, confirming cross-implementation agreement on
+  canonicalization, record ids, head/rules hashes, strict decoding, and
+  structural log integrity. Runs in CI. Verdict re-derivation is a
+  documented next increment.
 
 ## [0.2.0] - 2026-08-09
 
