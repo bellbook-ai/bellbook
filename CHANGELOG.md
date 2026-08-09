@@ -19,8 +19,13 @@ and releases follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   (not a binding over the Rust core) that reproduces the test vectors and
   the conformance corpus, confirming cross-implementation agreement on
   canonicalization, record ids, head/rules hashes, strict decoding, and
-  structural log integrity. Runs in CI. Verdict re-derivation is a
-  documented next increment.
+  structural log integrity. Runs in CI.
+- Independent Python verdict engine (`conformance/python/bellbook_verdict.py`)
+  that re-derives every conformance-corpus verdict and replays every receipt
+  to the same status, reason, and retracted/tainted sets: the full per-record
+  rule battery, the retraction and transitive-taint state machine, and
+  whole-log replay. Completes the cross-implementation check of Bellbook's
+  verification policy, not just its hashing.
 
 ## [0.2.0] - 2026-08-09
 

@@ -7,9 +7,15 @@ than merely asserted: that an independent implementation in any language
 computes the same canonical forms, record ids, and hashes, and reaches the same
 structural decisions.
 
-This is issue #5's first increment. Python bindings that wrap the Rust core would
-not count as an independent implementation; this shares nothing with it but the
-published data files.
+This now covers **both increments of issue #5**. Python bindings that wrap the
+Rust core would not count as an independent implementation; this shares nothing
+with it but the published data files.
+
+- `bellbook_conformance.py` - canonicalization, ids, hashes, strict decoding,
+  and structural log integrity.
+- `bellbook_verdict.py` - the semantic layer: the full per-record rule battery
+  (`verify_record`), the retraction + transitive-taint state machine, and
+  whole-log replay (`verify_log`) with its Clean / Tainted / Invalid status.
 
 ## What it reproduces
 
@@ -37,14 +43,32 @@ corpus, all independently:
 - **Structural log integrity** - recomputed id chain, genesis time, gap-free
   time, and subject/verdict pairing; reproduces the structural `Invalid` cases
   (tampered id, dropped verdict).
+- **Verdict rule battery** - every record case's verdict (Accept, or Reject with
+  its exact `ReasonCode`) is independently re-derived and matched: author-role
+  binding, schema/kind checks, signatures, request/capability/approval lifecycle
+  (with expiry and single-use consumption), `Require`/`Replace` semantics, the
+  evidence lattice and per-kind thresholds, plan consistency, and more.
+- **Whole-log replay** - every receipt case is replayed from genesis to the same
+  status (Clean / Tainted / Invalid), the same first-violation reason, and the
+  same `retracted` and `tainted` id sets, including verdict forgery
+  (re-derivation catches the flipped result) and taint that follows `Use`/
+  `Require` but not `Cause`.
 
-## What it does NOT do yet
+## Scope and limitations
 
-It does not re-derive verdicts - the full per-record rule battery, retraction,
-and taint propagation. Corpus cases that hinge on that (verdict forgery, the
-`Tainted` taint sets, the record-case verdict reasons) are reported as
-**deferred**, never silently skipped. Reproducing them is the next increment of
-#5, and the conformance corpus (issue #7) is the oracle it will be built against.
+- **Signatures.** Re-deriving a verdict for a record that carries a signature
+  needs the `cryptography` package (Ed25519). In CI it is required; elsewhere
+  those specific cases degrade to a clear skip. Every unsigned case - which is
+  all receipt cases and most record cases - is pure standard library.
+- **Payload typing.** The canonical-payload rule is reproduced as a canonical
+  round-trip plus a per-schema top-level field-set check (a stored payload
+  always serializes its full field set, so this catches unknown or missing
+  top-level fields the way serde's `deny_unknown_fields` does). Field *typing*
+  of nested payload structs (a plan task, an attachment) is covered by the
+  round-trip rather than a typed decode; no corpus case turns on that.
+- **Checkpoints** are a host-side acceleration and never travel in a receipt, so
+  the checkpoint replay path is out of scope here (receipts always verify from
+  genesis).
 
 ## Running it
 
@@ -57,7 +81,9 @@ prints the first disagreement. CI runs this on every push and pull request.
 
 ## Files
 
-- `bellbook_conformance.py` - the validator: JCS canonicalization, ids, hashes,
-  strict decoding, structural checks.
-- `run_conformance.py` - the runner: drives the validator against the vectors and
-  the corpus and asserts agreement.
+- `bellbook_conformance.py` - the wire validator: JCS canonicalization, ids,
+  hashes, strict decoding, structural checks.
+- `bellbook_verdict.py` - the verdict engine: the per-record rule battery,
+  retraction + taint state machine, and whole-log replay.
+- `run_conformance.py` - the runner: drives both against the vectors and the
+  corpus and asserts agreement.
