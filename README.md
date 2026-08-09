@@ -194,25 +194,30 @@ offline `bellbook validate` CLI - fully tested (every rejection reason
 code has a triggering test), clippy-clean, no `unsafe`, no panics in
 library code.
 
+The repository also carries a language-neutral **conformance corpus**
+(`spec/conformance/v0.2/`: record, malformed, and receipt-replay cases,
+run by `tests/conformance.rs`) and an **independent Python implementation**
+of the verifier (`conformance/python/`) that shares no code with this crate,
+recomputes every record id, and re-derives every verdict across the corpus,
+agreeing with this reference on every case - including the deliberately
+malformed and forged inputs it must reject.
+
 Open work, **not implemented in v0.2**:
 
 1. **`bellbook-core-v1` baseline profile** - a fixed minimum rule set
    (required signatures, pinned keys, evidence thresholds) for comparing
    receipts under shared rules.
-2. **Broader conformance corpus** - negative and state-transition
-   vectors beyond the per-kind hashing vectors, and an independent
-   validator implementation.
-3. **`PolicyDecision` record + `bellbook-policy-enforced-v1` profile** -
+2. **`PolicyDecision` record + `bellbook-policy-enforced-v1` profile** -
    first-class capture of external policy-engine permit/deny decisions,
    kept strictly separate from Bellbook's own Verdicts, followed by a
    reference adapter for an open-source authorization engine (see
    [docs/ECOSYSTEM.md](docs/ECOSYSTEM.md)).
-4. **Profile-aware receipts** - receipts declare claimed profiles;
+3. **Profile-aware receipts** - receipts declare claimed profiles;
    the validator reports per-profile conformance instead of trusting
    the declaration.
-5. **Python bindings** - PyO3/maturin wheels wrapping this same core
+4. **Python bindings** - PyO3/maturin wheels wrapping this same core
    (validation-first), once the v0.2 format is frozen by a release.
-6. **Interop mapping** - a short document mapping Bellbook records
+5. **Interop mapping** - a short document mapping Bellbook records
    outward to OpenTelemetry logs, W3C PROV, in-toto statements, and
    SCITT receipts, rather than inventing adjacent layers (the boundary
    definitions are already in
