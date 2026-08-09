@@ -56,16 +56,47 @@ class DecodeError(Exception):
 # ---------------------------------------------------------------------------
 
 
+# RFC 8785 3.2.2.2 string escaping: the two-character escapes, then \u00xx
+# (lowercase) for the remaining C0 control characters, everything else literal.
+_SHORT_ESCAPES = {
+    ord('"'): '\\"',
+    ord("\\"): "\\\\",
+    ord("\b"): "\\b",
+    ord("\f"): "\\f",
+    ord("\n"): "\\n",
+    ord("\r"): "\\r",
+    ord("\t"): "\\t",
+}
+
+
+def _jcs_string(s: str) -> str:
+    """RFC 8785 string serialization, implemented directly rather than delegated
+    to `json.dumps`, so canonical output never depends on the standard library's
+    escaping choices."""
+    out = ['"']
+    for ch in s:
+        code = ord(ch)
+        esc = _SHORT_ESCAPES.get(code)
+        if esc is not None:
+            out.append(esc)
+        elif code < 0x20:
+            out.append("\\u%04x" % code)
+        else:
+            out.append(ch)
+    out.append('"')
+    return "".join(out)
+
+
 def jcs(value: Any) -> str:
     """Return the RFC 8785 canonical JSON text for `value`.
 
     Bellbook records contain only objects, arrays, strings, booleans, null, and
-    non-negative integers (byte arrays are arrays of 0..=255, times/turns are
-    unsigned ints), so the general JCS number rules never engage. Object keys
-    are ASCII, so code-point sort order equals JCS's UTF-16 order. Strings use
-    JSON's minimal escaping, which `json.dumps(..., ensure_ascii=False)`
-    produces. A float would be a spec violation and is rejected here rather than
-    silently formatted.
+    integers within the I-JSON safe range (byte arrays are arrays of 0..=255,
+    times/turns are unsigned ints), so JCS's floating-point number rules never
+    engage; a float is rejected rather than silently formatted. String escaping
+    and UTF-16 key ordering are implemented explicitly (see `_jcs_string` and the
+    dict branch) so nothing about the canonical form is inherited from
+    `json.dumps`.
     """
     if value is True:
         return "true"
@@ -82,18 +113,13 @@ def jcs(value: Any) -> str:
     if isinstance(value, float):
         raise DecodeError("floating-point numbers are not part of the v0.2 wire format")
     if isinstance(value, str):
-        return json.dumps(value, ensure_ascii=False)
+        return _jcs_string(value)
     if isinstance(value, list):
         return "[" + ",".join(jcs(v) for v in value) + "]"
     if isinstance(value, dict):
-        return (
-            "{"
-            + ",".join(
-                json.dumps(k, ensure_ascii=False) + ":" + jcs(v)
-                for k, v in sorted(value.items())
-            )
-            + "}"
-        )
+        # RFC 8785 orders object members by their keys' UTF-16 code units.
+        items = sorted(value.items(), key=lambda kv: kv[0].encode("utf-16-be"))
+        return "{" + ",".join(_jcs_string(k) + ":" + jcs(v) for k, v in items) + "}"
     raise DecodeError(f"value of type {type(value).__name__} is not JSON")
 
 
@@ -286,10 +312,16 @@ def check_structure(records: list[dict]) -> StructuralResult:
     return StructuralResult(True, None)
 
 
-def validate(text: str, max_bytes: int | None = None, max_records: int | None = None):
+def validate(
+    text: str,
+    max_bytes: int | None = None,
+    max_records: int | None = None,
+    max_payload_bytes: int | None = None,
+    max_refs_per_record: int | None = None,
+):
     """Structural validation of a receipt document, in the order the crate uses:
-    byte budget, then strict decode, then record budget, then structural
-    integrity. Returns ("Invalid", problem) on any failure, or
+    byte budget, then strict decode, then record/payload/ref budgets, then
+    structural integrity. Returns ("Invalid", problem) on any failure, or
     ("StructurallyValid", None). This is NOT the full status - deciding Clean vs
     Tainted requires verdict re-derivation, which this increment does not do -
     but it agrees with the reference validator on every rejection it can reach.
@@ -299,9 +331,18 @@ def validate(text: str, max_bytes: int | None = None, max_records: int | None = 
         return ("Invalid", "receipt exceeds size limit")
     try:
         receipt = decode_receipt(text)
-        if max_records is not None and len(receipt["records"]) > max_records:
+        records = receipt["records"]
+        if max_records is not None and len(records) > max_records:
             return ("Invalid", "receipt exceeds record limit")
-        res = check_structure(receipt["records"])
+        if max_payload_bytes is not None and any(
+            len(r["data"]) > max_payload_bytes for r in records
+        ):
+            return ("Invalid", "record exceeds payload size limit")
+        if max_refs_per_record is not None and any(
+            len(r["refs"]) > max_refs_per_record for r in records
+        ):
+            return ("Invalid", "record exceeds ref-count limit")
+        res = check_structure(records)
     except DecodeError as e:
         return ("Invalid", str(e))
     except (KeyboardInterrupt, SystemExit):
