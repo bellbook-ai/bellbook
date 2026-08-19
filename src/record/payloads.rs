@@ -480,7 +480,11 @@ struct ScoredValueRaw {
 impl TryFrom<ScoredValueRaw> for ScoredValue {
     type Error = String;
     fn try_from(raw: ScoredValueRaw) -> Result<Self, Self::Error> {
-        if raw.value.abs() > MAX_SAFE_INTEGER_I64 {
+        // `raw.value.abs()` would panic on `i64::MIN` (its magnitude has no
+        // i64 representation) - and that value is reachable from a hostile
+        // receipt payload. Bound both ends explicitly instead; the safe
+        // range is symmetric, so `i64::MIN` is out of range and rejects.
+        if !(-MAX_SAFE_INTEGER_I64..=MAX_SAFE_INTEGER_I64).contains(&raw.value) {
             return Err("score value outside the I-JSON safe range".into());
         }
         if raw.scale > MAX_SCORE_SCALE {
@@ -640,6 +644,13 @@ mod evolution_payload_tests {
         let bad_neg: Result<EvaluationData, _> =
             serde_json::from_str(&scored(-9_007_199_254_740_992, 0));
         assert!(bad_neg.is_err());
+        // i64::MIN must reject cleanly, never panic: its magnitude has no
+        // i64 representation, so a naive abs() would overflow. This value
+        // is reachable from a hostile receipt payload.
+        let i64_min: Result<EvaluationData, _> = serde_json::from_str(&scored(i64::MIN, 0));
+        assert!(i64_min.is_err());
+        let i64_max: Result<EvaluationData, _> = serde_json::from_str(&scored(i64::MAX, 0));
+        assert!(i64_max.is_err());
     }
 
     #[test]
