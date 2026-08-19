@@ -424,6 +424,7 @@ class Rules:
         self.selection_requires_evaluation = wire.get("selection_requires_evaluation", True)
         self.reaffirmation_actors = set(wire.get("reaffirmation_actors", []))
         self.max_considered = wire.get("max_considered", 4096)
+        self.selection_requires_approval = wire.get("selection_requires_approval", False)
 
 
 # ---------------------------------------------------------------------------
@@ -500,6 +501,20 @@ def exact_action_hash(record: dict, action_data: dict) -> str:
     """SHA-256(canonical((action_author_id, ActionData))): binds the acting
     author to the action content (src/verify/verifier/activity.rs)."""
     return bb.sha256(bb.jcs([record["author"]["id"], action_data]).encode("utf-8")).hex()
+
+
+SELECTION_APPROVAL_DOMAIN = "bellbook.selection-approval.v0.3"
+
+
+def selection_approval_subject_hash(record: dict, replace_target, data: dict) -> str:
+    """SHA-256(canonical((domain, selection_author_id, replace_target_or_null,
+    SelectionData))) (src/record/payloads.rs). `replace_target` is the wire
+    ref target (a byte array) or None, matching the Rust `Option<RecordId>`."""
+    return bb.sha256(
+        bb.jcs(
+            [SELECTION_APPROVAL_DOMAIN, record["author"]["id"], replace_target, data]
+        ).encode("utf-8")
+    ).hex()
 
 
 def _mark_tainted(state: State, rid: str) -> None:
@@ -610,7 +625,21 @@ def apply_accepted(state: State, record: dict) -> None:
         if data["closes_request"]:
             state.active_requests.discard(req)
             state.active_plans.pop(req, None)
-    # Verdict: no operational state.
+    elif k == "Selection":
+        # Single-use consumption of a Selection approval (delta D5), parallel
+        # to the Action exact-approval path. replaced_records is not tracked
+        # here (no verdict rule consults it).
+        data = payload(record)
+        replace_refs = refs_of(record, "Replace")
+        replace_target = replace_refs[0]["target"] if replace_refs else None
+        subject_hash = selection_approval_subject_hash(record, replace_target, data)
+        approval_id = state.valid_approvals.get(subject_hash)
+        if approval_id is not None and any(
+            r["type"] == "Require" and h(r["target"]) == approval_id for r in record["refs"]
+        ):
+            state.valid_approvals.pop(subject_hash, None)
+            state.exact_approval_index.pop(approval_id, None)
+    # Verdict, Candidate, Evaluation: no operational state.
 
 
 def _close_action_for_request(state: State, action_id: str) -> None:
@@ -1376,6 +1405,33 @@ def _check_evaluation(record, prior, rules, state):
     return None
 
 
+def _resolve_selection_approval(record, data, prior, rules, state):
+    """Resolve the approval a Selection must carry (delta D5). Returns
+    (approval_id_or_None, reason_or_None); reason is set only on rejection
+    (ApprovalMissing / ApprovalExpired). Mirrors evolution.rs."""
+    if not rules.selection_requires_approval:
+        return None, None
+    replace_refs = refs_of(record, "Replace")
+    replace_target = replace_refs[0]["target"] if replace_refs else None
+    subject_hash = selection_approval_subject_hash(record, replace_target, data)
+    approval_id = state.valid_approvals.get(subject_hash)
+    if approval_id is None:
+        return None, "ApprovalMissing"
+    if not any(r["type"] == "Require" and h(r["target"]) == approval_id for r in record["refs"]):
+        return None, "ApprovalMissing"
+    if approval_id not in state.accepted or approval_id in state.retracted or approval_id in state.tainted:
+        return None, "ApprovalMissing"
+    approval_record = prior.find(approval_id)
+    if approval_record is None:
+        return None, "ApprovalMissing"
+    approval_data = payload(approval_record)
+    if approval_data.get("actor_id") != record["author"]["id"]:
+        return None, "ApprovalMissing"
+    if approval_data.get("expiry") is not None and record["time"] >= approval_data["expiry"]:
+        return None, "ApprovalExpired"
+    return approval_id, None
+
+
 def _check_selection(record, prior, rules, state):
     data = payload(record)
     considered = [h(c) for c in data["considered"]]
@@ -1406,22 +1462,31 @@ def _check_selection(record, prior, rules, state):
     outcome = data["outcome"]
     if isinstance(outcome, dict) and "selected" in outcome:
         winners = [h(c) for c in outcome["selected"]["candidates"]]
-        selected = set(winners)
-        if not selected or len(selected) != len(winners) or not selected <= considered_set:
-            return "SelectionInvalid"
-        if require_targets != selected:
+        winner_set = set(winners)
+        if not winner_set or len(winner_set) != len(winners) or not winner_set <= considered_set:
             return "SelectionInvalid"
         if rules.min_binding == "manifest":
-            for c in selected:
+            for c in winner_set:
                 t = prior.find(c)
                 if t is None or payload(t)["source"]["binding"] != "manifest":
                     return "SelectionInvalid"
         if rules.selection_requires_evaluation and used_evaluations == 0:
             return "SelectionInvalid"
     else:
-        # None decision: no candidate (or authority) Require refs.
-        if require_targets:
-            return "SelectionInvalid"
+        winner_set = set()
+
+    # Selection approval binding (delta D5): the only authority Require a
+    # Selection may carry.
+    approval_require, reason = _resolve_selection_approval(record, data, prior, rules, state)
+    if reason is not None:
+        return reason
+
+    # Require-target exactness: exactly the winners plus the required approval.
+    allowed = set(winner_set)
+    if approval_require is not None:
+        allowed.add(approval_require)
+    if require_targets != allowed:
+        return "SelectionInvalid"
 
     replace_refs = refs_of(record, "Replace")
     if replace_refs:

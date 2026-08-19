@@ -105,11 +105,12 @@ pub use record::kind::{
     SummaryType, UsageOutcome, VerdictResult,
 };
 pub use record::payloads::{
-    ActionData, ApprovalData, Attachment, BindingMode, CandidateBasis, CandidateData,
-    CapabilityData, EvaluationData, EvaluationOutcome, FailurePolicy, GitSource, PlanData,
-    PlanStatus, PlanTask, PlanTaskKind, RefusalData, RequestData, ResponseData, ResultData,
-    RetractionData, ScoredValue, SelectionData, SelectionOutcome, SourceAlgo, SourceBinding,
-    SummaryData, TaskDoneWhen, TaskStatus, UsageData, UsageOutcomeCounts, VerdictData,
+    selection_approval_subject_hash, ActionData, ApprovalData, Attachment, BindingMode,
+    CandidateBasis, CandidateData, CapabilityData, EvaluationData, EvaluationOutcome,
+    FailurePolicy, GitSource, PlanData, PlanStatus, PlanTask, PlanTaskKind, RefusalData,
+    RequestData, ResponseData, ResultData, RetractionData, ScoredValue, SelectionData,
+    SelectionOutcome, SourceAlgo, SourceBinding, SummaryData, TaskDoneWhen, TaskStatus, UsageData,
+    UsageOutcomeCounts, VerdictData,
 };
 pub use record::record::{
     decode, encode, Proposal, Record, ScopeId, SpaceId, ThreadId, RECORD_SIGNATURE_DOMAIN,

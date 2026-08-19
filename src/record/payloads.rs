@@ -1,9 +1,10 @@
 //! Payload structs from SPEC.md.
 
-use crate::base::hash::Hash256;
+use crate::base::hash::{sha256_canonical, Hash256};
 use crate::base::time::Time;
 use crate::record::author::ActorId;
 use crate::record::kind::*;
+use crate::record::record::SELECTION_APPROVAL_DOMAIN;
 use crate::record::refs::RecordId;
 use serde::{Deserialize, Serialize};
 
@@ -612,6 +613,25 @@ impl TryFrom<SelectionDataRaw> for SelectionData {
             rationale: raw.rationale,
         })
     }
+}
+
+/// The subject hash a Selection approval targets (SPEC §4.1, spec 0.3):
+/// `SHA-256(canonical((domain, selection_author_id, replace_target_or_null,
+/// SelectionData)))`. The Replace target (or explicit `null`) is inside the
+/// hash so an approval granted for a fresh decision cannot be diverted onto
+/// a reaffirmation with identical `SelectionData`. Domain-separated from the
+/// Action exact-approval hash, which has no domain prefix.
+pub fn selection_approval_subject_hash(
+    selection_author_id: &str,
+    replace_target: Option<RecordId>,
+    data: &SelectionData,
+) -> Result<Hash256, serde_json::Error> {
+    sha256_canonical(&(
+        SELECTION_APPROVAL_DOMAIN,
+        selection_author_id,
+        replace_target,
+        data,
+    ))
 }
 
 #[cfg(test)]

@@ -213,12 +213,30 @@ fn apply_accepted(state: &mut State, record: &Record) -> Result<(), serde_json::
             // state (SPEC §7.2, delta D6). Tracked in #26.
         }
         Kind::Selection => {
+            let data: SelectionData = decode(&record.data)?;
+            let replace_target = find_replace_ref(&record.refs);
             // A reaffirmation (a Selection carrying a Replace ref) supersedes
             // its target for context construction, exactly like the other
-            // replaceable kinds (spec 0.3, delta D4). Standing and Selection
-            // approval consumption land in #25/#26.
-            if let Some(replaced_id) = find_replace_ref(&record.refs) {
+            // replaceable kinds (spec 0.3, delta D4).
+            if let Some(replaced_id) = replace_target {
                 state.replaced_records.insert(replaced_id);
+            }
+            // Selection approval consumption (spec 0.3, delta D5): an accepted
+            // Selection that was authorized by an approval (it `Require`-refs
+            // the approval its subject hash resolves to) consumes it, single-
+            // use, exactly like the Action exact-approval path. Consumption is
+            // an event and is never refunded by a later Replace.
+            let subject_hash =
+                selection_approval_subject_hash(&record.author.id, replace_target, &data)?;
+            if let Some(&approval_id) = state.valid_approvals.get(&subject_hash) {
+                if record
+                    .refs
+                    .iter()
+                    .any(|r| matches!(r.type_, RefType::Require) && r.target == approval_id)
+                {
+                    state.valid_approvals.remove(&subject_hash);
+                    state.exact_approval_index.remove(&approval_id);
+                }
             }
         }
     }

@@ -25,6 +25,12 @@ pub type ScopeId = Hash256;
 /// (v0.3) record.
 pub const RECORD_SIGNATURE_DOMAIN: &str = "bellbook.record-signature.v0.3";
 
+/// Domain bound into a Selection approval's subject hash (SPEC §4.1, spec
+/// 0.3). Separating it from the Action approval hash (which has no domain
+/// prefix) and from the signing domain keeps a Selection approval from ever
+/// being confused with an Action approval or any other epoch's binding.
+pub const SELECTION_APPROVAL_DOMAIN: &str = "bellbook.selection-approval.v0.3";
+
 /// The one durable primitive: a typed, content-addressed entry in the
 /// append-only log. Immutable once committed - the id covers everything but
 /// itself. The completed detached signature is part of the id, so record
