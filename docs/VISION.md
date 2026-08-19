@@ -30,8 +30,9 @@ history of a piece of autonomously produced software without trusting the
 system that produced it.
 
 That second half is not decoration. When no human witnessed the intermediate
-states, the record of how software came to be *is* the only account of it,
-and an account that cannot be verified is an account that must be trusted.
+states, a verifiable record of how software came to be becomes critical.
+Without one, downstream systems must trust the producer's account of its own
+evolution.
 
 ## The missing semantics
 
@@ -52,10 +53,10 @@ harness logs, and JSON files.
 The concepts Bellbook adds are therefore:
 
 ```
-Candidate    a source state proposed under some parent context
-Evaluation   a judgment about a candidate under an explicit criterion
-Selection    a recorded decision over a set of candidates (including a set of one)
-Lineage      derived from refs and lineage payload fields, never stored as a parallel structure
+Candidate    a software/source state proposed as a possible continuation of one or more prior states
+Evaluation   an assessment of a candidate against an explicit criterion
+Selection    a recorded choice among one or more candidates, grounded in referenced evaluations
+Lineage      the ancestry and decision history derived from canonical record relationships
 ```
 
 together with the trust machinery those records need: content-addressing,
@@ -88,8 +89,8 @@ built on top of Git, not instead of it:
 - Git remains the source storage substrate. A candidate binds a Git tree
   (identity) and optionally a commit (provenance).
 - `Candidate`, `Evaluation`, and `Selection` become typed record kinds; the
-  record remains the only primitive; lineage is derived from refs and
-  lineage payload fields, never stored.
+  record remains the only primitive; lineage is derived from canonical
+  record relationships, never materialized as a separate structure.
 - The existing kernel supplies evidence, signatures, retraction, taint, and
   receipts unchanged.
 - The proving workloads are best-of-N candidate selection,
@@ -134,9 +135,10 @@ with the same state identity throughout its lifecycle.
 
 Every proposed Bellbook feature must pass:
 
-1. *Does this help autonomous software create, store, fork, compare,
-   evaluate, select, reproduce, trust, execute, observe, or continue
-   software states?* If not, it does not belong in Bellbook.
+1. *Does this represent or preserve a fundamental property of autonomous
+   software evolution that belongs at Bellbook's current layer?* If the
+   capability belongs to a later layer of the vision, it must wait until that
+   layer's adoption gate has been earned.
 2. *Bellbook must never need to understand how an agent thinks in order to
    understand what happened to the software.* No prompts, planners, tasks,
    repair strategies, models, or conversations in the core. Bellbook
