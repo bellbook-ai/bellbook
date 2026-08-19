@@ -4,20 +4,27 @@
 //! corpus must never change (SPEC.md §14, CHANGELOG "frozen in place"). Once
 //! the epoch CI job lands (issue #34) the pinned, published v0.2 validator
 //! re-validates the frozen receipts directly; until then this test pins the
-//! byte-exact SHA-256 of each frozen file so an accidental edit fails CI
-//! rather than passing silently (the live suites now exercise only the v0.3
-//! artifacts).
+//! SHA-256 of each frozen file so an accidental edit fails CI rather than
+//! passing silently (the live suites now exercise only the v0.3 artifacts).
+//!
+//! The hash is taken over LF-normalized content: `.gitattributes` already
+//! forces these files to LF on every platform, and normalizing here as well
+//! makes the gate independent of any checkout's line-ending config (a raw
+//! byte hash diverged on Windows CRLF checkouts). A line-ending change is
+//! not a content edit, which is what this gate exists to catch.
 //!
 //! If a v0.2 hash below must change, that is a backward-compatibility break
 //! and needs an explicit, documented decision - not a hash bump.
 
 use std::path::Path;
 
-fn sha256_hex(path: &str) -> String {
+fn content_hash(path: &str) -> String {
     use bellbook::sha256;
     let bytes = std::fs::read(Path::new(env!("CARGO_MANIFEST_DIR")).join(path))
         .unwrap_or_else(|e| panic!("frozen v0.2 artifact {path} missing: {e}"));
-    bellbook::hex_encode(&sha256(&bytes))
+    // Strip CR so CRLF and LF checkouts hash identically.
+    let normalized: Vec<u8> = bytes.into_iter().filter(|&b| b != b'\r').collect();
+    bellbook::hex_encode(&sha256(&normalized))
 }
 
 #[test]
@@ -43,7 +50,7 @@ fn v02_artifacts_are_byte_frozen() {
     ];
     for (path, expected) in frozen {
         assert_eq!(
-            sha256_hex(path),
+            content_hash(path),
             expected,
             "frozen v0.2 artifact {path} changed; v0.2 is a published epoch and \
              must not be edited (SPEC.md §14). If this is a deliberate, \
