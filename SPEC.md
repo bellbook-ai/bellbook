@@ -761,7 +761,7 @@ HeadAttestation {
   head_hash:    Hash256  // SHA-256(concat(record ids)), whole log -
                          // the same computation as Checkpoint.log_hash
   record_count: u64      // records covered (subjects and verdicts)
-  spec_version: string   // e.g. "0.2"
+  spec_version: string   // e.g. "0.3"
   timestamp:    string   // canonical RFC 3339 UTC (`YYYY-MM-DDTHH:MM:SSZ`), host-supplied wall-clock time
 }
 ```
@@ -785,7 +785,7 @@ third party validates offline, without trusting the producer.
 
 ```
 Receipt {
-  spec_version: string          // e.g. "0.2"
+  spec_version: string          // e.g. "0.3"
   rules:        VerifierRules   // what the log was committed under
   records:      [Record]        // full sequence from genesis
 }

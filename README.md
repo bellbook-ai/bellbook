@@ -187,7 +187,8 @@ design is in [`spec/v0.3-delta.md`](spec/v0.3-delta.md); progress is
 tracked in issue #19.
 
 **Bellbook 0.2 is an early release. Its implemented compatibility contract is
-defined by [SPEC.md](SPEC.md) and the committed v0.2 test vectors.**
+defined by the SPEC.md shipped with the 0.2.0 release (this `main` now
+develops spec 0.3) and the committed v0.2 test vectors.**
 It ships exactly what is implemented and tested today: the
 content-addressed (JCS-canonical) record model, the deterministic verifier
 with replayable `verify_log` (identity-to-role binding, authority binding

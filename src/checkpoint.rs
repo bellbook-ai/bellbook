@@ -134,7 +134,7 @@ pub struct HeadAttestation {
     pub head_hash: Hash256,
     /// Number of records (subjects and verdicts) the hash covers.
     pub record_count: u64,
-    /// The spec version governing the attested records (e.g. `"0.2"`).
+    /// The spec version governing the attested records (e.g. `"0.3"`).
     pub spec_version: String,
     /// Host-supplied wall-clock time of attestation. The type enforces the
     /// canonical RFC 3339 UTC spelling `YYYY-MM-DDTHH:MM:SSZ`.
