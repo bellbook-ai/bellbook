@@ -172,6 +172,9 @@ pub fn frozen_kind_schema_map() -> BTreeMap<Hash256, Kind> {
     map.insert(schema_id(SCHEMA_VERDICT), Kind::Verdict);
     map.insert(schema_id(SCHEMA_PLAN), Kind::Plan);
     map.insert(schema_id(SCHEMA_RETRACTION), Kind::Retraction);
+    map.insert(schema_id(SCHEMA_CANDIDATE), Kind::Candidate);
+    map.insert(schema_id(SCHEMA_EVALUATION), Kind::Evaluation);
+    map.insert(schema_id(SCHEMA_SELECTION), Kind::Selection);
     map
 }
 

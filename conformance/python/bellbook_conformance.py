@@ -2,7 +2,7 @@
 
 This is a *from-scratch* Python implementation - it does NOT wrap, link, or call
 the Rust crate. Its purpose (issue #5) is to independently confirm the parts of
-the v0.2 specification that must be identical across implementations:
+the specification that must be identical across implementations:
 
   * RFC 8785 (JCS) canonicalization of records,
   * SHA-256 content-addressed record ids,
@@ -14,8 +14,8 @@ the v0.2 specification that must be identical across implementations:
 
 It deliberately does NOT re-derive verdicts (the full per-record rule battery and
 the retraction/taint state machine). That larger layer is the next increment; see
-the README. Everything here is checked against `spec/test-vectors-v0.2.json` and
-`spec/conformance/v0.2/` by `run_conformance.py`.
+the README. Everything here is checked against `spec/test-vectors-v0.3.json` and
+`spec/conformance/v0.3/` by `run_conformance.py`.
 
 Only the Python standard library is required for canonicalization, ids, and
 structure. Ed25519 signature verification (used only for the signed test vector)
@@ -29,8 +29,8 @@ import hashlib
 import json
 from typing import Any
 
-SPEC_VERSION = "0.2"
-SIGNING_DOMAIN = "bellbook.record-signature.v0.2"
+SPEC_VERSION = "0.3"
+SIGNING_DOMAIN = "bellbook.record-signature.v0.3"
 # 2**53 - 1: the I-JSON safe-integer range JCS numbers must stay within,
 # matching `MAX_SAFE_INTEGER` in the reference's canonical.rs.
 MAX_SAFE_INTEGER = 9_007_199_254_740_991
@@ -128,7 +128,7 @@ def jcs(value: Any) -> str:
             raise DecodeError(f"integer {value} exceeds the I-JSON safe range required by JCS")
         return str(value)
     if isinstance(value, float):
-        raise DecodeError("floating-point numbers are not part of the v0.2 wire format")
+        raise DecodeError("floating-point numbers are not part of the wire format")
     if isinstance(value, str):
         return _jcs_string(value)
     if isinstance(value, list):

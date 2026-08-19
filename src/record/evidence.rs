@@ -51,8 +51,15 @@ pub fn base_evidence(schema: &Hash256) -> Evidence {
         Some(SCHEMA_REFUSAL) => Evidence::Reported,
         Some(SCHEMA_USAGE) => Evidence::Reported,
         Some(SCHEMA_RETRACTION) => Evidence::Reported,
+        // A candidate's binding and an evaluation's outcome are
+        // host-asserted; a selection is a judgment derived by reasoning.
+        // Under these bases evaluations derive at most Reported and
+        // selections at most Inferred (SPEC §7).
+        Some(SCHEMA_CANDIDATE) => Evidence::Reported,
+        Some(SCHEMA_EVALUATION) => Evidence::Reported,
         Some(SCHEMA_SUMMARY) => Evidence::Inferred,
         Some(SCHEMA_PLAN) => Evidence::Inferred,
+        Some(SCHEMA_SELECTION) => Evidence::Inferred,
         Some(_) | None => Evidence::Assumed,
     }
 }
@@ -112,7 +119,7 @@ mod tests {
         // base_evidence classifies each frozen schema with an explicit match
         // arm. If this count changes, a schema was added or removed: update
         // the match in base_evidence (and this pin) in the same change.
-        assert_eq!(ALL_SCHEMAS.len(), 14);
+        assert_eq!(ALL_SCHEMAS.len(), 17);
         for name in ALL_SCHEMAS {
             // No frozen schema may fall through to the unknown-schema floor
             // by accident; Assumed as a base class must be a deliberate

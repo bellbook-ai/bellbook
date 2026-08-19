@@ -1,4 +1,4 @@
-"""Independent Python reimplementation of Bellbook's v0.2 verdict rule battery.
+"""Independent Python reimplementation of Bellbook's verdict rule battery.
 
 This is the second increment of issue #5. The first increment
 (`bellbook_conformance.py`) reproduced canonicalization, record ids, hashes,
@@ -55,6 +55,9 @@ SCHEMA_USAGE = "bellbook.usage.v1"
 SCHEMA_VERDICT = "bellbook.verdict.v1"
 SCHEMA_PLAN = "bellbook.plan.v1"
 SCHEMA_RETRACTION = "bellbook.retraction.v1"
+SCHEMA_CANDIDATE = "bellbook.candidate.v1"
+SCHEMA_EVALUATION = "bellbook.evaluation.v1"
+SCHEMA_SELECTION = "bellbook.selection.v1"
 
 ALL_SCHEMAS = [
     SCHEMA_REQUEST,
@@ -71,6 +74,9 @@ ALL_SCHEMAS = [
     SCHEMA_VERDICT,
     SCHEMA_PLAN,
     SCHEMA_RETRACTION,
+    SCHEMA_CANDIDATE,
+    SCHEMA_EVALUATION,
+    SCHEMA_SELECTION,
 ]
 
 
@@ -107,6 +113,9 @@ TASK_DONE_WHEN = frozenset(
     {"tool_success", "non_empty_result", "content_retrieved", "final_response"}
 )
 FAILURE_POLICY = frozenset({"continue", "ask_user", "abort"})
+SOURCE_ALGO = frozenset({"sha1", "sha256"})
+BINDING_MODE = frozenset({"reported", "manifest"})
+CANDIDATE_BASIS = frozenset({"root", "continuation", "derivation"})
 
 # Envelope enums (validated structurally, as serde does when it decodes a
 # Record; an unknown value here is a decode rejection, not a rule violation).
@@ -114,6 +123,7 @@ KINDS = frozenset(
     {
         "Request", "Action", "Response", "Result", "Summary", "Approval",
         "Capability", "Usage", "Refusal", "Verdict", "Plan", "Retraction",
+        "Candidate", "Evaluation", "Selection",
     }
 )
 AUTHOR_TYPES = frozenset({"User", "Provider", "System", "Executor", "Verifier"})
@@ -126,6 +136,23 @@ REF_TYPES = frozenset({"Cause", "Use", "Require", "Replace"})
 # an exact-key-set check reproduces `deny_unknown_fields` and missing fields.
 _STRUCT_SPECS = {
     "Attachment": {"path": "str", "content": "str"},
+    "GitSource": {
+        "algo": ("enum", SOURCE_ALGO),
+        "tree": "str",
+        "commit": ("opt", "str"),
+    },
+    "SourceBinding": {
+        "git": ("struct", "GitSource"),
+        "manifest_hash": ("opt", "hash"),
+        "binding": ("enum", BINDING_MODE),
+    },
+    # Bounded fixed-point score: value within the I-JSON safe range, scale
+    # 0..=12 (src/record/payloads.rs ScoredValue try_from bounds).
+    "ScoredValue": {
+        "value": ("int_range", -9007199254740991, 9007199254740991),
+        "scale": ("int_range", 0, 12),
+    },
+    "SelectedCandidates": {"candidates": ("vec", "hash")},
     "PlanTask": {
         "id": "str",
         "description": "str",
@@ -201,6 +228,26 @@ _PAYLOAD_SPECS = {
         "status": ("enum", PLAN_STATUS),
     },
     SCHEMA_RETRACTION: {"target_id": "hash", "reason": "str"},
+    SCHEMA_CANDIDATE: {
+        "source": ("struct", "SourceBinding"),
+        "basis": ("enum", CANDIDATE_BASIS),
+        "parent": ("opt", "hash"),
+        "note": ("opt", "str"),
+    },
+    SCHEMA_EVALUATION: {
+        "candidate": "hash",
+        "criterion": "nonempty_str",
+        "procedure": ("opt", "str"),
+        # Externally tagged: "passed" | "failed" | {"scored": ScoredValue}.
+        "outcome": ("tagged", frozenset({"passed", "failed"}), {"scored": "ScoredValue"}),
+    },
+    SCHEMA_SELECTION: {
+        "objective": "nonempty_str",
+        "considered": ("vec", "hash"),
+        # Externally tagged: "none" | {"selected": {"candidates": [...]}}.
+        "outcome": ("tagged", frozenset({"none"}), {"selected": "SelectedCandidates"}),
+        "rationale": ("opt", "str"),
+    },
 }
 # The three Result schemas share the ResultData shape.
 _PAYLOAD_SPECS[SCHEMA_RESULT_EXTERNAL] = _PAYLOAD_SPECS[SCHEMA_RESULT]
@@ -235,8 +282,11 @@ BASE_EVIDENCE = {
     SCHEMA_REFUSAL: "Reported",
     SCHEMA_USAGE: "Reported",
     SCHEMA_RETRACTION: "Reported",
+    SCHEMA_CANDIDATE: "Reported",
+    SCHEMA_EVALUATION: "Reported",
     SCHEMA_SUMMARY: "Inferred",
     SCHEMA_PLAN: "Inferred",
+    SCHEMA_SELECTION: "Inferred",
 }
 
 ALLOWED_AUTHOR_TYPES = {
@@ -252,6 +302,9 @@ ALLOWED_AUTHOR_TYPES = {
     "Verdict": frozenset({"Verifier"}),
     "Plan": frozenset({"Provider"}),
     "Retraction": frozenset({"User", "Provider", "System"}),
+    "Candidate": frozenset({"User", "Provider", "Executor", "System"}),
+    "Evaluation": frozenset({"User", "Provider", "Executor", "System"}),
+    "Selection": frozenset({"User", "Provider", "System"}),
 }
 
 # Every kind except Verdict must have its author registered in author_roles.
@@ -610,6 +663,8 @@ def _conforms(value: Any, desc: Any) -> bool:
         return isinstance(value, list) and all(_is_uint(b, 8) for b in value)
     if desc == "value":  # serde_json::Value - any JSON is accepted.
         return True
+    if desc == "nonempty_str":
+        return isinstance(value, str) and len(value) > 0
     tag = desc[0]
     if tag == "enum":
         return isinstance(value, str) and value in desc[1]
@@ -619,6 +674,21 @@ def _conforms(value: Any, desc: Any) -> bool:
         return isinstance(value, list) and all(_conforms(x, desc[1]) for x in value)
     if tag == "struct":
         return _struct_conforms(value, _STRUCT_SPECS[desc[1]])
+    if tag == "int_range":
+        lo, hi = desc[1], desc[2]
+        return isinstance(value, int) and not isinstance(value, bool) and lo <= value <= hi
+    if tag == "tagged":
+        # serde externally tagged enum: a unit variant is its snake_case
+        # name; a struct variant is a one-key object whose value conforms
+        # to the named struct spec.
+        units, structs = desc[1], desc[2]
+        if isinstance(value, str):
+            return value in units
+        if isinstance(value, dict) and len(value) == 1:
+            (variant, inner), = value.items()
+            spec_name = structs.get(variant)
+            return spec_name is not None and _struct_conforms(inner, _STRUCT_SPECS[spec_name])
+        return False
     raise AssertionError(f"unknown descriptor {desc!r}")
 
 

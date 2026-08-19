@@ -7,8 +7,28 @@ and releases follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Changed
+
+- **Opened the spec v0.3 development epoch** (design: `spec/v0.3-delta.md`,
+  accepted RFC-0001; tracking: #19). `SPEC_VERSION` is `0.3`, the signing
+  domain is `bellbook.record-signature.v0.3`, and the current test vectors
+  and conformance corpus live at `spec/test-vectors-v0.3.json` and
+  `spec/conformance/v0.3/`. The v0.2 artifacts are frozen in place and stay
+  valid under v0.2 rules; the published 0.2.x release is their validator,
+  and this validator rejects v0.2 receipts with a clear
+  unsupported-version report (a corpus case pins it).
+
 ### Added
 
+- Three record kinds for evolution semantics: `Candidate` (binds a Git
+  tree via a reported or manifest source binding), `Evaluation` (one
+  criterion per record, with decode-enforced score bounds), and
+  `Selection` (set-valued outcomes), with author-role rows, base evidence
+  classes, strict typed payloads, vectors, corpus cases (three accepted
+  baselines and three author-machinery rejections), and independent
+  Python validator parity. The lineage, selection, approval-binding, and
+  standing rules land next (#24, #25, #26); until then the generic checks
+  apply.
 - Machine-readable conformance corpus under `spec/conformance/v0.2/`
   (record, receipt, and malformed-document cases) with a runner that
   re-derives every outcome from the stored inputs. It triggers a case for

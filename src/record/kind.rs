@@ -45,6 +45,19 @@ pub enum Kind {
     /// replaces it. Append-only: the target stays in the log; records that
     /// epistemically depend on it (via `Use`/`Require` refs) become tainted.
     Retraction,
+    /// A source state proposed in a line of development; binds a Git tree
+    /// (identity) and optionally a commit (provenance). Its `basis` says how
+    /// it entered the line: `Root`, `Continuation` of a Selection, or
+    /// `Derivation` from sibling material.
+    Candidate,
+    /// A judgment about exactly one candidate under exactly one criterion;
+    /// `Use`s its candidate, so a retracted candidate taints its
+    /// evaluations.
+    Evaluation,
+    /// A set-valued decision over candidates under an objective: the
+    /// survivors of best-of-N, a population generation, or a
+    /// single-candidate accept.
+    Selection,
 }
 
 /// Typed edge from a record to a prior record in the same space.
@@ -112,6 +125,26 @@ pub fn allowed_author_types(kind: Kind) -> &'static [AuthorType] {
         Kind::Verdict => &[AuthorType::Verifier],
         Kind::Plan => &[AuthorType::Provider],
         Kind::Retraction => &[AuthorType::User, AuthorType::Provider, AuthorType::System],
+        // Candidates and evaluations are things any accountable actor may
+        // honestly report producing or observing; rules narrow per
+        // deployment. Selections are decisions, so Executor - the role that
+        // performs work - may not author them. Note the retraction
+        // consequence: Executor may never author a Retraction, so
+        // Executor-authored evaluations are retractable only through
+        // admin_retraction_actors (SPEC §2).
+        Kind::Candidate => &[
+            AuthorType::User,
+            AuthorType::Provider,
+            AuthorType::Executor,
+            AuthorType::System,
+        ],
+        Kind::Evaluation => &[
+            AuthorType::User,
+            AuthorType::Provider,
+            AuthorType::Executor,
+            AuthorType::System,
+        ],
+        Kind::Selection => &[AuthorType::User, AuthorType::Provider, AuthorType::System],
     }
 }
 
@@ -136,7 +169,10 @@ pub fn requires_registered_author(kind: Kind) -> bool {
         | Kind::Summary
         | Kind::Usage
         | Kind::Refusal
-        | Kind::Retraction => true,
+        | Kind::Retraction
+        | Kind::Candidate
+        | Kind::Evaluation
+        | Kind::Selection => true,
         Kind::Verdict => false,
     }
 }

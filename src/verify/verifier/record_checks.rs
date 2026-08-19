@@ -334,6 +334,15 @@ fn check_payload_decode(record: &Record) -> Option<ReasonCode> {
         _ if schema == schema_id(SCHEMA_RETRACTION) => {
             decodes_canonically::<RetractionData>(&record.data)
         }
+        _ if schema == schema_id(SCHEMA_CANDIDATE) => {
+            decodes_canonically::<CandidateData>(&record.data)
+        }
+        _ if schema == schema_id(SCHEMA_EVALUATION) => {
+            decodes_canonically::<EvaluationData>(&record.data)
+        }
+        _ if schema == schema_id(SCHEMA_SELECTION) => {
+            decodes_canonically::<SelectionData>(&record.data)
+        }
         _ => return Some(ReasonCode::UnknownSchema),
     };
     if ok {

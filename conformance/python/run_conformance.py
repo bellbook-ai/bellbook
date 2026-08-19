@@ -30,8 +30,8 @@ import bellbook_conformance as bb  # noqa: E402
 import bellbook_verdict as bv  # noqa: E402
 
 ROOT = pathlib.Path(__file__).resolve().parents[2]
-VECTORS = ROOT / "spec" / "test-vectors-v0.2.json"
-CORPUS = ROOT / "spec" / "conformance" / "v0.2"
+VECTORS = ROOT / "spec" / "test-vectors-v0.3.json"
+CORPUS = ROOT / "spec" / "conformance" / "v0.3"
 
 
 class Failed(Exception):
