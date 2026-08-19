@@ -1,13 +1,17 @@
 # RFC-0001: Software-evolution semantics (spec v0.3)
 
-**Status:** Draft, revision 3. Revision 2 folded in the first adversarial
-review (set-valued selection; reaffirmation). Revision 3 responds to a
-second, code-verified audit that confirmed two structural defects in
-revision 2 — evidence-class collapse through mandated lineage refs, and
-reaffirmation being uncommittable at depth — and several unspecified
-obligations. The central change: **lineage standing is now a replay-derived
-dimension computed over `Cause` edges, not a use of kernel taint via
-`Require`.** Nothing in this RFC is implemented; nothing in it changes spec
+**Status:** Draft, revision 4. Revision 2 folded in the first adversarial
+review (set-valued selection; reaffirmation). Revision 3 responded to a
+second, code-verified audit — its central change: **lineage standing is a
+replay-derived dimension computed over `Cause` edges, not a use of kernel
+taint via `Require`.** Revision 4 folds in a third, maximum-depth audit that
+verified revision 3's kernel claims against the v0.2 source and closed the
+gaps it found: `Cause` targets of Candidates must be accepted (the
+rejected-anchor hole), standing lives in the replay report only (receipts
+embed nothing derived), the standing section's content is now normative,
+reaffirmation's default trust posture is stated bluntly with an
+identity-binding knob, and the retracted-parent unrestorability asymmetry is
+documented. Nothing in this RFC is implemented; nothing in it changes spec
 v0.2 or the published crate. Kind names and field spellings are tentative
 until accepted.
 
@@ -33,8 +37,9 @@ Dependency semantics are split to match what they mean:
   epistemically depend on the evaluations they relied on and the candidates
   they selected. Kernel evidence derivation and taint apply here, unchanged.
 - **Standing** — "is this state a legitimate member of a chosen line?" — is
-  a **new, replay-derived dimension** computed over continuation edges
-  (`Cause` + `parent`). It is deterministic, receipt-visible, and
+  a **new, replay-derived dimension** computed over lineage `Cause` edges:
+  continuation anchors (with `parent`) and derivation edges to candidates.
+  It is deterministic, derived identically by every validator, and
   forgery-proof for the same reason taint is: replay re-derives it. It does
   not touch evidence derivation, does not freeze appends, and is restorable
   by a single on-record reaffirmation.
@@ -174,9 +179,16 @@ development.
 
 | basis          | meaning                                         | ref obligations |
 |----------------|-------------------------------------------------|-----------------|
-| `root`         | starts a line (imported / initial state)        | MAY `Cause` one Request; no `Cause` to a Selection; no `parent` |
-| `continuation` | continues from a selected state                 | MUST `Cause` exactly one record, of kind `Selection`, whose outcome is `selected`; `parent` MUST name a member of that Selection's selected set |
-| `derivation`   | derived from sibling material (repair, mutation)| MUST `Cause` ≥ 1 record, each of kind `Candidate` or `Evaluation`; no `parent` |
+| `root`         | starts a line (imported / initial state)        | at most one `Cause`, targeting an accepted Request; no other `Cause` targets; no `parent` |
+| `continuation` | continues from a selected state                 | MUST `Cause` exactly one record: an **accepted** `Selection` whose outcome is `selected`; `parent` MUST name a member of that Selection's selected set |
+| `derivation`   | derived from sibling material (repair, mutation)| MUST `Cause` ≥ 1 record, each an **accepted** `Candidate` or `Evaluation`; no `parent` |
+
+Acceptance of every `Cause` target is checked at the candidate's commit
+position and, because acceptance is permanent in v0.2, holds forever after.
+This closes what the third audit named the *rejected-anchor hole*: without
+it, a continuation could anchor to a rejected Selection and yield a
+`Clean` receipt with a compromised lineage, and derivation standing would be
+undefined over rejected targets.
 
 Continuation uses `Cause`, **not** `Require` — this is the revision-3
 change. `Cause` carries neither evidence derivation nor kernel taint, so a
@@ -357,15 +369,22 @@ re-derives it. It is **not** kernel taint: it does not affect evidence, does
 not gate commits by default, and is reported alongside taint, never merged
 with it.
 
-Let a Selection S be **unsound** at replay end iff S is retracted, tainted,
-or was rejected. Define **anchor soundness** for a continuation candidate C
-with `Cause` → S and `parent` = P:
+Let a Selection S be **unsound** at replay end iff S is retracted or
+tainted. (A rejected Selection can never be an anchor: V3-C3 requires every
+`Cause` target of a Candidate to be accepted at commit, and acceptance is
+permanent — so an anchor can become unsound only *after* the fact, via
+retraction or taint.) Define **anchor soundness** for a continuation
+candidate C with `Cause` → S and `parent` = P:
 
 - S itself is sound, **or**
 - some accepted, sound Selection S′ exists with a `Replace` chain leading to
   S (one or more hops, every intermediate accepted) whose selected set
   contains P. If multiple replacements of S exist, **any** sound one
   suffices (deterministic: existential over the fixed replay-end set).
+  Intermediates need only be *accepted*, not sound — requiring soundness
+  would recreate a frozen-chain pathology while granting nothing, since a
+  host can always `Replace` S directly (multiple replacements of one target
+  are legal in v0.2); a corpus case pins this reading.
 
 Then standing is derived recursively (well-founded: all edges point to
 earlier records):
@@ -377,15 +396,38 @@ earlier records):
   standing (evaluation targets carry no standing); a derivation with only
   Evaluation targets is **sound**.
 
-**Report and receipt.** The replay report and receipt gain a `standing`
-section: the set of standing-compromised candidate ids, and for each
-compromised anchor, the unsound Selection responsible. Whenever the
-compromised set is non-empty, the origin Selection is necessarily tainted or
-retracted, so the receipt's overall status is already `Tainted` under
-unchanged v0.2 status rules — standing adds *which lineage* is affected and
-*whether it was restored*, it never manufactures a status v0.2 would not
-report. Two independent implementations must derive identical standing sets;
-corpus receipt cases enforce this (§13).
+**Where standing lives: the replay report only.** A v0.2 receipt embeds
+nothing derived — it is `{spec_version, rules, records}`, and the
+retracted/tainted sets exist only in the validator's report, re-derived on
+every validation. Standing follows the same discipline exactly: the
+**report** gains a `standing` section; receipts are unchanged in shape, and
+there is no embedded standing for anyone to forge — a validator that derives
+a different standing set from the same records is simply nonconforming,
+which the corpus detects the same way it detects taint disagreement.
+
+**Normative content of the `standing` section** (field names are open
+question §16.7; the content is not):
+
+- `compromised`: the set of standing-compromised Candidate ids;
+- `unsound`: the set of unsound Selection ids;
+- `restorations`: for each unsound Selection that has at least one sound
+  replacement chain, the set of sound replacing Selection ids.
+
+All three are pure functions of the accepted records at replay end, with
+canonical (logical-time) ordering for output. Restored lines are visible as:
+their candidates absent from `compromised`, their anchor present in
+`unsound`, and the restoring Selection listed in `restorations` — closing
+the gap between this section and §7/§10's restoration queries.
+
+Whenever `compromised` is non-empty, the responsible anchor is necessarily
+retracted or tainted (rejected anchors are impossible per V3-C3, and
+acceptance is permanent), so the report's overall status is already
+`Tainted` under unchanged v0.2 status rules — v0.2 reports `Tainted`
+whenever either the retracted or the tainted set is non-empty. Standing adds
+*which lineage* is affected and *what restored it*; it never manufactures a
+status v0.2 would not report. Two independent implementations must derive
+identical standing sections; corpus receipt cases pin the expected values
+(§13).
 
 **What standing deliberately does not do.** It does not reject new
 continuations of an unsound Selection — they commit and are born
@@ -400,7 +442,8 @@ A Selection S′ carrying `Replace` → S is a **reaffirmation**: a new decision
 over the same objective, on evidence that currently stands. Requirements
 (V3-S5): the target is a Selection in the same space with the same
 `objective`; rules MAY restrict reaffirmation authorship
-(`reaffirmation_roles`, default: Selection's own author-role row).
+(`reaffirmation_actors`: an explicit allowlist of actor *identities*; when
+unset, the Selection author-role row applies).
 
 Because standing (not kernel taint) carries lineage consequence, S′ is
 committable **at any depth**: its `Require`d winners are ordinary untainted
@@ -429,7 +472,32 @@ guaranteed:
 - **Replacement side effects are v0.2's.** A `Replace`d Selection leaves
   context construction, as any replaced record does today; the RFC adds no
   new Replace semantics beyond the whitelist entries and the compatibility
-  rule.
+  rule. Consequently, replacing a *sound* Selection is legal (V3-S5 does not
+  require the target to be unsound — a state-dependent Replace rule would be
+  new machinery): standing is unaffected (soundness is never revoked by
+  replacement), but the target still leaves context construction. Hosts
+  should not `Replace` healthy Selections casually; this side effect is
+  documented rather than forbidden.
+- **Retracted parents are unrestorable — by design.** Reaffirmation
+  recovers from retracted or tainted *decisions*. If a selected *candidate*
+  is itself retracted ("the state was wrong," not "the decision no longer
+  stands"), no reaffirmation can restore its descendants: any restoring
+  Selection must `Require` that candidate, and `Require`-of-retracted is a
+  hard rejection. The only path forward is a new `root` — the graver claim
+  gets the graver consequence, and the flagship's recovery story is
+  explicitly conditional on *what* was retracted. Corpus cases cover both
+  (§13).
+- **The default trust posture, stated bluntly.** Under default rules,
+  restoration is producible in **two records** by any actor in the Selection
+  author-role row: one self-authored Evaluation of the old parent, one
+  reaffirming Selection. Restoration is therefore *ownership-unbound* while
+  retraction is *ownership-bound* (only a record's author or a configured
+  admin may retract). Everything stays visible — the junk evaluation, the
+  reaffirmation, and their authors are permanently on the record, and a
+  consumer can judge the restoring evidence for itself — but deployments
+  that need restoration to be as guarded as compromise MUST set
+  `reaffirmation_actors` and/or require approvals on Selections (§4.3).
+  The default favors recordability; the knobs supply the guarantees.
 - **Last resort.** A host abandoning a line entirely may start a new `root`
   candidate with a provenance `note`; the receipt shows the break in
   verifiable lineage. That is the honest cost of a re-baseline.
@@ -490,22 +558,25 @@ derivation and thresholds, taint, retraction ownership) apply to the new
 kinds unchanged. New checks, each with a distinct rejection reason code and
 a triggering corpus case:
 
-**Payload-id resolution (shared rule).** `parent` and every member of
-`considered` are payload ids, not refs; v0.2's ref battery never touches
-them. v0.3 defines: each MUST resolve, in the same space, to a
-previously **accepted** `Candidate` record (retracted or tainted targets
-resolve — those conditions surface through evidence/taint on refs and
-through standing, not through payload lookup). Unresolvable, cross-space,
-or wrong-kind payload ids reject.
+**Payload-id resolution (shared rule).** `parent`, every member of
+`considered`, and `Evaluation.candidate` are payload ids, not refs; v0.2's
+ref battery never touches them. v0.3 defines: each MUST resolve, in the same
+space, to a previously **accepted** `Candidate` record (retracted or tainted
+targets resolve — those conditions surface through evidence/taint on refs
+and through standing, not through payload lookup). Unresolvable,
+cross-space, or wrong-kind payload ids reject.
 
 **Candidate**
 - V3-C1: `source.git.tree` present, hex, length matching `algo`.
 - V3-C2: `binding == "manifest"` ⇒ `manifest_hash` present (64-hex);
   `binding == "reported"` ⇒ `manifest_hash` absent.
-- V3-C3: basis/ref obligations of §4.1 hold (continuation ⇒ exactly one
-  `Cause`, targeting a Selection with `decision == "selected"`; derivation ⇒
-  ≥ 1 `Cause`, each `Candidate` or `Evaluation`, none a `Selection`; root ⇒
-  no `Cause` to a Selection).
+- V3-C3: basis/ref obligations of §4.1 hold, **including acceptance of every
+  `Cause` target at commit position**: continuation ⇒ exactly one `Cause`,
+  targeting an *accepted* Selection with `decision == "selected"`;
+  derivation ⇒ ≥ 1 `Cause`, each an *accepted* `Candidate` or `Evaluation`,
+  none a `Selection`; root ⇒ at most one `Cause`, targeting an *accepted*
+  Request, and no other `Cause` targets. (Closes the rejected-anchor hole,
+  §4.1/§6.2.)
 - V3-C5: `parent` present iff `basis == "continuation"`; resolves per the
   shared rule; and names a member of the `Cause`d Selection's selected set.
 
@@ -533,22 +604,33 @@ commit-time strictness.)
   Evaluation when `decision == "selected"`.
 - V3-S5: at most one `Replace` ref (v0.2 rule); if present, the target is a
   Selection, same space, same `objective`; author satisfies
-  `reaffirmation_roles`.
+  `reaffirmation_actors` when set.
 
 **New rules knobs**
 - `min_binding` per referencing context (e.g. Selections may only `Require`
   candidates with `manifest` binding).
 - `selection_requires_evaluation` (default true).
-- `reaffirmation_roles` (default: Selection's author-role row).
+- `reaffirmation_actors` (identity allowlist; unset ⇒ the Selection
+  author-role row alone governs — see §6.3's trust-posture statement).
 - `reject_compromised_continuation` (default false; §6.2).
 - Per-kind evidence thresholds and author-role bindings apply to the three
   kinds exactly as to existing kinds, using §4.0's registrations.
 
 **Spec-level changes beyond the battery** (still additive, per C3): the
 `Replace` kind whitelist gains `Selection` (carrier) / `Selection` (target)
-with the V3-S5 compatibility rule; the replay report and receipt gain the
-`standing` section (§6.2); SPEC v0.3 defines the selection approval-binding
-hash (§4.3 "Authority") with its own domain string.
+with the V3-S5 compatibility rule; the **replay report** gains the
+`standing` section (§6.2 — receipts embed nothing derived, unchanged from
+v0.2); SPEC v0.3 defines the selection approval-binding hash (§4.3
+"Authority") with its own domain string.
+
+**Reachability pre-commitment (for VISION stages, decided now while it is
+cheap):** `parent`, `considered`, and `Evaluation.candidate` are edges that
+ref-walking tools cannot see. SPEC v0.3 therefore states normatively that
+**reachability over v0.3 kinds is payload-aware** — any future garbage
+collection, synchronization, or checkpoint tooling MUST treat these payload
+ids as reachability edges, or it would silently sever the standing spine.
+This is recorded in the spec now, before any such tooling exists, so no
+later stage can inherit ref-only reachability as a hidden default.
 
 ## 10. Retraction and the flagship scenario
 
@@ -559,9 +641,10 @@ The demonstration this release is built around:
 > retracted. Kernel taint reaches every Selection that `Use`d them, exactly
 > as v0.2 defines. The `standing` section of the replay report now shows
 > every descendant candidate of those Selections as compromised,
-> transitively, at any depth — while repairs and mutations merely
-> *motivated* by the broken evaluations remain sound, because motivation is
-> `Cause` and standing follows continuation edges only. Work never stops:
+> transitively, at any depth. Repairs and mutations merely *motivated* by
+> the broken evaluations remain sound — a derivation is compromised only
+> when a **candidate** it derives from is compromised; evaluation
+> motivations alone never compromise. Work never stops:
 > the line keeps recording, visibly compromised. The team re-runs the
 > surviving evaluations and commits one reaffirming Selection; the next
 > replay shows the line's standing restored — with the retraction, the
@@ -572,18 +655,23 @@ Standing means "rests on decisions that no longer stand," never "the code is
 wrong" — and the one-record recovery is part of the demo precisely so the
 cascade reads as actionable state, not a permanent alarm or a frozen ledger.
 It ships as a worked example plus corpus receipt cases covering: the full
-compromise cascade, the derivation non-cascade, deep reaffirmation recovery,
-a `none`-decision reaffirmation restoring nothing, competing reaffirmations,
-and a forged receipt whose standing section disagrees with re-derivation and
-is rejected.
+compromise cascade, the derivation non-cascade (evaluation-only motivation)
+and the derivation cascade (compromised-candidate derivation), deep
+reaffirmation recovery, a `none`-decision reaffirmation restoring nothing,
+competing reaffirmations, a replacement chain through an accepted-but-unsound
+intermediate, the retracted-parent unrestorable case, and expected-standing
+agreement cases that pin the report's `standing` section byte-for-decision —
+the same mechanism that already enforces taint agreement between the two
+implementations.
 
 ## 11. Receipt boundary
 
 A v0.3 receipt proves the recorded **process**: which candidates were
 recorded, what was claimed about them, which evidence and evaluations
 existed, what was selected under what objective, what is retracted, tainted,
-or standing-compromised (and what restored it), and that none of it was
-altered after the fact. It does **not** contain source contents; Git OIDs
+or standing-compromised and what restored it (all re-derived by the
+validator from the records — never embedded in the receipt), and that none
+of it was altered after the fact. It does **not** contain source contents; Git OIDs
 are pointers whose resolution requires the repository. With `manifest`
 binding, a party holding the tree can independently recompute
 `manifest_hash` and bind the receipt to actual contents; with `reported`
@@ -648,7 +736,7 @@ is updated in lockstep via the corpus, as now.
 - Conformance corpus extended with positive and adversarial cases per new
   invariant in §9 (each rejection reason code gets a triggering case), plus
   the §10 receipt cases and standing-derivation cases (two implementations
-  must produce identical standing sets).
+  must produce identical standing sections).
 - **v0.2 corpus backfill (independent of v0.3):** the audit found that no
   existing corpus case exercises the `Require` leg of taint propagation,
   though SPEC.md claims that coverage. A small v0.2-scope corpus addition
@@ -723,10 +811,10 @@ no second extension without new evidence.
    defined idiom, e.g. a manifest-bound re-record of the same tree that the
    Selection `Require`s instead of the reported one. Does that re-record need
    its own basis/ref rule?
-7. **Standing report shape** — exact field naming for the `standing`
-   section; whether restored lines list the restoring Selection per
-   candidate or per anchor; whether replacement chains are flattened in the
-   report.
+7. **Standing report naming** — exact field names and serialization order
+   for the `standing` section. Its *content* is normative in §6.2
+   (`compromised` candidates, `unsound` selections, `restorations` per
+   anchor); only the naming and presentation remain open.
 8. **`Verified` pathway for evaluations** — under §4.0's base classes,
    evaluations top out at `Reported`. Whether and how a key-pinned external
    attestor's evaluation can reach `Verified` must be settled against

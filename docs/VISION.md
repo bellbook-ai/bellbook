@@ -55,7 +55,7 @@ The concepts Bellbook adds are therefore:
 Candidate    a source state proposed under some parent context
 Evaluation   a judgment about a candidate under an explicit criterion
 Selection    a recorded decision over a set of candidates (including a set of one)
-Lineage      derived from typed references — never stored as a parallel structure
+Lineage      derived from refs and lineage payload fields — never stored as a parallel structure
 ```
 
 together with the trust machinery those records need: content-addressing,
