@@ -13,8 +13,10 @@ pub fn schema_id(name: &str) -> SchemaId {
 
 /// The specification version this crate implements (SPEC.md §14). Carried
 /// by portable artifacts - head attestations and receipts - so verifiers
-/// can key their rule-sets by epoch.
-pub const SPEC_VERSION: &str = "0.2";
+/// can key their rule-sets by epoch. 0.3 is in development on this branch;
+/// the last published epoch is 0.2, whose artifacts remain valid under
+/// v0.2 rules (the pinned 0.2.x release validates them).
+pub const SPEC_VERSION: &str = "0.3";
 
 /// Name whose hash is the default [`SpaceId`](crate::record::record::SpaceId):
 /// a convenience for single-space deployments; hosts with their own trust
@@ -59,6 +61,15 @@ pub const SCHEMA_VERDICT: &str = "bellbook.verdict.v1";
 pub const SCHEMA_PLAN: &str = "bellbook.plan.v1";
 /// Schema name for Retraction records.
 pub const SCHEMA_RETRACTION: &str = "bellbook.retraction.v1";
+/// Schema name for Candidate records (a source state proposed in a line of
+/// development; binds a Git tree, SPEC §2).
+pub const SCHEMA_CANDIDATE: &str = "bellbook.candidate.v1";
+/// Schema name for Evaluation records (a judgment about one candidate under
+/// one criterion).
+pub const SCHEMA_EVALUATION: &str = "bellbook.evaluation.v1";
+/// Schema name for Selection records (a set-valued decision over candidates
+/// under an objective).
+pub const SCHEMA_SELECTION: &str = "bellbook.selection.v1";
 
 /// All frozen schema names (for reverse lookup and documentation).
 pub const ALL_SCHEMAS: &[&str] = &[
@@ -76,6 +87,9 @@ pub const ALL_SCHEMAS: &[&str] = &[
     SCHEMA_VERDICT,
     SCHEMA_PLAN,
     SCHEMA_RETRACTION,
+    SCHEMA_CANDIDATE,
+    SCHEMA_EVALUATION,
+    SCHEMA_SELECTION,
 ];
 
 /// Resolve a schema hash to its registered frozen name, if known.

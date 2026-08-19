@@ -1,8 +1,14 @@
 # Bellbook specification
 
-**Spec version: 0.2.** This document is versioned independently of
-the `bellbook` crate; the crate's CHANGELOG states which spec version each
-release implements (see §14).
+**Spec version: 0.3 (in development, unreleased).** The last published
+epoch is 0.2; its artifacts remain valid under v0.2 rules forever, and the
+published 0.2.x release is their validator (§14). This document is
+versioned independently of the `bellbook` crate; the crate's CHANGELOG
+states which spec version each release implements (see §14). The remaining
+v0.3 rules land section by section from
+[`spec/v0.3-delta.md`](spec/v0.3-delta.md), each together with its
+implementation, so this document always describes what the implementation
+does.
 
 This document is **normative**: conformance is defined by this
 specification, not by any implementation. Where the reference
@@ -42,7 +48,8 @@ Record {
 ```
 
 **Kinds:** `Request`, `Action`, `Response`, `Result`, `Summary`, `Approval`,
-`Capability`, `Usage`, `Refusal`, `Verdict`, `Plan`, `Retraction`.
+`Capability`, `Usage`, `Refusal`, `Verdict`, `Plan`, `Retraction`,
+`Candidate`, `Evaluation`, `Selection`.
 
 **Author types:** `User`, `Provider` (LLM), `System`, `Executor` (tool),
 `Verifier` (verdicts only).
@@ -64,6 +71,9 @@ a forbidden kind.
 | `Refusal` | `User`, `System` |
 | `Retraction` | `User`, `Provider`, `System` |
 | `Verdict` | `Verifier` |
+| `Candidate` | `User`, `Provider`, `Executor`, `System` |
+| `Evaluation` | `User`, `Provider`, `Executor`, `System` |
+| `Selection` | `User`, `Provider`, `System` |
 
 Rationale: authority-granting and authority-exercising roles must never
 coincide. Capabilities and approvals come from the human principal (or,
@@ -72,7 +82,14 @@ agent or its executor; results come only from the executor that ran the
 tool; retraction is open to every accountable party (an agent retracting
 its own wrong claim is behavior the model rewards) but never to the
 `Executor` or `Verifier`, whose records are attestations that others
-retract.
+retract. Candidates and evaluations are things any accountable actor may
+honestly report producing or observing; selections are decisions, so
+`Executor`, the role that performs work, may not author them. One
+consequence, stated because recovery flows depend on it:
+Executor-authored evaluations are retractable only through
+`admin_retraction_actors`. Hosts that want evaluation retraction without
+administrative override author evaluations as `Provider` or `System`; a
+deployment decision, not an accident.
 
 **Identity-to-role binding.** The declared `author.type` is
 adversary-controlled - a governed agent could simply *claim* `User` on an
@@ -120,6 +137,39 @@ which has operational teeth (§7.1).
 Payload structs for every kind live in `src/record/payloads.rs`; frozen
 schema-name constants in `src/base/schema.rs`.
 
+**Evolution kinds (spec 0.3).** Three kinds record how autonomously
+produced software states are proposed, judged, and chosen:
+
+- `Candidate` (`bellbook.candidate.v1`): `{ source: SourceBinding, basis:
+  root | continuation | derivation, parent: Option<RecordId>, note:
+  Option<String> }`. `SourceBinding` is `{ git: { algo: sha1 | sha256,
+  tree, commit? }, manifest_hash: Option<Hash256>, binding: reported |
+  manifest }`: identity binds to the Git **tree** (two commits with the
+  same tree are the same software state); `commit` is provenance, never
+  identity. A `reported` binding proves the claim was recorded, not that
+  the OIDs match any contents; a `manifest` binding additionally commits
+  to the canonical manifest of the tree and is the authoritative identity
+  when both are present.
+- `Evaluation` (`bellbook.evaluation.v1`): `{ candidate: RecordId,
+  criterion: String (non-empty), procedure: Option<String>, outcome:
+  passed | failed | scored { value, scale } }`. Exactly one criterion per
+  record: retraction is record-granular, so per-metric evaluations let one
+  broken metric be retracted without erasing the others. `value` is
+  bounded to the I-JSON safe range and `scale` to 0 through 12, enforced
+  at decode (`InvalidPayload`).
+- `Selection` (`bellbook.selection.v1`): `{ objective: String (non-empty),
+  considered: [RecordId], outcome: selected { candidates: [RecordId] } |
+  none, rationale: Option<String> }`. Set-valued: one survivor for
+  best-of-N or a repair accept, several for population evolution.
+
+**Implementation status of the evolution rules:** the lineage, selection,
+approval-binding, and standing rules
+([`spec/v0.3-delta.md`](spec/v0.3-delta.md) D3 through D7) are not yet
+implemented. Until they land, records of these kinds are subject to the
+generic checks only (id, schema-kind map, author role, refs, canonical
+payload with the decode bounds above, evidence derivation); this paragraph
+is replaced as those rules land.
+
 ## 3. Identity and hashing
 
 - Canonical id form = the record with only `id` omitted, serialized as
@@ -152,8 +202,10 @@ which any mutation of history invalidates every dependent record.
 
 ### 3.1 Test vectors
 
-[`spec/test-vectors-v0.2.json`](spec/test-vectors-v0.2.json) contains one
-record of every kind from a fixed unsigned scripted log: the record's exact
+[`spec/test-vectors-v0.3.json`](spec/test-vectors-v0.3.json) contains one
+record of every kind from a fixed unsigned scripted log (the frozen v0.2
+vectors remain at
+[`spec/test-vectors-v0.2.json`](spec/test-vectors-v0.2.json)): the record's exact
 canonical id form (the JCS bytes fed to SHA-256, with `id` omitted and the
 absent signature field omitted) and the resulting id, plus the UTF-8 names the
 space/thread/scope hashes derive from. It also contains a deterministic signed
@@ -172,11 +224,11 @@ Records may carry a detached **Ed25519** (RFC 8032) signature in
 `author.signature`:
 
 - The signature covers the canonical, domain-separated **signing form**:
-  `{"domain":"bellbook.record-signature.v0.2","record":<record form>}`,
+  `{"domain":"bellbook.record-signature.v0.3","record":<record form>}`,
   where `<record form>` is the record with `id` and `author.signature`
   omitted and the whole envelope is serialized as JCS. The explicit protocol
   and spec-epoch domain prevents a signature made for another protocol or
-  Bellbook epoch from being replayed as a v0.2 record. After signing, the
+  Bellbook epoch from being replayed as a v0.3 record. After signing, the
   record id is computed from the canonical id form (§3), which includes the completed
   signature. This avoids a circular dependency while ensuring signature
   removal or substitution changes the record id and every dependent ref and
@@ -456,8 +508,17 @@ exhaustive mapping; adding a schema requires classifying it):
 - `bellbook.request.v1`, `bellbook.action.v1`, `bellbook.response.v1`,
   `bellbook.result.v1`, `bellbook.result.effect_confirmation.v1`,
   `bellbook.capability.v1`, `bellbook.approval.v1`, `bellbook.refusal.v1`,
-  `bellbook.usage.v1` → `Reported`
-- `bellbook.summary.v1`, `bellbook.plan.v1` → `Inferred`
+  `bellbook.usage.v1`, `bellbook.candidate.v1`, `bellbook.evaluation.v1`
+  → `Reported`
+- `bellbook.summary.v1`, `bellbook.plan.v1`, `bellbook.selection.v1`
+  → `Inferred`
+
+A candidate's binding and an evaluation's outcome are host-asserted; a
+selection is a judgment derived by reasoning. Under these bases, and
+because a Selection `Use`s its evaluations and `Require`s its winners
+while continuation edges are `Cause`, evaluations derive at most
+`Reported`, selections at most `Inferred`, and evidence does not compound
+across generations.
 
 No core schema has base `Assumed`; it is the floor, reserved for
 host-declared assumptions and for evidence degradation. Unknown schemas
@@ -700,7 +761,7 @@ HeadAttestation {
   head_hash:    Hash256  // SHA-256(concat(record ids)), whole log -
                          // the same computation as Checkpoint.log_hash
   record_count: u64      // records covered (subjects and verdicts)
-  spec_version: string   // e.g. "0.2"
+  spec_version: string   // e.g. "0.3"
   timestamp:    string   // canonical RFC 3339 UTC (`YYYY-MM-DDTHH:MM:SSZ`), host-supplied wall-clock time
 }
 ```
@@ -724,7 +785,7 @@ third party validates offline, without trusting the producer.
 
 ```
 Receipt {
-  spec_version: string          // e.g. "0.2"
+  spec_version: string          // e.g. "0.3"
   rules:        VerifierRules   // what the log was committed under
   records:      [Record]        // full sequence from genesis
 }
@@ -890,5 +951,10 @@ implements.
   by the spec version, which portable artifacts (receipts, head
   attestations) carry explicitly. Hosts embedding raw logs pin the crate
   version, whose CHANGELOG names the spec version it implements.
+- Spec 0.3 (in development) is the second compatibility epoch: fifteen
+  kinds, signing domain `bellbook.record-signature.v0.3`. A v0.3 validator
+  rejects a v0.2 receipt as `Invalid` with a clear unsupported-version
+  report; v0.2 artifacts remain valid under v0.2 rules, whose validator is
+  the pinned, published 0.2.x release.
 - Spec 0.2 is the first published compatibility epoch. The backward-validity
   guarantee starts with artifacts produced under this version.

@@ -36,7 +36,7 @@ use std::collections::BTreeSet;
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Receipt {
-    /// Spec version the records and rules conform to (e.g. `"0.2"`).
+    /// Spec version the records and rules conform to (e.g. `"0.3"`).
     pub spec_version: String,
     /// The verifier rules the log was committed under. Validation
     /// re-derives every verdict against these; auditors compare

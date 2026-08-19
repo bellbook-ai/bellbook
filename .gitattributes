@@ -1,0 +1,10 @@
+# Bellbook's spec artifacts are byte-exact canonical forms: their SHA-256
+# and JCS bytes are part of the contract, so they must be identical on every
+# platform. Pin LF so a Windows checkout does not rewrite them with CRLF
+# (which changed the frozen-artifact hashes and broke CI). Source files are
+# LF too, for the same determinism.
+*.json text eol=lf
+*.rs text eol=lf
+*.py text eol=lf
+*.md text eol=lf
+*.toml text eol=lf

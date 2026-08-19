@@ -22,6 +22,10 @@ pub(super) fn check_kind_specific(
         Kind::Capability => None,
         // Verdicts take the check_verdict_record path before this match.
         Kind::Verdict => None,
+        // Evolution kinds (spec 0.3): the lineage/selection rule battery
+        // (SPEC §4.1, delta D3) is not implemented yet; until it lands,
+        // only the generic checks above apply. Tracked in #24.
+        Kind::Candidate | Kind::Evaluation | Kind::Selection => None,
     }
 }
 

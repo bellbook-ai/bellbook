@@ -91,9 +91,10 @@ pub use base::hash::{
 };
 pub use base::schema::{
     default_space, schema_id, schema_name_for_id, SchemaId, DEFAULT_SPACE_NAME, SCHEMA_ACTION,
-    SCHEMA_APPROVAL, SCHEMA_CAPABILITY, SCHEMA_PLAN, SCHEMA_REFUSAL, SCHEMA_REQUEST,
-    SCHEMA_RESPONSE, SCHEMA_RESULT, SCHEMA_RESULT_EFFECT_CONFIRMATION, SCHEMA_RESULT_EXTERNAL,
-    SCHEMA_RETRACTION, SCHEMA_SUMMARY, SCHEMA_USAGE, SCHEMA_VERDICT, SPEC_VERSION,
+    SCHEMA_APPROVAL, SCHEMA_CANDIDATE, SCHEMA_CAPABILITY, SCHEMA_EVALUATION, SCHEMA_PLAN,
+    SCHEMA_REFUSAL, SCHEMA_REQUEST, SCHEMA_RESPONSE, SCHEMA_RESULT,
+    SCHEMA_RESULT_EFFECT_CONFIRMATION, SCHEMA_RESULT_EXTERNAL, SCHEMA_RETRACTION, SCHEMA_SELECTION,
+    SCHEMA_SUMMARY, SCHEMA_USAGE, SCHEMA_VERDICT, SPEC_VERSION,
 };
 pub use base::time::{Time, TimeSource};
 
@@ -104,8 +105,10 @@ pub use record::kind::{
     SummaryType, UsageOutcome, VerdictResult,
 };
 pub use record::payloads::{
-    ActionData, ApprovalData, Attachment, CapabilityData, FailurePolicy, PlanData, PlanStatus,
-    PlanTask, PlanTaskKind, RefusalData, RequestData, ResponseData, ResultData, RetractionData,
+    ActionData, ApprovalData, Attachment, BindingMode, CandidateBasis, CandidateData,
+    CapabilityData, EvaluationData, EvaluationOutcome, FailurePolicy, GitSource, PlanData,
+    PlanStatus, PlanTask, PlanTaskKind, RefusalData, RequestData, ResponseData, ResultData,
+    RetractionData, ScoredValue, SelectionData, SelectionOutcome, SourceAlgo, SourceBinding,
     SummaryData, TaskDoneWhen, TaskStatus, UsageData, UsageOutcomeCounts, VerdictData,
 };
 pub use record::record::{

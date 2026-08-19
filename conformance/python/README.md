@@ -19,7 +19,7 @@ with it but the published data files.
 
 ## What it reproduces
 
-Run against `spec/test-vectors-v0.2.json` and the entire `spec/conformance/v0.2/`
+Run against `spec/test-vectors-v0.3.json` and the entire `spec/conformance/v0.3/`
 corpus, all independently:
 
 - **RFC 8785 (JCS) canonicalization** - rebuilds each record's canonical form

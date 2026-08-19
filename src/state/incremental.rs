@@ -207,6 +207,13 @@ fn apply_accepted(state: &mut State, record: &Record) -> Result<(), serde_json::
         Kind::Verdict => {
             // Verdicts don't contribute to operational state
         }
+        Kind::Candidate | Kind::Evaluation | Kind::Selection => {
+            // Evolution kinds (spec 0.3) contribute no operational state in
+            // this fold; standing is a replay-derived report dimension, not
+            // state (SPEC §7.2, delta D6). Approval consumption on Selection
+            // accept lands with the approval-binding rules. Tracked in #25
+            // and #26.
+        }
     }
     Ok(())
 }
