@@ -304,7 +304,10 @@ mod tests {
         // Keys in JCS order; head hash serialized as a byte array.
         assert!(s.starts_with("{\"head_hash\":["));
         assert!(s.contains("\"record_count\":0"));
-        assert!(s.contains("\"spec_version\":\"0.2\""));
+        assert!(s.contains(&format!(
+            "\"spec_version\":\"{}\"",
+            crate::base::schema::SPEC_VERSION
+        )));
         assert!(s.ends_with("\"timestamp\":\"2026-08-07T12:00:00Z\"}"));
         assert_eq!(att.timestamp.as_str(), "2026-08-07T12:00:00Z");
         let round_trip: HeadAttestation = serde_json::from_str(&s).unwrap();

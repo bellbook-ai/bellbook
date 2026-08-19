@@ -22,7 +22,7 @@ pub type ScopeId = Hash256;
 /// Protocol and spec-version domain bound into every record signature.
 /// Keeping this in the signed bytes prevents a valid signature from another
 /// protocol or Bellbook spec epoch from being replayed as a v0.2 record.
-pub const RECORD_SIGNATURE_DOMAIN: &str = "bellbook.record-signature.v0.2";
+pub const RECORD_SIGNATURE_DOMAIN: &str = "bellbook.record-signature.v0.3";
 
 /// The one durable primitive: a typed, content-addressed entry in the
 /// append-only log. Immutable once committed - the id covers everything but

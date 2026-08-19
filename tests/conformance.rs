@@ -1,7 +1,7 @@
-//! Conformance corpus for Bellbook spec version 0.2.
+//! Conformance corpus for the current Bellbook spec epoch.
 //!
 //! This test builds a machine-readable corpus of verification cases and writes
-//! it to `spec/conformance/v0.2/` (regenerate with `UPDATE_CONFORMANCE=1`). Each
+//! it to `spec/conformance/v0.3/` (regenerate with `UPDATE_CONFORMANCE=1`). Each
 //! case pairs a portable input (records + rules, or a raw receipt document) with
 //! the expected verification outcome. The runner re-derives every outcome from
 //! the *stored* corpus, so an independent implementation (see issue #5) can
@@ -190,6 +190,89 @@ fn result_proposal(action_id: RecordId) -> Proposal {
             type_: RefType::Cause,
             target: action_id,
         }],
+    }
+}
+
+fn candidate_proposal(author_: Author) -> Proposal {
+    let data = encode(&CandidateData {
+        source: SourceBinding {
+            git: GitSource {
+                algo: SourceAlgo::Sha1,
+                tree: "4b825dc642cb6eb9a060e54bf8d69288fbee4904".into(),
+                commit: None,
+            },
+            manifest_hash: None,
+            binding: BindingMode::Reported,
+        },
+        basis: CandidateBasis::Root,
+        parent: None,
+        note: None,
+    })
+    .unwrap();
+    Proposal {
+        space: SPACE,
+        thread: THREAD,
+        author: author_,
+        kind: Kind::Candidate,
+        schema: schema_id(SCHEMA_CANDIDATE),
+        data,
+        refs: vec![],
+    }
+}
+
+fn evaluation_proposal(candidate_id: RecordId, author_: Author) -> Proposal {
+    let data = encode(&EvaluationData {
+        candidate: candidate_id,
+        criterion: "unit-tests".into(),
+        procedure: None,
+        outcome: EvaluationOutcome::Passed,
+    })
+    .unwrap();
+    Proposal {
+        space: SPACE,
+        thread: THREAD,
+        author: author_,
+        kind: Kind::Evaluation,
+        schema: schema_id(SCHEMA_EVALUATION),
+        data,
+        refs: vec![Ref {
+            type_: RefType::Use,
+            target: candidate_id,
+        }],
+    }
+}
+
+fn selection_proposal(
+    candidate_id: RecordId,
+    evaluation_id: RecordId,
+    author_: Author,
+) -> Proposal {
+    let data = encode(&SelectionData {
+        objective: "tests green".into(),
+        considered: vec![candidate_id],
+        outcome: SelectionOutcome::Selected {
+            candidates: vec![candidate_id],
+        },
+        rationale: None,
+    })
+    .unwrap();
+    Proposal {
+        space: SPACE,
+        thread: THREAD,
+        author: author_,
+        kind: Kind::Selection,
+        schema: schema_id(SCHEMA_SELECTION),
+        data,
+        refs: vec![
+            Ref {
+                type_: RefType::Use,
+                target: evaluation_id,
+            },
+            Ref {
+                type_: RefType::Require,
+                target: candidate_id,
+            },
+        ],
     }
 }
 
@@ -853,6 +936,82 @@ fn build_record_cases() -> Vec<RecordCase> {
         },
     ));
 
+    // Evolution kinds (spec 0.3): accepted baselines shaped to stay valid
+    // under the full lineage battery, plus one author-machinery rejection
+    // per kind, each exercising a different leg (unregistered author,
+    // registered-role mismatch, kind-to-author-type table).
+    cases.push(record_case(
+        "accept-candidate-root",
+        "A root Candidate with a reported Git binding.",
+        base_rules(),
+        |_w, _r, _s| cand(candidate_proposal(provider_author())),
+    ));
+    cases.push(record_case(
+        "accept-evaluation",
+        "An Evaluation that Uses its accepted candidate.",
+        base_rules(),
+        |w, r, s| {
+            let (cid, v) = w
+                .commit(candidate_proposal(provider_author()), r, s)
+                .unwrap();
+            assert_eq!(v.result, VerdictResult::Accept);
+            cand(evaluation_proposal(cid, executor_author()))
+        },
+    ));
+    cases.push(record_case(
+        "accept-selection",
+        "A Selection that Requires its winner and Uses its evaluation.",
+        base_rules(),
+        |w, r, s| {
+            let (cid, v) = w
+                .commit(candidate_proposal(provider_author()), r, s)
+                .unwrap();
+            assert_eq!(v.result, VerdictResult::Accept);
+            let (eid, v) = w
+                .commit(evaluation_proposal(cid, executor_author()), r, s)
+                .unwrap();
+            assert_eq!(v.result, VerdictResult::Accept);
+            cand(selection_proposal(cid, eid, provider_author()))
+        },
+    ));
+    cases.push(record_case(
+        "reject-author-role-candidate-unregistered",
+        "A Candidate whose author id is not registered in author_roles.",
+        base_rules(),
+        |_w, _r, _s| cand(candidate_proposal(author("stranger", AuthorType::User))),
+    ));
+    cases.push(record_case(
+        "reject-author-role-evaluation-mismatch",
+        "An Evaluation whose author is registered as System but declares Executor.",
+        base_rules(),
+        |w, r, s| {
+            let (cid, v) = w
+                .commit(candidate_proposal(provider_author()), r, s)
+                .unwrap();
+            assert_eq!(v.result, VerdictResult::Accept);
+            cand(evaluation_proposal(
+                cid,
+                author("host", AuthorType::Executor),
+            ))
+        },
+    ));
+    cases.push(record_case(
+        "reject-author-role-selection-executor",
+        "An Executor-authored Selection: decisions are not for the role that performs work.",
+        base_rules(),
+        |w, r, s| {
+            let (cid, v) = w
+                .commit(candidate_proposal(provider_author()), r, s)
+                .unwrap();
+            assert_eq!(v.result, VerdictResult::Accept);
+            let (eid, v) = w
+                .commit(evaluation_proposal(cid, executor_author()), r, s)
+                .unwrap();
+            assert_eq!(v.result, VerdictResult::Accept);
+            cand(selection_proposal(cid, eid, executor_author()))
+        },
+    ));
+
     cases
 }
 
@@ -1194,17 +1353,20 @@ fn build_malformed_cases() -> Vec<MalformedCase> {
         ));
     }
 
-    // Wrong spec version.
+    // Wrong spec version: a prior-epoch (v0.2) receipt must be rejected by
+    // this validator with a clear unsupported-version report; v0.2 receipts
+    // stay valid under v0.2 rules via the pinned published v0.2 validator
+    // (SPEC §14).
     {
         let mut v: serde_json::Value = serde_json::from_str(&clean_json).unwrap();
         v.as_object_mut()
             .unwrap()
-            .insert("spec_version".into(), serde_json::json!("0.3"));
+            .insert("spec_version".into(), serde_json::json!("0.2"));
         let input = serde_json::to_string(&v).unwrap();
         let report = validate(input.as_bytes());
         cases.push(malformed(
             "wrong-spec-version",
-            "A receipt declaring an unsupported spec version.",
+            "A receipt declaring another epoch's spec version (0.2); a conforming v0.3 validator rejects it with an unsupported-version report.",
             input,
             None,
             &report,
@@ -1339,7 +1501,7 @@ fn build_corpus() -> Corpus {
 }
 
 fn corpus_dir() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("spec/conformance/v0.2")
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("spec/conformance/v0.3")
 }
 
 fn write_json<T: serde::Serialize>(path: &std::path::Path, value: &T) {

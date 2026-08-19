@@ -355,6 +355,388 @@ pub struct PlanTask {
     pub on_failure: FailurePolicy,
 }
 
+// ─────────────────────── Evolution payloads (spec 0.3) ───────────────────────
+
+/// The I-JSON safe-integer magnitude bound (SPEC §3); JCS refuses to
+/// serialize integers beyond it, so typed decode refuses them symmetrically
+/// and both implementations reject at the same boundary.
+const MAX_SAFE_INTEGER_I64: i64 = 9_007_199_254_740_991;
+
+/// Largest allowed `Scored.scale` (SPEC §2, `bellbook.evaluation.v1`):
+/// value/10^scale with scale beyond 12 pushes unbounded fixed-point
+/// arithmetic onto consumers.
+const MAX_SCORE_SCALE: u8 = 12;
+
+/// Git object format of a candidate's source pointer.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SourceAlgo {
+    /// Classic Git object format; `tree`/`commit` are 40 hex characters.
+    Sha1,
+    /// SHA-256 object-format repositories; 64 hex characters.
+    Sha256,
+}
+
+/// How a candidate's source identity is bound (SPEC §2, Source bindings).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum BindingMode {
+    /// The host asserts the Git OIDs; the record proves the claim was
+    /// recorded, not that the OIDs match any contents.
+    Reported,
+    /// `manifest_hash` additionally commits to the canonical manifest of the
+    /// tree; a party holding the tree can recompute and compare. When both
+    /// are present the manifest is the authoritative identity commitment.
+    Manifest,
+}
+
+/// Git pointer inside a [`SourceBinding`]. Hex validity and length against
+/// `algo` are verifier rules (`SourceBindingInvalid`), not decode rules.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct GitSource {
+    /// Object format the OIDs below are expressed in.
+    pub algo: SourceAlgo,
+    /// Tree OID: the content identity (two commits with the same tree are
+    /// the same software state).
+    pub tree: String,
+    /// Commit OID: provenance only, never identity.
+    #[serde(default)]
+    pub commit: Option<String>,
+}
+
+/// A candidate's source identity (SPEC §2, Source bindings).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SourceBinding {
+    /// The Git pointer.
+    pub git: GitSource,
+    /// SHA-256 over the canonical manifest of the tree; present iff
+    /// `binding == Manifest` (`SourceBindingInvalid` otherwise).
+    #[serde(default)]
+    pub manifest_hash: Option<Hash256>,
+    /// Which binding mode this candidate carries.
+    pub binding: BindingMode,
+}
+
+/// How a candidate entered its line of development; fixes its ref
+/// obligations (`LineageInvalid` when violated) and how standing reaches it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CandidateBasis {
+    /// Starts a line (imported or initial state); at most one `Cause`,
+    /// targeting an accepted Request; no `parent`.
+    Root,
+    /// Continues from a selected state: exactly one `Cause` to an accepted
+    /// Selection whose outcome is `Selected`, with `parent` naming a member
+    /// of its selected set. Deliberately `Cause`, not `Require`: a
+    /// candidate's evidence reflects its own content and a tainted history
+    /// never blocks recording ongoing work; the anchor's health is carried
+    /// by standing.
+    Continuation,
+    /// Derived from sibling material (repair, mutation, binding upgrade):
+    /// one or more `Cause` refs, each an accepted Candidate or Evaluation;
+    /// no `parent`.
+    Derivation,
+}
+
+/// Payload for `Kind::Candidate` (`bellbook.candidate.v1`) - a source state
+/// proposed in a line of development.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CandidateData {
+    /// The source identity this candidate binds.
+    pub source: SourceBinding,
+    /// How the candidate entered the line.
+    pub basis: CandidateBasis,
+    /// The selected candidate this one continues from; present iff
+    /// `basis == Continuation` and resolving per the payload-id rules.
+    #[serde(default)]
+    pub parent: Option<RecordId>,
+    /// Free-form label; not interpreted by the verifier.
+    #[serde(default)]
+    pub note: Option<String>,
+}
+
+/// A bounded fixed-point score: `value / 10^scale`. Bounds are enforced at
+/// decode so both implementations reject at the same boundary
+/// (`InvalidPayload`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, try_from = "ScoredValueRaw")]
+pub struct ScoredValue {
+    /// Signed integer within the I-JSON safe range.
+    pub value: i64,
+    /// Decimal scale, 0 through 12.
+    pub scale: u8,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ScoredValueRaw {
+    value: i64,
+    scale: u8,
+}
+
+impl TryFrom<ScoredValueRaw> for ScoredValue {
+    type Error = String;
+    fn try_from(raw: ScoredValueRaw) -> Result<Self, Self::Error> {
+        if raw.value.abs() > MAX_SAFE_INTEGER_I64 {
+            return Err("score value outside the I-JSON safe range".into());
+        }
+        if raw.scale > MAX_SCORE_SCALE {
+            return Err("score scale above 12".into());
+        }
+        Ok(Self {
+            value: raw.value,
+            scale: raw.scale,
+        })
+    }
+}
+
+/// Outcome of an evaluation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum EvaluationOutcome {
+    /// The criterion held.
+    Passed,
+    /// The criterion did not hold.
+    Failed,
+    /// A fixed-point measurement against the criterion.
+    Scored(ScoredValue),
+}
+
+/// Payload for `Kind::Evaluation` (`bellbook.evaluation.v1`) - a judgment
+/// about exactly one candidate under exactly one criterion. One criterion
+/// per record is deliberate: retraction is record-granular, so per-metric
+/// evaluations let one broken metric be retracted without erasing the
+/// others.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, try_from = "EvaluationDataRaw")]
+pub struct EvaluationData {
+    /// The candidate judged; must resolve to an accepted Candidate and be
+    /// matched by a `Use` ref (`EvaluationInvalid` otherwise).
+    pub candidate: RecordId,
+    /// Non-empty criterion name (e.g. "unit-tests").
+    pub criterion: String,
+    /// How it was run (command, harness, version); not interpreted.
+    #[serde(default)]
+    pub procedure: Option<String>,
+    /// Passed, Failed, or a bounded fixed-point score.
+    pub outcome: EvaluationOutcome,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct EvaluationDataRaw {
+    candidate: RecordId,
+    criterion: String,
+    #[serde(default)]
+    procedure: Option<String>,
+    outcome: EvaluationOutcome,
+}
+
+impl TryFrom<EvaluationDataRaw> for EvaluationData {
+    type Error = String;
+    fn try_from(raw: EvaluationDataRaw) -> Result<Self, Self::Error> {
+        if raw.criterion.is_empty() {
+            return Err("evaluation criterion must be non-empty".into());
+        }
+        Ok(Self {
+            candidate: raw.candidate,
+            criterion: raw.criterion,
+            procedure: raw.procedure,
+            outcome: raw.outcome,
+        })
+    }
+}
+
+/// A selection's decision.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SelectionOutcome {
+    /// The named candidates survive; each must appear in `considered` and be
+    /// referenced by a `Require` ref (`SelectionInvalid` otherwise).
+    Selected {
+        /// The surviving candidates (one or more, unique).
+        candidates: Vec<RecordId>,
+    },
+    /// No candidate was acceptable under the objective (pruning,
+    /// backtracking); carries no candidate `Require`s.
+    None,
+}
+
+/// Payload for `Kind::Selection` (`bellbook.selection.v1`) - a set-valued
+/// decision over candidates under an objective. A `Replace` ref to a prior
+/// Selection makes this a reaffirmation (SPEC §7.1); the objective string is
+/// its compatibility key, so hosts treat objectives as identifiers, not
+/// prose.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, try_from = "SelectionDataRaw")]
+pub struct SelectionData {
+    /// Non-empty objective this decision was made under.
+    pub objective: String,
+    /// Candidates the decision was made over (one or more; uniqueness,
+    /// resolution, and the `max_considered` bound are verifier rules).
+    pub considered: Vec<RecordId>,
+    /// The decision.
+    pub outcome: SelectionOutcome,
+    /// Free-form justification; not interpreted by the verifier.
+    #[serde(default)]
+    pub rationale: Option<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct SelectionDataRaw {
+    objective: String,
+    considered: Vec<RecordId>,
+    outcome: SelectionOutcome,
+    #[serde(default)]
+    rationale: Option<String>,
+}
+
+impl TryFrom<SelectionDataRaw> for SelectionData {
+    type Error = String;
+    fn try_from(raw: SelectionDataRaw) -> Result<Self, Self::Error> {
+        if raw.objective.is_empty() {
+            return Err("selection objective must be non-empty".into());
+        }
+        Ok(Self {
+            objective: raw.objective,
+            considered: raw.considered,
+            outcome: raw.outcome,
+            rationale: raw.rationale,
+        })
+    }
+}
+
+#[cfg(test)]
+mod evolution_payload_tests {
+    use super::*;
+
+    fn scored(value: i64, scale: u8) -> String {
+        format!(
+            r#"{{"candidate":{:?},"criterion":"bench","outcome":{{"scored":{{"scale":{scale},"value":{value}}}}},"procedure":null}}"#,
+            vec![0u8; 32]
+        )
+    }
+
+    #[test]
+    fn evaluation_decode_bounds() {
+        // In-range scored outcome decodes.
+        let ok: Result<EvaluationData, _> = serde_json::from_str(&scored(930, 3));
+        assert!(ok.is_ok());
+        // Scale above 12 rejects at decode.
+        let bad_scale: Result<EvaluationData, _> = serde_json::from_str(&scored(930, 13));
+        assert!(bad_scale.is_err());
+        // Value beyond the I-JSON safe range rejects at decode.
+        let bad_value: Result<EvaluationData, _> =
+            serde_json::from_str(&scored(9_007_199_254_740_992, 0));
+        assert!(bad_value.is_err());
+        // The negative bound is symmetric.
+        let ok_neg: Result<EvaluationData, _> =
+            serde_json::from_str(&scored(-9_007_199_254_740_991, 0));
+        assert!(ok_neg.is_ok());
+        let bad_neg: Result<EvaluationData, _> =
+            serde_json::from_str(&scored(-9_007_199_254_740_992, 0));
+        assert!(bad_neg.is_err());
+    }
+
+    #[test]
+    fn evaluation_criterion_must_be_non_empty() {
+        let empty = format!(
+            r#"{{"candidate":{:?},"criterion":"","outcome":"passed","procedure":null}}"#,
+            vec![0u8; 32]
+        );
+        let r: Result<EvaluationData, _> = serde_json::from_str(&empty);
+        assert!(r.is_err());
+    }
+
+    #[test]
+    fn selection_objective_must_be_non_empty() {
+        let empty = format!(
+            r#"{{"considered":[{:?}],"objective":"","outcome":"none","rationale":null}}"#,
+            vec![1u8; 32]
+        );
+        let r: Result<SelectionData, _> = serde_json::from_str(&empty);
+        assert!(r.is_err());
+        let ok = format!(
+            r#"{{"considered":[{:?}],"objective":"latency","outcome":"none","rationale":null}}"#,
+            vec![1u8; 32]
+        );
+        let r: Result<SelectionData, _> = serde_json::from_str(&ok);
+        assert!(r.is_ok());
+    }
+
+    #[test]
+    fn unknown_fields_reject_across_evolution_payloads() {
+        let cand = r#"{"basis":"root","extra":1,"note":null,"parent":null,"source":{"binding":"reported","git":{"algo":"sha1","commit":null,"tree":"aa"},"manifest_hash":null}}"#.to_string();
+        let r: Result<CandidateData, _> = serde_json::from_str(&cand);
+        assert!(r.is_err(), "unknown field must reject");
+        let nested = r#"{"basis":"root","note":null,"parent":null,"source":{"binding":"reported","extra":true,"git":{"algo":"sha1","commit":null,"tree":"aa"},"manifest_hash":null}}"#;
+        let r: Result<CandidateData, _> = serde_json::from_str(nested);
+        assert!(r.is_err(), "unknown nested field must reject");
+    }
+
+    #[test]
+    fn selection_outcome_shapes() {
+        let sel = format!(
+            r#"{{"considered":[{:?}],"objective":"latency","outcome":{{"selected":{{"candidates":[{:?}]}}}},"rationale":"fastest"}}"#,
+            vec![1u8; 32],
+            vec![1u8; 32]
+        );
+        let r: Result<SelectionData, _> = serde_json::from_str(&sel);
+        assert!(r.is_ok());
+        // An unknown outcome variant rejects.
+        let bad = format!(
+            r#"{{"considered":[{:?}],"objective":"latency","outcome":"maybe","rationale":null}}"#,
+            vec![1u8; 32]
+        );
+        let r: Result<SelectionData, _> = serde_json::from_str(&bad);
+        assert!(r.is_err());
+    }
+
+    #[test]
+    fn candidate_basis_and_binding_variants() {
+        for (basis, binding, manifest) in [
+            ("root", "reported", "null"),
+            ("continuation", "reported", "null"),
+            (
+                "derivation",
+                "manifest",
+                &format!("{:?}", vec![2u8; 32])[..],
+            ),
+        ] {
+            let cand = format!(
+                r#"{{"basis":{basis:?},"note":null,"parent":null,"source":{{"binding":{binding:?},"git":{{"algo":"sha256","commit":null,"tree":"bb"}},"manifest_hash":{manifest}}}}}"#,
+            );
+            let r: Result<CandidateData, _> = serde_json::from_str(&cand);
+            assert!(r.is_ok(), "case {basis}/{binding} should decode: {r:?}");
+        }
+        let bad = r#"{"basis":"fork","note":null,"parent":null,"source":{"binding":"reported","git":{"algo":"sha1","commit":null,"tree":"aa"},"manifest_hash":null}}"#;
+        let r: Result<CandidateData, _> = serde_json::from_str(bad);
+        assert!(r.is_err(), "unknown basis variant must reject");
+    }
+
+    #[test]
+    fn evolution_payloads_round_trip_canonically() {
+        // Encode -> decode -> encode is byte-stable (the canonical-payload
+        // rule depends on it).
+        let data = SelectionData {
+            objective: "latency".into(),
+            considered: vec![[1u8; 32]],
+            outcome: SelectionOutcome::Selected {
+                candidates: vec![[1u8; 32]],
+            },
+            rationale: None,
+        };
+        let bytes = crate::record::record::encode(&data).unwrap();
+        let back: SelectionData = crate::record::record::decode(&bytes).unwrap();
+        assert_eq!(back, data);
+        assert_eq!(crate::record::record::encode(&back).unwrap(), bytes);
+    }
+}
+
 /// Payload for `Kind::Plan` (`bellbook.plan.v1`) - a task graph for a
 /// request: **advisory orchestration metadata, not compliance proof**.
 /// The verifier keeps plans internally consistent (acyclic, real task

@@ -56,7 +56,7 @@ embeds.
   RFC 8785 (JCS) canonical id form (only id excluded; a completed signature
   is included), so an
   independent implementation in any language computes identical ids
-  ([test vectors](spec/test-vectors-v0.2.json)). Records reference earlier
+  ([test vectors](spec/test-vectors-v0.3.json)). Records reference earlier
   records by that hash through typed refs (`Cause`, `Use`, `Require`,
   `Replace`), forming a DAG. Edit any byte of history and every id and ref
   that depends on it breaks.
@@ -92,7 +92,7 @@ embeds.
   (`Use`/`Require` refs), so evidence can never be inflated. Rules can
   set per-kind minimum-evidence thresholds.
 - **Ed25519 signatures.** Records can carry a detached signature over a
-  Bellbook-v0.2-domain-separated, id-free signing form; the completed signature
+  Bellbook-epoch-domain-separated, id-free signing form; the completed signature
   is then included in the final record id, so signatures and head attestations
   cannot be substituted without detection. Rules configure which kinds require
   one and which keys each actor may sign with; verification is strict and
@@ -179,6 +179,12 @@ it means "internally consistent", not "meets a shared security
 baseline".
 
 ## Status
+
+**This branch develops spec v0.3 (evolution semantics: Candidate,
+Evaluation, and Selection records with replay-derived lineage standing);
+the published release remains 0.2.0, implementing spec v0.2.** The v0.3
+design is in [`spec/v0.3-delta.md`](spec/v0.3-delta.md); progress is
+tracked in issue #19.
 
 **Bellbook 0.2 is an early release. Its implemented compatibility contract is
 defined by [SPEC.md](SPEC.md) and the committed v0.2 test vectors.**

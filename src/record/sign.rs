@@ -146,16 +146,25 @@ mod tests {
         });
         assert!(!signature_verifies(&record));
 
-        // A signature carrying another Bellbook epoch's domain also fails.
-        let mut future = current;
-        future["domain"] = serde_json::Value::String("bellbook.record-signature.v0.3".into());
-        let future_bytes = crate::base::canonical::canonical_json(&future).unwrap();
-        let future_sig = signer.signing_key.sign(&future_bytes);
-        record.author.signature = Some(Signature {
-            key_id: signer.public_key_hex(),
-            sig: future_sig.to_bytes().to_vec(),
-        });
-        assert!(!signature_verifies(&record));
+        // A signature carrying another Bellbook epoch's domain also fails:
+        // the previous epoch (v0.2) and a hypothetical future one (v0.4).
+        for other_domain in [
+            "bellbook.record-signature.v0.2",
+            "bellbook.record-signature.v0.4",
+        ] {
+            let mut other = current.clone();
+            other["domain"] = serde_json::Value::String(other_domain.into());
+            let other_bytes = crate::base::canonical::canonical_json(&other).unwrap();
+            let other_sig = signer.signing_key.sign(&other_bytes);
+            record.author.signature = Some(Signature {
+                key_id: signer.public_key_hex(),
+                sig: other_sig.to_bytes().to_vec(),
+            });
+            assert!(
+                !signature_verifies(&record),
+                "a {other_domain} signature must not verify as the current epoch"
+            );
+        }
     }
 
     #[test]

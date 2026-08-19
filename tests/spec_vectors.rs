@@ -1,8 +1,8 @@
-//! Golden test vectors for the v0.2 canonical form (SPEC §3.1).
+//! Golden test vectors for the current spec epoch's canonical form (SPEC §3.1).
 //!
 //! Builds a fixed, fully deterministic log containing at least one record of
 //! every kind, and asserts each kind's first record against
-//! `spec/test-vectors-v0.2.json`: canonical id form (the exact JCS bytes
+//! `spec/test-vectors-v0.3.json`: canonical id form (the exact JCS bytes
 //! fed to SHA-256) and the resulting id. A deterministic signed vector also
 //! fixes the signing form, key material, signature, final id form, and a
 //! key-substitution case. Third-party implementations can reproduce every
@@ -323,6 +323,88 @@ fn scripted_log(dir: &std::path::Path) -> Vec<Record> {
         &mut state,
     );
 
+    // Evolution kinds (spec 0.3): a root candidate, an evaluation of it,
+    // and a selection over it. Shaped to satisfy the full lineage battery
+    // (SPEC §4.1) so these vectors stay stable as the evolution rules land.
+    let candidate_id = commit(
+        proposal(
+            Kind::Candidate,
+            SCHEMA_CANDIDATE,
+            encode(&CandidateData {
+                source: SourceBinding {
+                    git: GitSource {
+                        algo: SourceAlgo::Sha1,
+                        tree: "4b825dc642cb6eb9a060e54bf8d69288fbee4904".into(),
+                        commit: None,
+                    },
+                    manifest_hash: None,
+                    binding: BindingMode::Reported,
+                },
+                basis: CandidateBasis::Root,
+                parent: None,
+                note: Some("initial state".into()),
+            })
+            .unwrap(),
+            vec![],
+            author("agent", AuthorType::Provider),
+        ),
+        &mut writer,
+        &mut state,
+    );
+
+    let evaluation_id = commit(
+        proposal(
+            Kind::Evaluation,
+            SCHEMA_EVALUATION,
+            encode(&EvaluationData {
+                candidate: candidate_id,
+                criterion: "unit-tests".into(),
+                procedure: Some("cargo test".into()),
+                outcome: EvaluationOutcome::Scored(ScoredValue {
+                    value: 930,
+                    scale: 3,
+                }),
+            })
+            .unwrap(),
+            vec![Ref {
+                type_: RefType::Use,
+                target: candidate_id,
+            }],
+            author("tool-executor", AuthorType::Executor),
+        ),
+        &mut writer,
+        &mut state,
+    );
+
+    commit(
+        proposal(
+            Kind::Selection,
+            SCHEMA_SELECTION,
+            encode(&SelectionData {
+                objective: "all tests green".into(),
+                considered: vec![candidate_id],
+                outcome: SelectionOutcome::Selected {
+                    candidates: vec![candidate_id],
+                },
+                rationale: Some("only candidate; criterion met".into()),
+            })
+            .unwrap(),
+            vec![
+                Ref {
+                    type_: RefType::Use,
+                    target: evaluation_id,
+                },
+                Ref {
+                    type_: RefType::Require,
+                    target: candidate_id,
+                },
+            ],
+            author("agent", AuthorType::Provider),
+        ),
+        &mut writer,
+        &mut state,
+    );
+
     // The scripted log must itself replay cleanly.
     let report = verify_log(writer.records(), &rules, None);
     assert_eq!(report.result, VerdictResult::Accept);
@@ -436,7 +518,7 @@ fn build_vector_file(records: &[Record]) -> VectorFile {
     // Keep log order (not Kind order) for readability.
     vectors.sort_by_key(|v| v.time);
     VectorFile {
-        spec_version: "0.2".into(),
+        spec_version: SPEC_VERSION.into(),
         description: "One unsigned record of each kind from a fixed scripted log, plus a deterministic signed Request and valid alternate-key substitution. id = SHA-256(canonical id form); the domain-separated signing form wraps the record with id and author.signature omitted, while a signed canonical id form omits only id. space/thread/scope ids are SHA-256 of the given UTF-8 names."
             .into(),
         space_name: SPACE_NAME.into(),
@@ -452,10 +534,10 @@ fn build_vector_file(records: &[Record]) -> VectorFile {
 fn spec_vectors_match() {
     let dir = tempfile::tempdir().unwrap();
     let records = scripted_log(dir.path());
-    assert_eq!(records.len(), 24); // 12 subjects + 12 verdicts
+    assert_eq!(records.len(), 30); // 15 subjects + 15 verdicts
 
     let built = build_vector_file(&records);
-    assert_eq!(built.vectors.len(), 12, "one vector per kind");
+    assert_eq!(built.vectors.len(), 15, "one vector per kind");
 
     // Every unsigned and signed vector must round-trip to its published id.
     for v in &built.vectors {
@@ -474,7 +556,7 @@ fn spec_vectors_match() {
     );
     assert_ne!(built.signed_vector.id, built.signed_vector.substitute_id);
 
-    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("spec/test-vectors-v0.2.json");
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("spec/test-vectors-v0.3.json");
     if std::env::var("UPDATE_VECTORS").is_ok() {
         let mut out = serde_json::to_string_pretty(&built).unwrap();
         out.push('\n');
@@ -483,12 +565,12 @@ fn spec_vectors_match() {
     }
 
     let stored: VectorFile = serde_json::from_str(&std::fs::read_to_string(&path).expect(
-        "spec/test-vectors-v0.2.json missing - run UPDATE_VECTORS=1 cargo test --test spec_vectors",
+        "spec/test-vectors-v0.3.json missing - run UPDATE_VECTORS=1 cargo test --test spec_vectors",
     ))
     .unwrap();
     assert_eq!(
         built, stored,
-        "canonical form drifted from spec/test-vectors-v0.2.json; if the \
+        "canonical form drifted from spec/test-vectors-v0.3.json; if the \
          change is an intentional format change, regenerate with \
          UPDATE_VECTORS=1 and document it in CHANGELOG/SPEC"
     );
