@@ -62,6 +62,7 @@ fn reject(reason: ReasonCode, checked_records: u64, records: &[Record]) -> LogVe
 }
 
 mod activity;
+mod evolution;
 mod lifecycle;
 mod plans;
 mod record_checks;
@@ -72,6 +73,7 @@ pub use record_checks::verify_record;
 pub use replay::verify_log;
 
 use activity::check_kind_specific;
+use evolution::*;
 use lifecycle::*;
 use plans::*;
 use record_checks::{check_record, decodes_canonically};

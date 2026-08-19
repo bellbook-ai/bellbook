@@ -79,7 +79,7 @@ Structural failures surface in `Report.problem`, not `Report.reason`.
 
 ## Reason-code coverage
 
-The corpus triggers 17 of the 20 `ReasonCode` variants as verdicts. The other
+The corpus triggers 23 of the 26 `ReasonCode` variants as verdicts. The other
 three are excluded for two different reasons:
 
 - **`Refused`** is never emitted as a verdict at all - it is a reason a
@@ -92,6 +92,6 @@ three are excluded for two different reasons:
   needs a reference into a second space, which a single-space log (what a
   receipt is) cannot carry. The crate's own integration suite exercises both.
 
-The `conformance` test asserts that the 17 wire-expressible verdict reasons each
+The `conformance` test asserts that the 23 wire-expressible verdict reasons each
 have at least one triggering case, so a future reason code added to the verifier
 without a corpus case fails the build.

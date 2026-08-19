@@ -102,7 +102,9 @@ REASON_CODE = frozenset({
     "CapabilityDenied", "ApprovalMissing", "ApprovalExpired", "ActionClosed",
     "ReplacementInvalid", "ExternalReceiptRequired", "EvidenceBelowThreshold",
     "Refused", "InvalidPayload", "InvalidCheckpoint", "AuthorRoleInvalid",
-    "AuthorityRefMissing",
+    "AuthorityRefMissing", "SourceBindingInvalid", "LineageInvalid",
+    "PayloadRefUnresolved", "EvaluationInvalid", "SelectionInvalid",
+    "ReaffirmationInvalid",
 })
 PLAN_STATUS = frozenset({"running", "completed", "abandoned"})
 TASK_STATUS = frozenset({"pending", "running", "done", "failed", "skipped"})
@@ -415,6 +417,13 @@ class Rules:
         self.admin_retraction_actors = set(wire["admin_retraction_actors"])
         self.allowed_summary_types = set(wire["allowed_summary_types"])
         self.evidence_thresholds = dict(wire["evidence_thresholds"])
+        # Evolution knobs (spec 0.3). Absent keys take the reference defaults
+        # so a rules object serialized before these fields existed still
+        # parses; a serialized v0.3 rules object always carries them.
+        self.min_binding = wire.get("min_binding", "reported")
+        self.selection_requires_evaluation = wire.get("selection_requires_evaluation", True)
+        self.reaffirmation_actors = set(wire.get("reaffirmation_actors", []))
+        self.max_considered = wire.get("max_considered", 4096)
 
 
 # ---------------------------------------------------------------------------
@@ -824,7 +833,7 @@ def check_record(record: dict, prior: Prior, rules: Rules, state: State) -> Opti
     if len(replace_refs) > 1:
         return "InvalidPayload"
     if replace_refs:
-        if record["kind"] not in ("Summary", "Capability", "Approval", "Plan"):
+        if record["kind"] not in ("Summary", "Capability", "Approval", "Plan", "Selection"):
             return "ReplacementInvalid"
         target = prior.find(h(replace_refs[0]["target"]))
         if target is None:
@@ -912,6 +921,9 @@ def _check_kind_specific(record: dict, prior: Prior, rules: Rules, state: State)
         "Approval": _check_approval,
         "Plan": _check_plan,
         "Retraction": _check_retraction,
+        "Candidate": _check_candidate,
+        "Evaluation": _check_evaluation,
+        "Selection": _check_selection,
     }
     fn = dispatch.get(record["kind"])
     return fn(record, prior, rules, state) if fn else None
@@ -1269,6 +1281,155 @@ def _check_retraction(record, prior, rules, state):
         and record["author"]["id"] not in rules.admin_retraction_actors
     ):
         return "AuthorRoleInvalid"
+    return None
+
+
+# --- Evolution-kind checks (src/verify/verifier/evolution.rs, spec 0.3). ------
+
+_OID_HEX_LEN = {"sha1": 40, "sha256": 64}
+
+
+def _is_lower_hex(s: Any, length: int) -> bool:
+    return isinstance(s, str) and len(s) == length and all(c in "0123456789abcdef" for c in s)
+
+
+def _source_binding_well_formed(sb: dict) -> bool:
+    length = _OID_HEX_LEN[sb["git"]["algo"]]
+    if not _is_lower_hex(sb["git"]["tree"], length):
+        return False
+    commit = sb["git"].get("commit")
+    if commit is not None and not _is_lower_hex(commit, length):
+        return False
+    return (sb.get("manifest_hash") is not None) == (sb["binding"] == "manifest")
+
+
+def _resolve_candidate(target_id, record, prior, state) -> Optional[dict]:
+    """A lineage payload id must resolve, in the same space, to a prior
+    accepted Candidate. Returns the record or None (PayloadRefUnresolved)."""
+    t = prior.find(h(target_id))
+    if t is None:
+        return None
+    if h(t["space"]) != h(record["space"]) or t["kind"] != "Candidate":
+        return None
+    if h(t["id"]) not in state.accepted:
+        return None
+    return t
+
+
+def _check_candidate(record, prior, rules, state):
+    data = payload(record)
+    if not _source_binding_well_formed(data["source"]):
+        return "SourceBindingInvalid"
+
+    parent = data.get("parent")
+    if parent is not None and _resolve_candidate(parent, record, prior, state) is None:
+        return "PayloadRefUnresolved"
+
+    causes = []
+    for r in refs_of(record, "Cause"):
+        t = prior.find(h(r["target"]))
+        if t is None:
+            return "RefUnresolved"
+        causes.append(t)
+
+    basis = data["basis"]
+    if basis == "root":
+        if parent is not None or len(causes) > 1:
+            return "LineageInvalid"
+        if causes:
+            c = causes[0]
+            if c["kind"] != "Request" or h(c["id"]) not in state.accepted:
+                return "LineageInvalid"
+    elif basis == "continuation":
+        if len(causes) != 1:
+            return "LineageInvalid"
+        anchor = causes[0]
+        if anchor["kind"] != "Selection" or h(anchor["id"]) not in state.accepted:
+            return "LineageInvalid"
+        if parent is None:
+            return "LineageInvalid"
+        anchor_data = payload(anchor)
+        outcome = anchor_data["outcome"]
+        if not isinstance(outcome, dict) or "selected" not in outcome:
+            return "LineageInvalid"
+        selected = [h(c) for c in outcome["selected"]["candidates"]]
+        if h(parent) not in selected:
+            return "LineageInvalid"
+    elif basis == "derivation":
+        if parent is not None or not causes:
+            return "LineageInvalid"
+        for c in causes:
+            if h(c["id"]) not in state.accepted:
+                return "LineageInvalid"
+            if c["kind"] not in ("Candidate", "Evaluation"):
+                return "LineageInvalid"
+    return None
+
+
+def _check_evaluation(record, prior, rules, state):
+    data = payload(record)
+    if _resolve_candidate(data["candidate"], record, prior, state) is None:
+        return "PayloadRefUnresolved"
+    cand_hex = h(data["candidate"])
+    if not any(r["type"] == "Use" and h(r["target"]) == cand_hex for r in record["refs"]):
+        return "EvaluationInvalid"
+    return None
+
+
+def _check_selection(record, prior, rules, state):
+    data = payload(record)
+    considered = [h(c) for c in data["considered"]]
+    if not considered or len(considered) > rules.max_considered:
+        return "SelectionInvalid"
+    considered_set = set(considered)
+    if len(considered_set) != len(considered):
+        return "SelectionInvalid"
+    for cid in data["considered"]:
+        if _resolve_candidate(cid, record, prior, state) is None:
+            return "PayloadRefUnresolved"
+
+    # Only accepted Evaluations count and are constraint-checked. A Use of a
+    # rejected Evaluation-kind record is legal (it degrades the Selection's
+    # evidence, like any Use of bad content) but is not evidence and its
+    # bytes need not decode as EvaluationData; gating on acceptance keeps this
+    # loop total and byte-for-decision identical to the Rust reference.
+    used_evaluations = 0
+    for r in refs_of(record, "Use"):
+        t = prior.find(h(r["target"]))
+        if t is not None and t["kind"] == "Evaluation" and h(t["id"]) in state.accepted:
+            used_evaluations += 1
+            if h(payload(t)["candidate"]) not in considered_set:
+                return "SelectionInvalid"
+
+    require_targets = {h(r["target"]) for r in refs_of(record, "Require")}
+
+    outcome = data["outcome"]
+    if isinstance(outcome, dict) and "selected" in outcome:
+        winners = [h(c) for c in outcome["selected"]["candidates"]]
+        selected = set(winners)
+        if not selected or len(selected) != len(winners) or not selected <= considered_set:
+            return "SelectionInvalid"
+        if require_targets != selected:
+            return "SelectionInvalid"
+        if rules.min_binding == "manifest":
+            for c in selected:
+                t = prior.find(c)
+                if t is None or payload(t)["source"]["binding"] != "manifest":
+                    return "SelectionInvalid"
+        if rules.selection_requires_evaluation and used_evaluations == 0:
+            return "SelectionInvalid"
+    else:
+        # None decision: no candidate (or authority) Require refs.
+        if require_targets:
+            return "SelectionInvalid"
+
+    replace_refs = refs_of(record, "Replace")
+    if replace_refs:
+        target = prior.find(h(replace_refs[0]["target"]))
+        if target is not None and payload(target)["objective"] != data["objective"]:
+            return "ReaffirmationInvalid"
+        if rules.reaffirmation_actors and record["author"]["id"] not in rules.reaffirmation_actors:
+            return "ReaffirmationInvalid"
     return None
 
 

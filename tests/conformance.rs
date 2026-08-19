@@ -276,6 +276,181 @@ fn selection_proposal(
     }
 }
 
+// --- Flexible evolution builders (for the lineage/selection rule battery). ---
+
+fn default_source() -> SourceBinding {
+    SourceBinding {
+        git: GitSource {
+            algo: SourceAlgo::Sha1,
+            // The canonical empty-tree SHA-1 OID (40 lowercase hex).
+            tree: "4b825dc642cb6eb9a060e54bf8d69288fbee4904".into(),
+            commit: None,
+        },
+        manifest_hash: None,
+        binding: BindingMode::Reported,
+    }
+}
+
+fn candidate_custom(
+    source: SourceBinding,
+    basis: CandidateBasis,
+    parent: Option<RecordId>,
+    note: Option<&str>,
+    author_: Author,
+    refs: Vec<Ref>,
+) -> Proposal {
+    let data = encode(&CandidateData {
+        source,
+        basis,
+        parent,
+        note: note.map(|s| s.to_string()),
+    })
+    .unwrap();
+    Proposal {
+        space: SPACE,
+        thread: THREAD,
+        author: author_,
+        kind: Kind::Candidate,
+        schema: schema_id(SCHEMA_CANDIDATE),
+        data,
+        refs,
+    }
+}
+
+/// A distinct root candidate (the `note` gives it a unique id).
+fn candidate_root_note(note: &str, author_: Author) -> Proposal {
+    candidate_custom(
+        default_source(),
+        CandidateBasis::Root,
+        None,
+        Some(note),
+        author_,
+        vec![],
+    )
+}
+
+fn evaluation_custom(candidate_id: RecordId, author_: Author, refs: Vec<Ref>) -> Proposal {
+    let data = encode(&EvaluationData {
+        candidate: candidate_id,
+        criterion: "unit-tests".into(),
+        procedure: None,
+        outcome: EvaluationOutcome::Passed,
+    })
+    .unwrap();
+    Proposal {
+        space: SPACE,
+        thread: THREAD,
+        author: author_,
+        kind: Kind::Evaluation,
+        schema: schema_id(SCHEMA_EVALUATION),
+        data,
+        refs,
+    }
+}
+
+fn selection_custom(
+    objective: &str,
+    considered: Vec<RecordId>,
+    outcome: SelectionOutcome,
+    author_: Author,
+    refs: Vec<Ref>,
+) -> Proposal {
+    let data = encode(&SelectionData {
+        objective: objective.into(),
+        considered,
+        outcome,
+        rationale: None,
+    })
+    .unwrap();
+    Proposal {
+        space: SPACE,
+        thread: THREAD,
+        author: author_,
+        kind: Kind::Selection,
+        schema: schema_id(SCHEMA_SELECTION),
+        data,
+        refs,
+    }
+}
+
+fn use_ref(target: RecordId) -> Ref {
+    Ref {
+        type_: RefType::Use,
+        target,
+    }
+}
+fn require_ref(target: RecordId) -> Ref {
+    Ref {
+        type_: RefType::Require,
+        target,
+    }
+}
+fn cause_ref(target: RecordId) -> Ref {
+    Ref {
+        type_: RefType::Cause,
+        target,
+    }
+}
+fn replace_ref(target: RecordId) -> Ref {
+    Ref {
+        type_: RefType::Replace,
+        target,
+    }
+}
+
+/// Rule variants for the selection knobs.
+fn rules_min_binding_manifest() -> VerifierRules {
+    let mut r = base_rules();
+    r.min_binding = BindingMode::Manifest;
+    r
+}
+fn rules_max_considered(n: u32) -> VerifierRules {
+    let mut r = base_rules();
+    r.max_considered = n;
+    r
+}
+fn rules_reaffirmation_actors(actors: &[&str]) -> VerifierRules {
+    let mut r = base_rules();
+    r.reaffirmation_actors = actors.iter().map(|s| s.to_string()).collect();
+    r
+}
+
+/// Commit a clean best-of-one lineage: a root candidate, an evaluation of
+/// it, and a Selection that selects it. Returns (candidate, evaluation,
+/// selection) ids for building continuation/reaffirmation cases on top.
+fn setup_selected_line(
+    w: &mut LogWriter,
+    r: &VerifierRules,
+    s: &mut State,
+    objective: &str,
+) -> (RecordId, RecordId, RecordId) {
+    let (cid, v) = w
+        .commit(candidate_proposal(provider_author()), r, s)
+        .unwrap();
+    assert_eq!(v.result, VerdictResult::Accept);
+    let (eid, v) = w
+        .commit(evaluation_proposal(cid, executor_author()), r, s)
+        .unwrap();
+    assert_eq!(v.result, VerdictResult::Accept);
+    let (sid, v) = w
+        .commit(
+            selection_custom(
+                objective,
+                vec![cid],
+                SelectionOutcome::Selected {
+                    candidates: vec![cid],
+                },
+                provider_author(),
+                vec![use_ref(eid), require_ref(cid)],
+            ),
+            r,
+            s,
+        )
+        .unwrap();
+    assert_eq!(v.result, VerdictResult::Accept);
+    (cid, eid, sid)
+}
+
 fn approval_class_proposal(class: &str, actor: Option<&str>, expiry: Option<Time>) -> Proposal {
     let data = encode(&ApprovalData {
         target_action: None,
@@ -1012,6 +1187,432 @@ fn build_record_cases() -> Vec<RecordCase> {
         },
     ));
 
+    // --- Evolution lineage/selection battery (spec 0.3, delta D3/D4). ---
+
+    // Accepts covering continuation, derivation, none, and reaffirmation.
+    cases.push(record_case(
+        "accept-candidate-continuation",
+        "A Continuation candidate anchored on a Selection, parent in its selected set.",
+        base_rules(),
+        |w, r, s| {
+            let (cid, _eid, sid) = setup_selected_line(w, r, s, "tests green");
+            cand(candidate_custom(
+                default_source(),
+                CandidateBasis::Continuation,
+                Some(cid),
+                Some("next"),
+                provider_author(),
+                vec![cause_ref(sid)],
+            ))
+        },
+    ));
+    cases.push(record_case(
+        "accept-candidate-derivation",
+        "A Derivation candidate whose Cause targets a prior accepted candidate.",
+        base_rules(),
+        |w, r, s| {
+            let (cid, v) = w
+                .commit(candidate_proposal(provider_author()), r, s)
+                .unwrap();
+            assert_eq!(v.result, VerdictResult::Accept);
+            cand(candidate_custom(
+                default_source(),
+                CandidateBasis::Derivation,
+                None,
+                Some("repair"),
+                provider_author(),
+                vec![cause_ref(cid)],
+            ))
+        },
+    ));
+    cases.push(record_case(
+        "accept-selection-none",
+        "A Selection that considers a candidate but selects none (a prune).",
+        base_rules(),
+        |w, r, s| {
+            let (cid, v) = w
+                .commit(candidate_proposal(provider_author()), r, s)
+                .unwrap();
+            assert_eq!(v.result, VerdictResult::Accept);
+            cand(selection_custom(
+                "latency",
+                vec![cid],
+                SelectionOutcome::None,
+                provider_author(),
+                vec![],
+            ))
+        },
+    ));
+    cases.push(record_case(
+        "accept-selection-reaffirmation",
+        "A Selection that Replaces a prior Selection under the same objective.",
+        base_rules(),
+        |w, r, s| {
+            let (cid, eid, sid) = setup_selected_line(w, r, s, "tests green");
+            cand(selection_custom(
+                "tests green",
+                vec![cid],
+                SelectionOutcome::Selected {
+                    candidates: vec![cid],
+                },
+                provider_author(),
+                vec![use_ref(eid), require_ref(cid), replace_ref(sid)],
+            ))
+        },
+    ));
+
+    // SourceBindingInvalid: manifest hash present without the manifest mode.
+    cases.push(record_case(
+        "reject-candidate-source-binding-manifest-mismatch",
+        "A Candidate whose manifest_hash is present while binding is reported.",
+        base_rules(),
+        |_w, _r, _s| {
+            let mut src = default_source();
+            src.manifest_hash = Some([9u8; 32]); // present, but binding stays reported
+            cand(candidate_custom(
+                src,
+                CandidateBasis::Root,
+                None,
+                Some("bad-binding"),
+                provider_author(),
+                vec![],
+            ))
+        },
+    ));
+    // SourceBindingInvalid: tree OID length does not match its algo.
+    cases.push(record_case(
+        "reject-candidate-source-binding-tree-length",
+        "A Candidate declaring sha256 with a 40-hex (sha1-length) tree OID.",
+        base_rules(),
+        |_w, _r, _s| {
+            let src = SourceBinding {
+                git: GitSource {
+                    algo: SourceAlgo::Sha256,
+                    tree: "4b825dc642cb6eb9a060e54bf8d69288fbee4904".into(), // 40 hex
+                    commit: None,
+                },
+                manifest_hash: None,
+                binding: BindingMode::Reported,
+            };
+            cand(candidate_custom(
+                src,
+                CandidateBasis::Root,
+                None,
+                Some("bad-len"),
+                provider_author(),
+                vec![],
+            ))
+        },
+    ));
+    // LineageInvalid: a Root candidate that carries a parent.
+    cases.push(record_case(
+        "reject-candidate-root-with-parent",
+        "A Root candidate naming a parent, which Root forbids.",
+        base_rules(),
+        |w, r, s| {
+            let (cid, v) = w
+                .commit(candidate_proposal(provider_author()), r, s)
+                .unwrap();
+            assert_eq!(v.result, VerdictResult::Accept);
+            cand(candidate_custom(
+                default_source(),
+                CandidateBasis::Root,
+                Some(cid),
+                Some("root-parent"),
+                provider_author(),
+                vec![],
+            ))
+        },
+    ));
+    // LineageInvalid: a Continuation whose parent is not in the selected set.
+    cases.push(record_case(
+        "reject-candidate-continuation-parent-not-selected",
+        "A Continuation whose parent resolves but is not in its anchor's selected set.",
+        base_rules(),
+        |w, r, s| {
+            let (_cid, _eid, sid) = setup_selected_line(w, r, s, "tests green");
+            // A second accepted candidate, never selected by the anchor.
+            let (other, v) = w
+                .commit(candidate_root_note("other", provider_author()), r, s)
+                .unwrap();
+            assert_eq!(v.result, VerdictResult::Accept);
+            cand(candidate_custom(
+                default_source(),
+                CandidateBasis::Continuation,
+                Some(other),
+                Some("wrong-parent"),
+                provider_author(),
+                vec![cause_ref(sid)],
+            ))
+        },
+    ));
+    // LineageInvalid: a Derivation whose Cause targets a Selection.
+    cases.push(record_case(
+        "reject-candidate-derivation-selection-cause",
+        "A Derivation whose Cause targets a Selection, which derivation forbids.",
+        base_rules(),
+        |w, r, s| {
+            let (_cid, _eid, sid) = setup_selected_line(w, r, s, "tests green");
+            cand(candidate_custom(
+                default_source(),
+                CandidateBasis::Derivation,
+                None,
+                Some("bad-derivation"),
+                provider_author(),
+                vec![cause_ref(sid)],
+            ))
+        },
+    ));
+    // PayloadRefUnresolved: an Evaluation whose candidate is not a Candidate.
+    cases.push(record_case(
+        "reject-evaluation-payload-ref-wrong-kind",
+        "An Evaluation whose candidate id resolves to a Request, not a Candidate.",
+        base_rules(),
+        |w, r, s| {
+            let (rid, v) = w.commit(request_proposal(), r, s).unwrap();
+            assert_eq!(v.result, VerdictResult::Accept);
+            cand(evaluation_custom(
+                rid,
+                executor_author(),
+                vec![use_ref(rid)],
+            ))
+        },
+    ));
+    // EvaluationInvalid: an Evaluation missing the Use ref to its candidate.
+    cases.push(record_case(
+        "reject-evaluation-missing-use",
+        "An Evaluation that resolves its candidate but does not Use it.",
+        base_rules(),
+        |w, r, s| {
+            let (cid, v) = w
+                .commit(candidate_proposal(provider_author()), r, s)
+                .unwrap();
+            assert_eq!(v.result, VerdictResult::Accept);
+            cand(evaluation_custom(cid, executor_author(), vec![]))
+        },
+    ));
+    // SelectionInvalid: an empty considered list.
+    cases.push(record_case(
+        "reject-selection-considered-empty",
+        "A Selection with an empty considered list.",
+        base_rules(),
+        |_w, _r, _s| {
+            cand(selection_custom(
+                "latency",
+                vec![],
+                SelectionOutcome::None,
+                provider_author(),
+                vec![],
+            ))
+        },
+    ));
+    // SelectionInvalid: a winner not named by a Require ref.
+    cases.push(record_case(
+        "reject-selection-winner-not-required",
+        "A Selected winner that is not named by a Require ref.",
+        base_rules(),
+        |w, r, s| {
+            let (cid, v) = w
+                .commit(candidate_proposal(provider_author()), r, s)
+                .unwrap();
+            assert_eq!(v.result, VerdictResult::Accept);
+            let (eid, v) = w
+                .commit(evaluation_proposal(cid, executor_author()), r, s)
+                .unwrap();
+            assert_eq!(v.result, VerdictResult::Accept);
+            cand(selection_custom(
+                "latency",
+                vec![cid],
+                SelectionOutcome::Selected {
+                    candidates: vec![cid],
+                },
+                provider_author(),
+                vec![use_ref(eid)], // no Require winner
+            ))
+        },
+    ));
+    // SelectionInvalid: a None decision carrying a candidate Require ref.
+    cases.push(record_case(
+        "reject-selection-none-with-require",
+        "A None Selection that still Requires a candidate.",
+        base_rules(),
+        |w, r, s| {
+            let (cid, v) = w
+                .commit(candidate_proposal(provider_author()), r, s)
+                .unwrap();
+            assert_eq!(v.result, VerdictResult::Accept);
+            cand(selection_custom(
+                "latency",
+                vec![cid],
+                SelectionOutcome::None,
+                provider_author(),
+                vec![require_ref(cid)],
+            ))
+        },
+    ));
+    // SelectionInvalid: a Selected decision with no Used evaluation.
+    cases.push(record_case(
+        "reject-selection-requires-evaluation",
+        "A Selected Selection that Uses no Evaluation (default requires one).",
+        base_rules(),
+        |w, r, s| {
+            let (cid, v) = w
+                .commit(candidate_proposal(provider_author()), r, s)
+                .unwrap();
+            assert_eq!(v.result, VerdictResult::Accept);
+            cand(selection_custom(
+                "latency",
+                vec![cid],
+                SelectionOutcome::Selected {
+                    candidates: vec![cid],
+                },
+                provider_author(),
+                vec![require_ref(cid)], // no Use of any evaluation
+            ))
+        },
+    ));
+    // SelectionInvalid: a Used evaluation whose candidate is not considered.
+    cases.push(record_case(
+        "reject-selection-used-eval-not-considered",
+        "A Selection Using an Evaluation whose candidate is absent from considered.",
+        base_rules(),
+        |w, r, s| {
+            let (cid, v) = w
+                .commit(candidate_proposal(provider_author()), r, s)
+                .unwrap();
+            assert_eq!(v.result, VerdictResult::Accept);
+            let (other, v) = w
+                .commit(candidate_root_note("other", provider_author()), r, s)
+                .unwrap();
+            assert_eq!(v.result, VerdictResult::Accept);
+            let (eid_other, v) = w
+                .commit(evaluation_proposal(other, executor_author()), r, s)
+                .unwrap();
+            assert_eq!(v.result, VerdictResult::Accept);
+            cand(selection_custom(
+                "latency",
+                vec![cid],
+                SelectionOutcome::Selected {
+                    candidates: vec![cid],
+                },
+                provider_author(),
+                vec![use_ref(eid_other), require_ref(cid)],
+            ))
+        },
+    ));
+    // SelectionInvalid: a Used but *rejected* Evaluation does not count as
+    // evidence (and its payload is never decoded during the selection check).
+    cases.push(record_case(
+        "reject-selection-rejected-eval-does-not-count",
+        "A Selection whose only Used Evaluation was itself rejected.",
+        base_rules(),
+        |w, r, s| {
+            let (cid, v) = w
+                .commit(candidate_proposal(provider_author()), r, s)
+                .unwrap();
+            assert_eq!(v.result, VerdictResult::Accept);
+            // An Evaluation with no Use ref to its candidate is rejected
+            // (EvaluationInvalid) but stays in the log with valid payload bytes.
+            let (bad_eid, v) = w
+                .commit(evaluation_custom(cid, executor_author(), vec![]), r, s)
+                .unwrap();
+            assert_eq!(v.result, VerdictResult::Reject);
+            cand(selection_custom(
+                "latency",
+                vec![cid],
+                SelectionOutcome::Selected {
+                    candidates: vec![cid],
+                },
+                provider_author(),
+                vec![use_ref(bad_eid), require_ref(cid)],
+            ))
+        },
+    ));
+    // SelectionInvalid: considered longer than max_considered.
+    cases.push(record_case(
+        "reject-selection-max-considered",
+        "A Selection whose considered list exceeds max_considered.",
+        rules_max_considered(1),
+        |w, r, s| {
+            let (cid, v) = w
+                .commit(candidate_proposal(provider_author()), r, s)
+                .unwrap();
+            assert_eq!(v.result, VerdictResult::Accept);
+            let (other, v) = w
+                .commit(candidate_root_note("other", provider_author()), r, s)
+                .unwrap();
+            assert_eq!(v.result, VerdictResult::Accept);
+            cand(selection_custom(
+                "latency",
+                vec![cid, other],
+                SelectionOutcome::None,
+                provider_author(),
+                vec![],
+            ))
+        },
+    ));
+    // SelectionInvalid: a winner below the configured min_binding.
+    cases.push(record_case(
+        "reject-selection-min-binding",
+        "A Selection whose winner is reported-bound under min_binding = manifest.",
+        rules_min_binding_manifest(),
+        |w, r, s| {
+            let (cid, v) = w
+                .commit(candidate_proposal(provider_author()), r, s)
+                .unwrap();
+            assert_eq!(v.result, VerdictResult::Accept);
+            let (eid, v) = w
+                .commit(evaluation_proposal(cid, executor_author()), r, s)
+                .unwrap();
+            assert_eq!(v.result, VerdictResult::Accept);
+            cand(selection_custom(
+                "latency",
+                vec![cid],
+                SelectionOutcome::Selected {
+                    candidates: vec![cid],
+                },
+                provider_author(),
+                vec![use_ref(eid), require_ref(cid)],
+            ))
+        },
+    ));
+    // ReaffirmationInvalid: a reaffirmation targeting a different objective.
+    cases.push(record_case(
+        "reject-selection-reaffirm-objective",
+        "A reaffirming Selection whose objective differs from its Replace target.",
+        base_rules(),
+        |w, r, s| {
+            let (cid, eid, sid) = setup_selected_line(w, r, s, "tests green");
+            cand(selection_custom(
+                "different-objective",
+                vec![cid],
+                SelectionOutcome::Selected {
+                    candidates: vec![cid],
+                },
+                provider_author(),
+                vec![use_ref(eid), require_ref(cid), replace_ref(sid)],
+            ))
+        },
+    ));
+    // ReaffirmationInvalid: a reaffirmation author outside the allowlist.
+    cases.push(record_case(
+        "reject-selection-reaffirm-actor",
+        "A reaffirming Selection whose author is not in reaffirmation_actors.",
+        rules_reaffirmation_actors(&["human"]),
+        |w, r, s| {
+            let (cid, eid, sid) = setup_selected_line(w, r, s, "tests green");
+            cand(selection_custom(
+                "tests green",
+                vec![cid],
+                SelectionOutcome::Selected {
+                    candidates: vec![cid],
+                },
+                provider_author(), // not "human"
+                vec![use_ref(eid), require_ref(cid), replace_ref(sid)],
+            ))
+        },
+    ));
+
     cases
 }
 
@@ -1652,7 +2253,7 @@ fn conformance_corpus() {
 }
 
 /// Every verdict `ReasonCode` that is expressible through the portable wire
-/// format. Three of the 20 variants are excluded and documented in the corpus
+/// format. Three of the 26 variants are excluded and documented in the corpus
 /// README:
 ///   - `Refused` is a reason a `Refusal` record cites in its payload; the
 ///     verifier never emits it as a verdict.
@@ -1682,5 +2283,11 @@ fn wire_expressible_reasons() -> Vec<ReasonCode> {
         ReasonCode::InvalidPayload,
         ReasonCode::AuthorRoleInvalid,
         ReasonCode::AuthorityRefMissing,
+        ReasonCode::SourceBindingInvalid,
+        ReasonCode::LineageInvalid,
+        ReasonCode::PayloadRefUnresolved,
+        ReasonCode::EvaluationInvalid,
+        ReasonCode::SelectionInvalid,
+        ReasonCode::ReaffirmationInvalid,
     ]
 }
