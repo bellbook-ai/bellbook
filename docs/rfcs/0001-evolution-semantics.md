@@ -1,9 +1,12 @@
 # RFC-0001: Software-evolution semantics (spec v0.3)
 
-**Status:** Draft for review. Nothing in this RFC is implemented; nothing in
-it changes spec v0.2 or the published crate. The goal is to make the object
-semantics and invariants precise enough to implement without re-litigating
-them mid-build. Kind names and field spellings are tentative until accepted.
+**Status:** Draft, revision 2 — incorporates the adversarial review of
+revision 1 (set-valued selection; reaffirmation; binding-authority,
+discipline, and concurrency honesty). Nothing in this RFC is implemented;
+nothing in it changes spec v0.2 or the published crate. The goal is to make
+the object semantics and invariants precise enough to implement without
+re-litigating them mid-build. Kind names and field spellings are tentative
+until accepted.
 
 **Scope anchor:** the wedge defined in [VISION.md](../VISION.md#next--v03-the-wedge-under-design):
 *verifiable candidate selection and lineage for autonomous coding agents*,
@@ -18,10 +21,13 @@ Spec v0.3 adds three typed record kinds — `Candidate`, `Evaluation`,
 Lineage is derived from existing typed refs (`Cause`, `Use`, `Require`),
 never stored as a parallel structure. Source identity binds to Git (tree
 OID), with an optional Bellbook-computed manifest hash for stronger binding.
-Retraction and transitive taint apply to the new kinds with one carefully
-chosen rule — continuation requires its Selection — that makes a retracted
-evaluation taint the entire descendant line it selected, which is the
-flagship capability of this release.
+Selections are **set-valued** (they may select one candidate or several), so
+best-of-N, population/beam evolution, and single-candidate repair share one
+vocabulary. Retraction and transitive taint apply through one carefully
+chosen rule — continuation requires its Selection — so a retracted evaluation
+taints the entire descendant line it selected; a **forward-only
+reaffirmation** mechanism lets a superseding Selection restore a line's
+standing without retroactively erasing taint.
 
 ## 2. Motivation
 
@@ -33,7 +39,7 @@ state → generate candidate(s) → evaluate → select (or repair and re-evalua
 
 Git can store the file contents at each step but has no native representation
 of the loop itself: which candidates were considered, under what objective,
-on what evidence, why one was selected, and what the surviving lineage
+on what evidence, why some were selected, and what the surviving lineage
 therefore rests on. That knowledge lives in throwaway branches and harness
 logs, unverifiable after the fact.
 
@@ -52,14 +58,15 @@ C1. **One primitive.** No new storage objects. `Candidate`, `Evaluation`,
 C2. **Workload generality.** The semantics must serve, without privileging
     any of them:
     (a) best-of-N — fork N candidates, evaluate, select one;
-    (b) iterative evolution / autoresearch — generations of candidates,
-        repeated evaluate-select-continue, abandoned lines;
+    (b) iterative / population evolution (autoresearch) — generations of
+        candidates, top-k survivors as parents of the next generation,
+        abandoned lines;
     (c) single-candidate development — one candidate, evaluation fails,
         repair produces a successor candidate, re-evaluate, accept.
-    Consequences: selections operate over candidate sets of size **≥ 1**;
-    repair is an ordinary candidate-to-candidate derivation; there is **no**
-    `Generation`, `Tournament`, or `Repair` object — all such structure is
-    derivable (§8).
+    Consequences: selections operate over candidate sets of size **≥ 1** and
+    may select **≥ 1** survivors; repair is an ordinary candidate-to-candidate
+    derivation; there is **no** `Generation`, `Tournament`, or `Repair`
+    object — all such structure is derivable (§8).
 
 C3. **Kernel unchanged.** The evidence lattice, verdict machinery, signature
     scheme, retraction/taint engine, and receipt model of v0.2 are reused,
@@ -97,6 +104,8 @@ development.
     "binding": "reported"          // "reported" | "manifest"
   },
   "basis": "root",                 // "root" | "continuation" | "derivation"
+  "parent": "<record id>",         // REQUIRED iff basis == "continuation":
+                                   //   the selected candidate this continues from
   "note": "<bounded string>"       // OPTIONAL: free-form label
 }
 ```
@@ -105,12 +114,14 @@ development.
 
 | basis          | meaning                                        | ref obligations |
 |----------------|------------------------------------------------|-----------------|
-| `root`         | starts a line (imported / initial state)       | MAY `Cause` a Request |
-| `continuation` | continues from a selected state                | MUST `Require` exactly one `Selection` whose outcome is `selected` |
-| `derivation`   | derived from sibling material (repair, mutation)| MUST `Cause` ≥ 1 record, each of kind `Candidate` or `Evaluation` |
+| `root`         | starts a line (imported / initial state)       | MAY `Cause` a Request; no `parent` |
+| `continuation` | continues from a selected state                | MUST `Require` exactly one `Selection` whose outcome is `selected`, and `parent` MUST name a member of that Selection's selected set |
+| `derivation`   | derived from sibling material (repair, mutation)| MUST `Cause` ≥ 1 record, each of kind `Candidate` or `Evaluation`; no `parent` |
 
 The `continuation`/`derivation` distinction is the taint boundary and is the
-most consequential rule in this RFC; rationale in §6.
+most consequential rule in this RFC; rationale in §6. The `parent` field is
+descriptive lineage (which selected state this builds on); the *epistemic*
+dependency is the `Require` on the Selection.
 
 ### 4.2 `Evaluation`
 
@@ -143,7 +154,11 @@ verifier-derived records. Bellbook never computes or re-runs an evaluation
 
 ### 4.3 `Selection`
 
-A recorded decision over a set of candidates under an objective.
+A recorded decision over a set of candidates under an objective. Selections
+are **set-valued**: the outcome names the surviving candidates — one for
+best-of-N or a repair accept, several for population/beam evolution where the
+top-k jointly become parents of the next generation. A single decision that
+keeps k survivors is one record, not k fragmented ones.
 
 ```jsonc
 {
@@ -151,7 +166,7 @@ A recorded decision over a set of candidates under an objective.
   "considered": ["<id>", "..."],     // REQUIRED: ≥ 1, unique, all Candidate ids
   "outcome": {
     "decision": "selected",          // "selected" | "none"
-    "candidate": "<record id>"       // REQUIRED iff decision == "selected"
+    "candidates": ["<id>", "..."]    // REQUIRED iff selected: ≥ 1, unique, ⊆ considered
   },
   "rationale": "<bounded string>"    // OPTIONAL
 }
@@ -159,14 +174,17 @@ A recorded decision over a set of candidates under an objective.
 
 **Ref obligations:**
 
-- If `decision == "selected"`: MUST `Require` exactly the selected candidate
-  (which MUST appear in `considered`).
+- If `decision == "selected"`: MUST `Require` exactly the members of
+  `outcome.candidates` (each of which MUST appear in `considered`).
 - MUST `Use` ≥ 1 `Evaluation` (default rules; a rules knob MAY relax this,
   see §9), and the `candidate` of every `Use`d Evaluation MUST appear in
   `considered`.
 - `decision == "none"` records that no candidate was acceptable under the
   objective — a legal, meaningful outcome (pruning, backtracking). It carries
   no `Require`.
+- A Selection MAY carry a `Replace` ref to a prior Selection: this is
+  **reaffirmation** (§6.1). If present, the `Replace` target MUST be a
+  Selection.
 
 Losing candidates are listed in `considered` (descriptive) but not referenced
 via `Use`/`Require`; the decision's *epistemic* premises are the evaluations
@@ -175,7 +193,7 @@ evaluations too, and taint then flows through those evaluations — the host
 controls comparative-vs-threshold semantics through what it declares, not
 through special kinds.
 
-A Selection with `considered` of size 1 and `decision: selected` is the
+A Selection with `considered` of size 1 and a selected set of size 1 is the
 formal version of "accept this state under this objective" — the
 single-candidate workflow's terminal step (C2c). Authority composes
 unchanged: rules may demand that Selections be authored by a given role,
@@ -199,14 +217,32 @@ Two binding modes, distinguished explicitly in the payload:
   a content commitment independent of Git's hash algorithm: anyone holding
   the tree can recompute the manifest and compare.
 
+**Authority on disagreement.** Nothing inside a record can prove that
+`manifest_hash` and `git.tree` describe the same contents; a false record can
+carry a tree OID and a manifest that disagree. When both are present, the
+**manifest is the authoritative identity commitment** and the tree OID is an
+interoperability pointer; a disagreement makes the record a false claim,
+detectable only by materializing the tree and recomputing the manifest —
+the same boundary v0.2 draws for `Verified` evidence ("origin verified,
+never the real-world effect"). SPEC v0.3 §13 must state this.
+
+**Adoption reality, stated in advance.** The manifest walk is O(worktree) per
+candidate. High-N workloads will predictably use `reported` for the
+population, which means their receipts commit to claims about SHA-1 hashes,
+not to contents. That is acceptable and must be said plainly, not
+discovered. The intended pattern is cheap `reported` bindings for the
+population and strong binding for the states that matter (the selected
+survivors); since a record's binding is immutable, how a survivor's binding
+gets upgraded (e.g. a manifest-bound re-record of the same tree that the
+Selection then `Require`s) is open question §16.6.
+
 **Deliberate refinement of an earlier framing:** binding strength is carried
 by the explicit `binding` field plus a per-kind rules threshold
 (`min_binding`, §9) — *not* by overloading the evidence-class definitions,
 whose v0.2 meanings stay fixed. The evidence class continues to grade how the
-record's content is known (a self-reported binding is `Reported`; a
-key-pinned external attestation of a manifest is `Verified`), and the two
-mechanisms compose. Rules like "any candidate referenced by a Selection must
-have `manifest` binding" become expressible without touching the lattice.
+record's content is known, and the two mechanisms compose. Rules like "any
+candidate a Selection `Require`s must have `manifest` binding" become
+expressible without touching the lattice.
 
 ### 5.1 Canonical manifest v1 (proposal)
 
@@ -239,8 +275,8 @@ Applied:
   evaluations. Correct: the judgments were about content whose binding no
   longer stands.
 - A **Selection** `Use`s the evaluations it relied on and `Require`s its
-  winner → retracting a relied-on evaluation taints the selection. Correct:
-  the decision's premises are gone.
+  selected candidates → retracting a relied-on evaluation, or any selected
+  candidate, taints the selection. Correct: the decision's premises are gone.
 - A **continuation Candidate** `Require`s its Selection → a tainted selection
   taints every candidate that continued from it, and (via their evaluations
   and subsequent selections) the entire descendant line. This is the rule
@@ -252,21 +288,64 @@ Applied:
   is later retracted, the repaired artifact is not thereby wrong; only its
   motivation evaporated. Retraction poisons conclusions, not code.
 
-This asymmetry — continuation `Require`s, derivation `Cause`s — is the single
-most consequential decision in this RFC and should be challenged hardest in
-review.
+Two acknowledged consequences, both deliberate:
+
+1. **The cascade can be over-broad.** A Selection may be over-determined
+   (the survivors stand on four evaluations even after a fifth is
+   retracted), and taint through a multi-winner Selection reaches *all* its
+   continuation lines even if only one winner's premises collapsed. Taint
+   means "rests on something retracted," never "is wrong" — the recovery
+   path is reaffirmation (§6.1), not weaker taint.
+2. **This asymmetry — continuation `Require`s, derivation `Cause`s — is the
+   single most consequential decision in this RFC** and should be challenged
+   hardest in review.
+
+### 6.1 Reaffirmation: forward-only taint recovery
+
+Without a recovery mechanism, one retracted evaluation permanently taints an
+entire active line, and the only exit is re-recording the chain. Large,
+mostly-recoverable cascades would teach users to ignore taint — destroying
+the flagship capability through alarm fatigue. v0.3 therefore defines
+**reaffirmation**:
+
+- A new Selection S′ MAY carry a `Replace` ref to a prior Selection S
+  (typically tainted, not necessarily). S′ is an ordinary Selection in every
+  respect: its own `considered`, its own `Use`d evaluations (the surviving
+  and/or newly produced evidence), its own selected set, the full rules
+  battery, and whatever role/approval requirements the rules impose on
+  Selections — rules MAY impose *stricter* requirements when `Replace` is
+  present (knob: `reaffirmation_roles`).
+- **Effect is forward-only.** Continuations recorded after S′ `Require` S′
+  and are untainted. Records that `Require`d S remain tainted — taint is
+  never retroactively cleared. The replay report SHOULD annotate such
+  records as *superseded* (tainted via S, where S is `Replace`d by S′), so a
+  consumer can distinguish "rests on retracted evidence, standing restored
+  downstream" from "rests on retracted evidence, abandoned." Exact report
+  shape is open question §16.7.
+- **Retroactive clearing is explicitly rejected.** If a later record could
+  un-taint earlier ones, a producer could launder history: retract
+  inconvenient evidence, reaffirm, and present a clean receipt. Taint must
+  be monotone with respect to committed history; recovery happens only by
+  extending history, in the open, with the reaffirmation itself on the
+  record.
+- **Last resort:** a host abandoning a long-tainted line entirely may start
+  a new `root` candidate with a provenance `note`. This deliberately severs
+  verifiable lineage continuity, and the receipt shows the break — that is
+  the honest cost of a re-baseline.
 
 ## 7. Derived lineage
 
 No lineage is stored. Defined queries over the ref graph:
 
-- **line of descent**: from any Candidate, follow `Require` → Selection →
-  members of `considered` / its own `Require`d winner’s ancestry, and
-  `Cause` edges between candidates, back to a `root`.
+- **line of descent**: from any Candidate, follow its `Require`d Selection
+  and `parent` field (continuations) and `Cause` edges (derivations) back to
+  a `root`.
 - **siblings / a "generation"**: candidates sharing the same `Require`d
   Selection (continuations) or the same `Cause` targets (derivations).
 - **frontier**: candidates that are not in any Selection's `considered`, plus
   selected candidates with no continuation yet.
+- **standing**: for any record, its taint status plus any superseding
+  reaffirmation chain (§6.1).
 
 These are traversals the CLI exposes (§12); a general query engine is a
 non-goal (§14).
@@ -274,20 +353,25 @@ non-goal (§14).
 ## 8. Workload walkthroughs (generality check, C2)
 
 **Best-of-N.** Selection S₀ selects state A. N candidates, each
-`basis: continuation`, `Require` S₀. Each gets one or more Evaluations.
-One Selection considers all N, `Use`s their evaluations, `Require`s the
-winner. Continue.
+`basis: continuation`, `parent: A`, `Require` S₀. Each gets one or more
+Evaluations. One Selection considers all N, `Use`s their evaluations, selects
+one. Continue.
 
-**Iterative evolution / autoresearch.** As above, repeated: generation k+1's
-candidates `Require` the generation-k Selection. Mutations *within* a
-generation are `basis: derivation` candidates `Cause`-ing a sibling.
+**Population / beam evolution (autoresearch).** A Selection selects the
+top-k survivors {A, B} in one record. Generation k+1 candidates each name
+`parent: A` or `parent: B` and `Require` that Selection. Mutations *within*
+a generation are `basis: derivation` candidates `Cause`-ing a sibling.
 Abandoned lines simply have no continuation; recorded pruning is a Selection
-with `decision: none` over the line's frontier. No new kinds needed.
+with `decision: none` over the line's frontier. If an evaluation behind the
+top-k decision is later retracted, the Selection and both lines taint; a
+reaffirmation S′ (`Replace` → S) re-selecting {A} on surviving evidence
+restores forward standing for A's line while B's line remains visibly
+tainted-and-not-reaffirmed. No new kinds needed.
 
 **Single-candidate repair.** C₁ (`root` or `continuation`) → Evaluation E₁
 fails → C₂ `basis: derivation`, `Cause` [C₁, E₁] → Evaluation E₂ passes →
 Selection with `considered: [C₂]` (or `[C₁, C₂]` if the host wants the
-comparison on record), `Use` [E₂ (, E₁)], `Require` C₂. The accept step is
+comparison on record), `Use` [E₂ (, E₁)], selecting [C₂]. The accept step is
 the same object best-of-N uses; nothing is privileged.
 
 ## 9. Verifier rules (additions to the per-record battery)
@@ -307,6 +391,8 @@ rejection reason code and a triggering corpus case:
 - V3-C4: a `Require`d Selection must not be retracted at commit time
   (retracted authority stops authorizing — same principle as v0.2 capability
   revocation).
+- V3-C5: `parent` present iff `basis == "continuation"`, and it names a
+  member of the `Require`d Selection's selected set.
 
 **Evaluation**
 - V3-E1: `candidate` names an existing Candidate record and is matched by a
@@ -316,16 +402,20 @@ rejection reason code and a triggering corpus case:
 
 **Selection**
 - V3-S1: `considered` non-empty, unique, all existing Candidate ids.
-- V3-S2: `decision == "selected"` ⇒ `outcome.candidate` ∈ `considered` and is
-  `Require`d; `decision == "none"` ⇒ no `Require`.
+- V3-S2: `decision == "selected"` ⇒ `outcome.candidates` non-empty, unique,
+  ⊆ `considered`, and the record `Require`s exactly those candidates;
+  `decision == "none"` ⇒ no `Require`.
 - V3-S3: every `Use`d Evaluation's `candidate` ∈ `considered`.
 - V3-S4 (default rules; knob `selection_requires_evaluation = true`): ≥ 1
   `Use`d Evaluation when `decision == "selected"`.
+- V3-S5: a `Replace` ref on a Selection, if present, targets a Selection;
+  rules knob `reaffirmation_roles` MAY restrict which authors may reaffirm.
 
 **New rules knobs**
 - `min_binding` per referencing context (e.g. Selections may only `Require`
   candidates with `manifest` binding).
 - `selection_requires_evaluation` (default true).
+- `reaffirmation_roles` (default: same as Selection authorship).
 - Per-kind evidence thresholds and author-role bindings apply to the three
   kinds exactly as to existing kinds.
 
@@ -341,28 +431,41 @@ The demonstration this release is built around:
 > still rests on untainted evidence — and which "best" states were chosen on
 > evidence that no longer stands. Repairs and mutations motivated by the
 > broken evaluations remain untainted: their motivation vanished, their
-> content did not.
+> content did not. The team then re-runs the surviving evaluations and
+> records a reaffirming Selection (§6.1): forward standing is restored, on
+> the record, without erasing what happened.
 
-This requires zero new taint machinery — only the ref discipline of §6 — and
-is the capability that distinguishes Bellbook from experiment trackers and
-Git workflows alike. It ships as a worked example plus corpus receipt cases
-covering: the full cascade, the derivation non-cascade, and a forged
-"un-tainted" receipt that replay rejects.
+Taint here means "rests on retracted evidence," never "the code is wrong" —
+and the reaffirmation step is part of the demo precisely so the cascade
+reads as actionable state, not as a permanent alarm. This requires zero new
+taint machinery — only the ref discipline of §6 — and is the capability that
+distinguishes Bellbook from experiment trackers and Git workflows alike. It
+ships as a worked example plus corpus receipt cases covering: the full
+cascade, the derivation non-cascade, the reaffirmation recovery, and a
+forged "un-tainted" receipt that replay rejects.
 
 ## 11. Receipt boundary
 
 A v0.3 receipt proves the recorded **process**: which candidates were
 recorded, what was claimed about them, which evidence and evaluations existed,
-what was selected under what objective, what is retracted or tainted, and
-that none of it was altered after the fact. It does **not** contain source
-contents; Git OIDs are pointers whose resolution requires the repository.
-With `manifest` binding, a party holding the tree can independently recompute
-`manifest_hash` and bind the receipt to actual contents; with `reported`
-binding they hold a verifiable record of an unverified claim — and the
-receipt says which, explicitly.
+what was selected under what objective, what is retracted, tainted, or
+superseded, and that none of it was altered after the fact. It does **not**
+contain source contents; Git OIDs are pointers whose resolution requires the
+repository. With `manifest` binding, a party holding the tree can
+independently recompute `manifest_hash` and bind the receipt to actual
+contents; with `reported` binding they hold a verifiable record of an
+unverified claim — and the receipt says which, explicitly.
 
-This is v0.2's "consistency, not completeness" boundary extended one level,
-and it must be stated with the same bluntness in SPEC v0.3 §13.
+One further boundary, stated with the same bluntness: **the lineage and taint
+guarantees are conditional on the producer's recording discipline.** `basis`,
+`parent`, and the choice of refs are producer claims; a host that records
+continuations as derivations escapes the cascade, and no verifier can detect
+that, because intent is not checkable. Bellbook proves the recorded structure
+is internally consistent under its rules — it does not prove the structure
+faithfully mirrors the development process. A receipt consumer trusts the
+embedded `rules_hash` *and* the producer's recording conventions. This is
+v0.2's "consistency, not completeness" boundary extended one level, and it
+must appear in SPEC v0.3 §13 verbatim in spirit.
 
 ## 12. CLI surface (the wedge's adoption surface)
 
@@ -372,17 +475,28 @@ record id; harnesses in any language integrate by shelling out.
 ```
 bellbook candidate add  --git-tree <oid> [--git-commit <oid>] [--algo sha1|sha256]
                         [--manifest <path-to-worktree>]        # computes manifest binding
-                        [--continues <selection-id> | --derives-from <id> ...]
+                        [--continues <selection-id> --parent <candidate-id>
+                         | --derives-from <id> ...]
                         [--note <s>]
 bellbook eval add       --candidate <id> --criterion <s>
                         (--passed | --failed | --score <value> --scale <n>)
                         [--procedure <s>] [--uses <id> ...]
 bellbook select         --objective <s> --consider <id> ...
-                        (--choose <id> | --none)
+                        (--choose <id> ... | --none)
+                        [--replaces <selection-id>]            # reaffirmation
                         --uses-eval <id> ... [--rationale <s>]
-bellbook lineage        <id> [--json]      # line of descent, siblings, taint status
+bellbook lineage        <id> [--json]      # descent, siblings, taint + superseded status
 bellbook validate       <receipt>          # unchanged from v0.2
 ```
+
+**Concurrency guidance (normative for the docs, not the verifier):** the
+persistent log is deliberately single-writer (`LogWriter` holds an exclusive
+lock, exactly as in v0.2). Parallel candidate *generation* is the workload;
+parallel *recording* is not the mechanism. Hosts generate candidates
+concurrently and record them serially afterward — one process, in a batch
+(`checked_batch_commit` for retry-safe batches) or a loop. The CLI is not a
+coordination layer, and integration docs must say so before integrators
+discover the lock by contention.
 
 Signing, roles, and receipt export use existing mechanisms. Python bindings
 remain out of scope (README open-work list); the independent Python validator
@@ -397,7 +511,8 @@ is updated in lockstep via the corpus, as now.
   vectors.
 - Conformance corpus extended with positive and adversarial cases per new
   invariant in §9 (each rejection reason code gets a triggering case), plus
-  the §10 receipt cases.
+  the §10 receipt cases (cascade, non-cascade, reaffirmation, forged
+  un-taint).
 - The Python validator implements the three kinds and the taint flows
   independently, and the corpus gate in CI holds both implementations to
   byte-for-decision agreement — same discipline that caught real bugs in the
@@ -406,9 +521,10 @@ is updated in lockstep via the corpus, as now.
 ## 14. Non-goals (binding for v0.3)
 
 No ranking or scoring computation; no evaluation execution; no general query
-engine (lineage traversal only); no Git plumbing beyond reading OIDs and the
-optional manifest walk; no materialization; no remotes or sync; no native
-source storage; no structured ContextObject system; no `Generation`,
+engine (lineage traversal only — but see §15's read-side signal, which is the
+designated trigger for revisiting this); no Git plumbing beyond reading OIDs
+and the optional manifest walk; no materialization; no remotes or sync; no
+native source storage; no structured ContextObject system; no `Generation`,
 `Tournament`, or `Repair` kinds; no agent-cognition vocabulary of any sort.
 Each of these is either VISION-scope (gated) or belongs to host systems
 permanently.
@@ -427,6 +543,11 @@ Evaluation window: **90 days from shipping v0.3 + the flagship example**.
    flows, selection invariants) — people argue about semantics they use.
 4. The flagship broken-benchmark scenario independently reproduced or cited
    by an external party.
+5. **Read-side usage**: at least one integration that *queries* — lineage
+   traversal, taint/superseded status, or receipt validation inside its own
+   loop — rather than only writing records. This signal specifically gates
+   the VISION query-surface stage: write-side adoption justifies more
+   recording semantics; only read-side adoption justifies a query engine.
 
 **Falsification — the thesis fails at this layer if both hold:**
 1. Direct exposure to ≥ 5 teams running best-of-N or iterative-evolution
@@ -446,16 +567,28 @@ no second extension without new evidence.
 1. **Score representation** — is `{value, scale}` integer fixed-point
    sufficient, or do hosts need multi-metric outcomes per Evaluation (vs. one
    Evaluation per metric, the current proposal)?
-2. **Manifest v1** — submodules; whether `mode` belongs in v1 or only
+2. **Comparative evaluations** — pairwise judgments ("A preferred over B",
+   Elo-style) currently have no direct form; they must be encoded as unary
+   evaluations. Is a two-subject Evaluation variant warranted, or is unary
+   encoding acceptable for the wedge?
+3. **Manifest v1** — submodules; whether `mode` belongs in v1 or only
    `sha256`; large-file cost and whether a size bound is needed.
-3. **Allowed `Cause` targets for `derivation`** — currently Candidate and
+4. **Allowed `Cause` targets for `derivation`** — currently Candidate and
    Evaluation; should Requests and Results be admitted?
-4. **`decision: "none"`** — outcome variant (current proposal) vs. a distinct
-   kind; the variant keeps the kind count down but overloads Selection's
-   verdict rules slightly.
 5. **SHA-256 Git repositories** — `algo` field is included; is dual-hash
    (tree in both algorithms) worth supporting for migration-era repos?
-6. **V3-C4 timing** — "Selection not retracted at commit time" mirrors
+6. **Late binding upgrade** — a record's binding is immutable; the intended
+   pattern (reported for the population, manifest for survivors) needs a
+   defined idiom, e.g. a manifest-bound re-record of the same tree that the
+   Selection `Require`s instead of the reported one. Does that re-record need
+   its own basis/ref rule?
+7. **Superseded-annotation shape** — how the replay report expresses
+   "tainted via S, S `Replace`d by S′" (§6.1); field naming and whether
+   supersession chains longer than one hop are flattened.
+8. **V3-C4 timing** — "Selection not retracted at commit time" mirrors
    capability revocation; confirm the same replay semantics (validity judged
    at commit position, taint judged at replay end) reads correctly for
    selections.
+9. **`considered` size bound** — population workloads may list thousands of
+   ids per Selection; should rules impose a per-record bound consistent with
+   the existing resource bounds?
