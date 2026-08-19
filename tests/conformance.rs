@@ -1028,6 +1028,99 @@ fn build_receipt_cases() -> Vec<ReceiptCase> {
         });
     }
 
+    // --- Taint propagates through the Require leg (no Use leg present). ---
+    {
+        let rules = base_rules();
+        let dir = tempfile::tempdir().unwrap();
+        let mut w = LogWriter::open(dir.path(), &rules).unwrap();
+        let mut st = State::default();
+        let commit = |w: &mut LogWriter, st: &mut State, p: Proposal| {
+            let (id, v) = w.commit(p, &rules, st).unwrap();
+            assert_eq!(v.result, VerdictResult::Accept);
+            id
+        };
+        let (rid, cid) = {
+            let (rid, v1) = w.commit(request_proposal(), &rules, &mut st).unwrap();
+            assert_eq!(v1.result, VerdictResult::Accept);
+            let (cid, v2) = w
+                .commit(
+                    capability_proposal(ACTOR, "tool", CapabilityMode::Auto, None),
+                    &rules,
+                    &mut st,
+                )
+                .unwrap();
+            assert_eq!(v2.result, VerdictResult::Accept);
+            (rid, cid)
+        };
+        // The action's only edge to the capability is a Require ref.
+        let aid = commit(
+            &mut w,
+            &mut st,
+            action_proposal_with_authority(rid, "tool", &[cid]),
+        );
+        // A Result referencing the action by Cause only: taint must not reach it.
+        let _res = commit(&mut w, &mut st, result_proposal(aid));
+        // A Summary that Uses the action: taint must reach it transitively.
+        let _sum = commit(&mut w, &mut st, summary_proposal(&[aid]));
+        // Retract the capability. The action taints solely through Require,
+        // the Summary transitively through Use, the Result (Cause) stays clean.
+        let _ret = commit(&mut w, &mut st, retraction_proposal(cid));
+        let receipt = Receipt::new(w.records(), &rules);
+        let report = validate(&receipt.to_bytes().unwrap());
+        assert_eq!(report.status, ValidationStatus::Tainted);
+        cases.push(ReceiptCase {
+            name: "tainted-require-leg".into(),
+            description: "Retracting a capability taints the Action whose only edge to it is a Require ref, and transitively the Summary that Used the action; the Cause-only Result stays untainted. The tainted set is the ground truth for propagation through Require.".into(),
+            receipt,
+            expect: expect_from_report(&report),
+        });
+    }
+
+    // --- A record Requiring an already-tainted target is rejected at commit. ---
+    {
+        let rules = base_rules();
+        let dir = tempfile::tempdir().unwrap();
+        let mut w = LogWriter::open(dir.path(), &rules).unwrap();
+        let mut st = State::default();
+        let commit = |w: &mut LogWriter, st: &mut State, p: Proposal| {
+            let (id, v) = w.commit(p, &rules, st).unwrap();
+            assert_eq!(v.result, VerdictResult::Accept);
+            id
+        };
+        let rid = commit(&mut w, &mut st, request_proposal());
+        // A capability that epistemically Uses the request.
+        let cid = {
+            let mut p = capability_proposal(ACTOR, "tool", CapabilityMode::Auto, None);
+            p.refs = vec![Ref {
+                type_: RefType::Use,
+                target: rid,
+            }];
+            commit(&mut w, &mut st, p)
+        };
+        // Retract the request: the capability taints through its Use leg.
+        let _ret = commit(&mut w, &mut st, retraction_proposal(rid));
+        // An Action Requiring the now-tainted capability must reject at its
+        // commit position; the rejected record and its verdict stay in the log.
+        let (_, v) = w
+            .commit(
+                action_proposal_with_authority(rid, "tool", &[cid]),
+                &rules,
+                &mut st,
+            )
+            .unwrap();
+        assert_eq!(v.result, VerdictResult::Reject);
+        assert_eq!(v.reason, Some(ReasonCode::RefUnresolved));
+        let receipt = Receipt::new(w.records(), &rules);
+        let report = validate(&receipt.to_bytes().unwrap());
+        assert_eq!(report.status, ValidationStatus::Tainted);
+        cases.push(ReceiptCase {
+            name: "tainted-require-target-rejected".into(),
+            description: "An Action Requiring an already-tainted capability is rejected at commit position with RefUnresolved; the rejected record stays in the log with its Reject verdict and replay agrees.".into(),
+            receipt,
+            expect: expect_from_report(&report),
+        });
+    }
+
     cases
 }
 
