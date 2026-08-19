@@ -88,7 +88,8 @@ built *on top of Git*, not instead of it:
 - Git remains the source storage substrate. A candidate binds a Git tree
   (identity) and optionally a commit (provenance).
 - `Candidate`, `Evaluation`, and `Selection` become typed record kinds; the
-  record remains the only primitive; lineage is derived from refs.
+  record remains the only primitive; lineage is derived from refs and
+  lineage payload fields, never stored.
 - The existing kernel supplies evidence, signatures, retraction, taint, and
   receipts unchanged.
 - The proving workloads are best-of-N candidate selection, autoresearch-style

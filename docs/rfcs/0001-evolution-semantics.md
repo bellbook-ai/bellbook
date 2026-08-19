@@ -41,8 +41,9 @@ Dependency semantics are split to match what they mean:
   continuation anchors (with `parent`) and derivation edges to candidates.
   It is deterministic, derived identically by every validator, and
   forgery-proof for the same reason taint is: replay re-derives it. It does
-  not touch evidence derivation, does not freeze appends, and is restorable
-  by a single on-record reaffirmation.
+  not touch evidence derivation, does not freeze appends, and — when the
+  compromise stems from decisions that no longer stand, not from a retracted
+  state itself (§6.3) — is restorable by a single on-record reaffirmation.
 
 This split is the revision-3 correction of revision 2's central defect:
 overloading `Require` for lineage bought kernel taint at the cost of
