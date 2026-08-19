@@ -99,6 +99,15 @@ pub struct VerifierRules {
     /// delta D3).
     #[serde(default = "default_max_considered")]
     pub max_considered: u32,
+    /// Whether every `Selection` must carry a valid, unconsumed `Require`d
+    /// approval whose subject hash binds the selecting author, the Replace
+    /// target (or null), and the `SelectionData` (SPEC §4.1, spec 0.3
+    /// delta D5). Default false. When true, a Selection with no matching
+    /// approval rejects with `ApprovalMissing` (or `ApprovalExpired`), and an
+    /// accepted Selection consumes the approval single-use, exactly like the
+    /// Action path.
+    #[serde(default)]
+    pub selection_requires_approval: bool,
 }
 
 /// Default `min_binding`: `Reported` imposes no minimum.
@@ -192,6 +201,7 @@ impl VerifierRules {
             selection_requires_evaluation: default_true(),
             reaffirmation_actors: BTreeSet::new(),
             max_considered: default_max_considered(),
+            selection_requires_approval: false,
         }
     }
 

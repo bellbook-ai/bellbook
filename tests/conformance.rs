@@ -451,6 +451,98 @@ fn setup_selected_line(
     (cid, eid, sid)
 }
 
+// --- Selection approval builders (spec 0.3 delta D5). ---
+
+fn rules_selection_requires_approval() -> VerifierRules {
+    let mut r = base_rules();
+    r.selection_requires_approval = true;
+    r
+}
+
+/// A User-granted exact approval whose subject is a Selection's subject hash.
+fn selection_approval_proposal(
+    subject_hash: Hash256,
+    actor: &str,
+    expiry: Option<Time>,
+) -> Proposal {
+    let data = encode(&ApprovalData {
+        target_action: Some(subject_hash),
+        action_class: None,
+        scope: SCOPE,
+        actor_id: Some(actor.into()),
+        expiry,
+    })
+    .unwrap();
+    Proposal {
+        space: SPACE,
+        thread: THREAD,
+        author: human_author(),
+        kind: Kind::Approval,
+        schema: schema_id(SCHEMA_APPROVAL),
+        data,
+        refs: vec![],
+    }
+}
+
+/// Build a Selection proposal directly from a `SelectionData`, so the same
+/// value can seed both the subject-hash computation and the record.
+fn selection_from_data(sd: &SelectionData, author_: Author, refs: Vec<Ref>) -> Proposal {
+    Proposal {
+        space: SPACE,
+        thread: THREAD,
+        author: author_,
+        kind: Kind::Selection,
+        schema: schema_id(SCHEMA_SELECTION),
+        data: encode(sd).unwrap(),
+        refs,
+    }
+}
+
+/// Commit a candidate, an evaluation, an approval, and an approved Selection
+/// over them under `selection_requires_approval`. Returns (candidate, eval,
+/// selection) ids for reaffirmation cases.
+fn setup_approved_selected_line(
+    w: &mut LogWriter,
+    r: &VerifierRules,
+    s: &mut State,
+    objective: &str,
+) -> (RecordId, RecordId, RecordId) {
+    let (cid, v) = w
+        .commit(candidate_proposal(provider_author()), r, s)
+        .unwrap();
+    assert_eq!(v.result, VerdictResult::Accept);
+    let (eid, v) = w
+        .commit(evaluation_proposal(cid, executor_author()), r, s)
+        .unwrap();
+    assert_eq!(v.result, VerdictResult::Accept);
+    let sd = SelectionData {
+        objective: objective.into(),
+        considered: vec![cid],
+        outcome: SelectionOutcome::Selected {
+            candidates: vec![cid],
+        },
+        rationale: None,
+    };
+    let hash = selection_approval_subject_hash(ACTOR, None, &sd).unwrap();
+    let (aid, v) = w
+        .commit(selection_approval_proposal(hash, ACTOR, None), r, s)
+        .unwrap();
+    assert_eq!(v.result, VerdictResult::Accept);
+    let (sid, v) = w
+        .commit(
+            selection_from_data(
+                &sd,
+                provider_author(),
+                vec![use_ref(eid), require_ref(cid), require_ref(aid)],
+            ),
+            r,
+            s,
+        )
+        .unwrap();
+    assert_eq!(v.result, VerdictResult::Accept);
+    (cid, eid, sid)
+}
+
 fn approval_class_proposal(class: &str, actor: Option<&str>, expiry: Option<Time>) -> Proposal {
     let data = encode(&ApprovalData {
         target_action: None,
@@ -1609,6 +1701,250 @@ fn build_record_cases() -> Vec<RecordCase> {
                 },
                 provider_author(), // not "human"
                 vec![use_ref(eid), require_ref(cid), replace_ref(sid)],
+            ))
+        },
+    ));
+
+    // --- Selection approval binding battery (spec 0.3, delta D5). ---
+
+    // Accept: a Selection Requiring a valid approval that binds its subject.
+    cases.push(record_case(
+        "accept-selection-approved",
+        "A Selection carrying the approval its subject hash binds.",
+        rules_selection_requires_approval(),
+        |w, r, s| {
+            let (cid, v) = w
+                .commit(candidate_proposal(provider_author()), r, s)
+                .unwrap();
+            assert_eq!(v.result, VerdictResult::Accept);
+            let (eid, v) = w
+                .commit(evaluation_proposal(cid, executor_author()), r, s)
+                .unwrap();
+            assert_eq!(v.result, VerdictResult::Accept);
+            let sd = SelectionData {
+                objective: "latency".into(),
+                considered: vec![cid],
+                outcome: SelectionOutcome::Selected {
+                    candidates: vec![cid],
+                },
+                rationale: None,
+            };
+            let hash = selection_approval_subject_hash(ACTOR, None, &sd).unwrap();
+            let (aid, v) = w
+                .commit(selection_approval_proposal(hash, ACTOR, None), r, s)
+                .unwrap();
+            assert_eq!(v.result, VerdictResult::Accept);
+            cand(selection_from_data(
+                &sd,
+                provider_author(),
+                vec![use_ref(eid), require_ref(cid), require_ref(aid)],
+            ))
+        },
+    ));
+    // ApprovalMissing: rules require an approval but none is present.
+    cases.push(record_case(
+        "reject-selection-approval-missing",
+        "A Selection under selection_requires_approval with no approval.",
+        rules_selection_requires_approval(),
+        |w, r, s| {
+            let (cid, v) = w
+                .commit(candidate_proposal(provider_author()), r, s)
+                .unwrap();
+            assert_eq!(v.result, VerdictResult::Accept);
+            let (eid, v) = w
+                .commit(evaluation_proposal(cid, executor_author()), r, s)
+                .unwrap();
+            assert_eq!(v.result, VerdictResult::Accept);
+            cand(selection_custom(
+                "latency",
+                vec![cid],
+                SelectionOutcome::Selected {
+                    candidates: vec![cid],
+                },
+                provider_author(),
+                vec![use_ref(eid), require_ref(cid)],
+            ))
+        },
+    ));
+    // ApprovalMissing: the approval binds a different subject actor.
+    cases.push(record_case(
+        "reject-selection-approval-wrong-actor",
+        "A Selection whose bound approval declares a different subject actor.",
+        rules_selection_requires_approval(),
+        |w, r, s| {
+            let (cid, v) = w
+                .commit(candidate_proposal(provider_author()), r, s)
+                .unwrap();
+            assert_eq!(v.result, VerdictResult::Accept);
+            let (eid, v) = w
+                .commit(evaluation_proposal(cid, executor_author()), r, s)
+                .unwrap();
+            assert_eq!(v.result, VerdictResult::Accept);
+            let sd = SelectionData {
+                objective: "latency".into(),
+                considered: vec![cid],
+                outcome: SelectionOutcome::Selected {
+                    candidates: vec![cid],
+                },
+                rationale: None,
+            };
+            let hash = selection_approval_subject_hash(ACTOR, None, &sd).unwrap();
+            // Correct subject hash, but the approval's actor_id is "host".
+            let (aid, v) = w
+                .commit(selection_approval_proposal(hash, "host", None), r, s)
+                .unwrap();
+            assert_eq!(v.result, VerdictResult::Accept);
+            cand(selection_from_data(
+                &sd,
+                provider_author(),
+                vec![use_ref(eid), require_ref(cid), require_ref(aid)],
+            ))
+        },
+    ));
+    // ApprovalExpired: the bound approval lapsed before the Selection.
+    cases.push(record_case(
+        "reject-selection-approval-expired",
+        "A Selection whose bound approval expired at its commit time.",
+        rules_selection_requires_approval(),
+        |w, r, s| {
+            let (cid, v) = w
+                .commit(candidate_proposal(provider_author()), r, s)
+                .unwrap();
+            assert_eq!(v.result, VerdictResult::Accept);
+            let (eid, v) = w
+                .commit(evaluation_proposal(cid, executor_author()), r, s)
+                .unwrap();
+            assert_eq!(v.result, VerdictResult::Accept);
+            let sd = SelectionData {
+                objective: "latency".into(),
+                considered: vec![cid],
+                outcome: SelectionOutcome::Selected {
+                    candidates: vec![cid],
+                },
+                rationale: None,
+            };
+            let hash = selection_approval_subject_hash(ACTOR, None, &sd).unwrap();
+            let (aid, v) = w
+                .commit(selection_approval_proposal(hash, ACTOR, Some(1)), r, s)
+                .unwrap();
+            assert_eq!(v.result, VerdictResult::Accept);
+            cand(selection_from_data(
+                &sd,
+                provider_author(),
+                vec![use_ref(eid), require_ref(cid), require_ref(aid)],
+            ))
+        },
+    ));
+    // ApprovalMissing: the approval was already consumed by a prior Selection.
+    cases.push(record_case(
+        "reject-selection-approval-consumed",
+        "A Selection reusing an approval a prior identical Selection consumed.",
+        rules_selection_requires_approval(),
+        |w, r, s| {
+            let (cid, v) = w
+                .commit(candidate_proposal(provider_author()), r, s)
+                .unwrap();
+            assert_eq!(v.result, VerdictResult::Accept);
+            let (eid, v) = w
+                .commit(evaluation_proposal(cid, executor_author()), r, s)
+                .unwrap();
+            assert_eq!(v.result, VerdictResult::Accept);
+            let sd = SelectionData {
+                objective: "latency".into(),
+                considered: vec![cid],
+                outcome: SelectionOutcome::Selected {
+                    candidates: vec![cid],
+                },
+                rationale: None,
+            };
+            let hash = selection_approval_subject_hash(ACTOR, None, &sd).unwrap();
+            let (aid, v) = w
+                .commit(selection_approval_proposal(hash, ACTOR, None), r, s)
+                .unwrap();
+            assert_eq!(v.result, VerdictResult::Accept);
+            // First Selection consumes the approval (accepted).
+            let refs = vec![use_ref(eid), require_ref(cid), require_ref(aid)];
+            let (_s1, v) = w
+                .commit(
+                    selection_from_data(&sd, provider_author(), refs.clone()),
+                    r,
+                    s,
+                )
+                .unwrap();
+            assert_eq!(v.result, VerdictResult::Accept);
+            // A byte-identical Selection at a later time reuses the same hash.
+            cand(selection_from_data(&sd, provider_author(), refs))
+        },
+    ));
+    // ApprovalMissing: a fresh-decision approval cannot authorize a
+    // reaffirmation (the Replace target is inside the subject hash).
+    cases.push(record_case(
+        "reject-selection-approval-diverted-reaffirmation",
+        "A reaffirmation Requiring an approval granted for the fresh decision.",
+        rules_selection_requires_approval(),
+        |w, r, s| {
+            let (cid, eid, sid) = setup_approved_selected_line(w, r, s, "latency");
+            // The reaffirmation's data (a distinct rationale keeps its
+            // fresh-decision hash from colliding with the original approval).
+            let sd1 = SelectionData {
+                objective: "latency".into(),
+                considered: vec![cid],
+                outcome: SelectionOutcome::Selected {
+                    candidates: vec![cid],
+                },
+                rationale: Some("reaffirm".into()),
+            };
+            // An approval bound to the FRESH decision (replace_target = null).
+            let fresh_hash = selection_approval_subject_hash(ACTOR, None, &sd1).unwrap();
+            let (aid, v) = w
+                .commit(selection_approval_proposal(fresh_hash, ACTOR, None), r, s)
+                .unwrap();
+            assert_eq!(v.result, VerdictResult::Accept);
+            // The reaffirmation binds replace_target = sid, so this approval
+            // does not match.
+            cand(selection_from_data(
+                &sd1,
+                provider_author(),
+                vec![
+                    use_ref(eid),
+                    require_ref(cid),
+                    require_ref(aid),
+                    replace_ref(sid),
+                ],
+            ))
+        },
+    ));
+    // Accept: a reaffirmation carrying the approval its Replace-bound subject
+    // hash demands.
+    cases.push(record_case(
+        "accept-selection-approved-reaffirmation",
+        "A reaffirmation carrying the approval its Replace-bound subject binds.",
+        rules_selection_requires_approval(),
+        |w, r, s| {
+            let (cid, eid, sid) = setup_approved_selected_line(w, r, s, "latency");
+            let sd1 = SelectionData {
+                objective: "latency".into(),
+                considered: vec![cid],
+                outcome: SelectionOutcome::Selected {
+                    candidates: vec![cid],
+                },
+                rationale: Some("reaffirm".into()),
+            };
+            // Approval bound to the reaffirmation (replace_target = sid).
+            let reaff_hash = selection_approval_subject_hash(ACTOR, Some(sid), &sd1).unwrap();
+            let (aid, v) = w
+                .commit(selection_approval_proposal(reaff_hash, ACTOR, None), r, s)
+                .unwrap();
+            assert_eq!(v.result, VerdictResult::Accept);
+            cand(selection_from_data(
+                &sd1,
+                provider_author(),
+                vec![
+                    use_ref(eid),
+                    require_ref(cid),
+                    require_ref(aid),
+                    replace_ref(sid),
+                ],
             ))
         },
     ));

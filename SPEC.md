@@ -164,12 +164,11 @@ produced software states are proposed, judged, and chosen:
   best-of-N or a repair accept, several for population evolution.
 
 **Implementation status of the evolution rules:** the lineage, selection,
-and reaffirmation rules ([`spec/v0.3-delta.md`](spec/v0.3-delta.md) D3 and
-D4) are implemented and specified in §4.1 and §7.1. The Selection
-approval-binding rule (D5) and standing (D6, D7) are not yet implemented;
-until they land, a Selection carries no approval obligation and no receipt
-reports a standing section. This paragraph is trimmed as those remaining
-slices land.
+reaffirmation, and Selection approval-binding rules
+([`spec/v0.3-delta.md`](spec/v0.3-delta.md) D3, D4, and D5) are implemented
+and specified in §4.1 and §7.1. Standing (D6, D7) is not yet implemented;
+until it lands, no receipt reports a standing section. This paragraph is
+trimmed when that final slice lands.
 
 ## 3. Identity and hashing
 
@@ -365,9 +364,10 @@ payload lookup.
   §2 bounds are enforced by the canonical payload decode (`InvalidPayload`);
 - a `Selection`'s `considered` must be non-empty, unique, and no longer than
   `max_considered`. When the outcome is `Selected`, its `candidates` must be
-  non-empty, unique, a subset of `considered`, and named by `Require` refs
-  that are exactly the selected set (no unselected `Require` targets); each
-  winner must meet `min_binding`; and when `selection_requires_evaluation`
+  non-empty, unique, a subset of `considered`, and named by `Require` refs;
+  the `Require` targets must be exactly the selected set plus, when the rules
+  demand it, the one authority approval below (no other `Require` targets);
+  each winner must meet `min_binding`; and when `selection_requires_evaluation`
   (default true) at least one **accepted** `Evaluation` must be `Use`d. Every
   `Use`d accepted `Evaluation`'s `candidate` must appear in `considered`.
   Only accepted evaluations count: `Use`-ing a rejected Evaluation is legal
@@ -381,6 +381,30 @@ payload lookup.
   target must be a `Selection` with the same `objective`, and when
   `reaffirmation_actors` is configured the author must be listed. Violations
   reject with `ReaffirmationInvalid`.
+
+When `selection_requires_approval` is set, a `Selection` must additionally
+`Require` a valid, unconsumed approval whose **subject hash** is
+
+```
+SHA-256(canonical((
+  "bellbook.selection-approval.v0.3",   // domain
+  selection_author_id,
+  replace_target_id_or_null,            // the Replace target when present, else null
+  SelectionData
+)))
+```
+
+This parallels the Action exact-approval binding (which has no domain
+prefix): the matched approval's declared `actor_id` must equal the selecting
+author, it must be unexpired, and an accepted Selection consumes it
+single-use, through a consumption step parallel to the Action path (a later
+`Replace` of the consuming Selection never refunds it, matching v0.2, where
+no code path un-consumes). The Replace target is inside the hash so an
+approval granted for a fresh decision cannot be diverted onto a reaffirmation
+with identical `SelectionData`: approving a decision and approving the
+*restoration of a compromised line* are different acts. A missing or
+unusable approval rejects with `ApprovalMissing`; an expired one with
+`ApprovalExpired`.
 
 `VerdictData { result: Accept | Reject, reason: Option<ReasonCode> }` with
 reason codes:
@@ -410,7 +434,8 @@ Selection's `considered` list; because `considered` members carry no refs,
 this bound is independent of `max_refs_per_record` (`ValidationLimits`,
 §12), and a
 comparative Selection that `Use`s one Evaluation per considered candidate
-is still bounded by the receipt ref limit.
+is still bounded by the receipt ref limit. `selection_requires_approval`
+(default false) requires every Selection to carry the bound approval above.
 
 ### 4.2 verify_log
 

@@ -235,7 +235,9 @@ pub(super) fn check_selection(
         .map(|r| r.target)
         .collect();
 
-    match &data.outcome {
+    // Winner set (the candidate Require targets the outcome demands), with
+    // per-outcome winner validity.
+    let winners: BTreeSet<RecordId> = match &data.outcome {
         SelectionOutcome::Selected { candidates } => {
             let selected: BTreeSet<RecordId> = candidates.iter().copied().collect();
             // Non-empty, unique, subset of considered.
@@ -243,12 +245,6 @@ pub(super) fn check_selection(
                 || selected.len() != candidates.len()
                 || !selected.is_subset(&considered)
             {
-                return Some(ReasonCode::SelectionInvalid);
-            }
-            // The winner Require refs must be exactly the selected set: each
-            // winner is Required, and no other record is Required (Selection
-            // approval authority lands in delta D5 / #25).
-            if require_targets != selected {
                 return Some(ReasonCode::SelectionInvalid);
             }
             // min_binding: every winner must meet the configured minimum
@@ -269,14 +265,31 @@ pub(super) fn check_selection(
             if rules.selection_requires_evaluation && used_evaluations == 0 {
                 return Some(ReasonCode::SelectionInvalid);
             }
+            selected
         }
-        SelectionOutcome::None => {
-            // A None decision carries no candidate Require refs, and no
-            // authority Require refs exist for Selections yet (delta D5).
-            if !require_targets.is_empty() {
-                return Some(ReasonCode::SelectionInvalid);
-            }
-        }
+        // A None decision names no winners.
+        SelectionOutcome::None => BTreeSet::new(),
+    };
+
+    // Selection approval binding (delta D5): when the rules demand it, the
+    // Selection must `Require` a valid, unconsumed approval whose subject hash
+    // binds the author, the Replace target, and the SelectionData. This is the
+    // only authority `Require` a Selection may carry.
+    let approval_require = match resolve_selection_approval(record, &data, prior, rules, state) {
+        Ok(id) => id,
+        Err(reason) => return Some(reason),
+    };
+
+    // Require-target exactness: exactly the winners plus the required approval
+    // (if any). No other `Require` targets are allowed (V3-S2). This is the
+    // single place the require set is pinned, so a None decision with an
+    // authority approval is expressible while a stray Require still rejects.
+    let mut allowed = winners;
+    if let Some(a) = approval_require {
+        allowed.insert(a);
+    }
+    if require_targets != allowed {
+        return Some(ReasonCode::SelectionInvalid);
     }
 
     // Reaffirmation (delta D4): a Replace ref makes this a new decision over
@@ -298,4 +311,71 @@ pub(super) fn check_selection(
     }
 
     None
+}
+
+/// Resolve the approval a Selection is required to carry (delta D5). Returns
+/// `Ok(None)` when the rules do not require Selection approvals, `Ok(Some(id))`
+/// with the approving record's id when a valid approval is `Require`-referenced,
+/// and `Err(ApprovalMissing | ApprovalExpired)` otherwise. Modeled on the
+/// Action exact-approval path: the subject hash is looked up in
+/// `valid_approvals`, the approval must be `Require`-referenced, usable
+/// (accepted, not retracted or tainted), declare the selecting author as its
+/// subject actor, and be unexpired.
+fn resolve_selection_approval(
+    record: &Record,
+    data: &SelectionData,
+    prior: &Prior<'_>,
+    rules: &VerifierRules,
+    state: &State,
+) -> Result<Option<RecordId>, ReasonCode> {
+    if !rules.selection_requires_approval {
+        return Ok(None);
+    }
+    let replace_target = record
+        .refs
+        .iter()
+        .find(|r| r.type_ == RefType::Replace)
+        .map(|r| r.target);
+    let subject_hash = selection_approval_subject_hash(&record.author.id, replace_target, data)
+        .map_err(|_| ReasonCode::InvalidPayload)?;
+
+    // Looked up by subject hash (parallel to the Action exact path) and must
+    // be `Require`-referenced by this Selection.
+    let Some(&approval_id) = state.valid_approvals.get(&subject_hash) else {
+        return Err(ReasonCode::ApprovalMissing);
+    };
+    let require_matches = record
+        .refs
+        .iter()
+        .any(|r| r.type_ == RefType::Require && r.target == approval_id);
+    if !require_matches {
+        return Err(ReasonCode::ApprovalMissing);
+    }
+    // Usable: accepted, not retracted or tainted.
+    if !state.accepted_records.contains(&approval_id)
+        || state.retracted_records.contains(&approval_id)
+        || state.tainted_records.contains(&approval_id)
+    {
+        return Err(ReasonCode::ApprovalMissing);
+    }
+    let Some(approval_record) = prior.find(approval_id) else {
+        return Err(ReasonCode::ApprovalMissing);
+    };
+    let approval_data: ApprovalData = match decode::<ApprovalData>(&approval_record.data) {
+        Ok(v) => v,
+        Err(_) => return Err(ReasonCode::InvalidPayload),
+    };
+    // The declared subject actor must equal the selecting author. The subject
+    // hash already binds the author, so this is the parallel of the Action
+    // path's explicit `actor_id` check: it rejects an approval that visibly
+    // claims a different subject than the one its hash authorizes.
+    if approval_data.actor_id.as_deref() != Some(record.author.id.as_str()) {
+        return Err(ReasonCode::ApprovalMissing);
+    }
+    if let Some(expiry) = approval_data.expiry {
+        if record.time >= expiry {
+            return Err(ReasonCode::ApprovalExpired);
+        }
+    }
+    Ok(Some(approval_id))
 }

@@ -35,8 +35,19 @@ and releases follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `Selection` reaffirmation via `Replace`. Adds the `min_binding`,
   `selection_requires_evaluation`, `reaffirmation_actors`, and
   `max_considered` rule knobs. Mirrored in the Python validator with a
-  triggering corpus case per check. The Selection approval-binding rule
-  and standing land next (#25, #26).
+  triggering corpus case per check.
+- Selection approval binding (#25): under the `selection_requires_approval`
+  knob (default false), a Selection must `Require` a valid, unconsumed
+  approval whose subject hash binds the selecting author, the Replace target
+  (or null), and the `SelectionData` under domain
+  `bellbook.selection-approval.v0.3`. The Replace target inside the hash
+  stops a fresh-decision approval from being diverted onto a reaffirmation
+  with identical data. Consumption is single-use on Selection accept,
+  parallel to the Action exact-approval path and never refunded. Reuses
+  `ApprovalMissing`/`ApprovalExpired`; mirrored in the Python validator with
+  corpus cases for the approved, missing, mismatched-actor, expired,
+  already-consumed, diverted-reaffirmation, and approved-reaffirmation
+  paths. Standing lands next (#26).
 - Machine-readable conformance corpus under `spec/conformance/v0.2/`
   (record, receipt, and malformed-document cases) with a runner that
   re-derives every outcome from the stored inputs. It triggers a case for
