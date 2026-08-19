@@ -160,9 +160,10 @@ pub(super) fn check_record(
     }
 
     if let Some(replace_ref) = replace_refs.first() {
-        // Replace only on Summary, Capability, Approval, Plan
+        // Replace only on Summary, Capability, Approval, Plan, Selection
+        // (Selection reaffirmation, spec 0.3 delta D4).
         match record.kind {
-            Kind::Summary | Kind::Capability | Kind::Approval | Kind::Plan => {}
+            Kind::Summary | Kind::Capability | Kind::Approval | Kind::Plan | Kind::Selection => {}
             _ => return Some(ReasonCode::ReplacementInvalid),
         }
 
@@ -273,6 +274,11 @@ fn check_replacement_compatibility(record: &Record, target: &Record) -> Option<R
                 return Some(ReasonCode::ReplacementInvalid);
             }
         }
+        // Selection reaffirmation compatibility (same objective) and the
+        // reaffirmation-actor allowlist are Selection-specific concerns
+        // reported as `ReaffirmationInvalid`, checked in `check_selection`,
+        // not here.
+        Kind::Selection => {}
         _ => {}
     }
     None

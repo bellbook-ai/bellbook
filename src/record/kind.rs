@@ -254,6 +254,36 @@ pub enum ReasonCode {
     /// Capability (and, for Ask mode, the exact Approval) that authorizes
     /// it, so the audit graph would not show which authority was used.
     AuthorityRefMissing,
+    /// A `Candidate`'s `SourceBinding` is malformed: a `tree`/`commit` OID
+    /// whose hex length does not match its `algo`, or a `manifest_hash`
+    /// present without `binding == Manifest` (or absent with it).
+    SourceBindingInvalid,
+    /// A `Candidate`'s basis obligations do not hold: the wrong number or
+    /// kind of `Cause` targets for its `basis`, a `parent` present where the
+    /// basis forbids it (or absent where it requires one), a `Continuation`
+    /// whose `parent` is not in its anchor Selection's selected set, or a
+    /// `Cause` target that is not accepted at commit position.
+    LineageInvalid,
+    /// A payload id (`CandidateData.parent`, a `SelectionData.considered`
+    /// member, or `EvaluationData.candidate`) does not resolve, in the same
+    /// space, to a previously accepted `Candidate` record.
+    PayloadRefUnresolved,
+    /// An `Evaluation` does not carry the `Use` ref naming the candidate its
+    /// payload judges, so its epistemic dependence on that candidate is not
+    /// recorded.
+    EvaluationInvalid,
+    /// A `Selection` violates its structural rules: empty or non-unique
+    /// `considered`, `considered` beyond `max_considered`, a selected set
+    /// that is empty, non-unique, not a subset of `considered`, or not
+    /// exactly matched by the winner `Require` refs, a `Used` Evaluation
+    /// whose candidate is not in `considered`, a `None` decision carrying
+    /// candidate `Require` refs, a winner below `min_binding`, or a missing
+    /// required Evaluation.
+    SelectionInvalid,
+    /// A reaffirming `Selection` (one carrying a `Replace` ref) targets a
+    /// Selection with a different `objective`, or its author is not in the
+    /// configured `reaffirmation_actors` allowlist.
+    ReaffirmationInvalid,
 }
 
 /// How a capability gates actions of its (actor, action_class, scope).

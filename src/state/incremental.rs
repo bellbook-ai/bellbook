@@ -207,12 +207,19 @@ fn apply_accepted(state: &mut State, record: &Record) -> Result<(), serde_json::
         Kind::Verdict => {
             // Verdicts don't contribute to operational state
         }
-        Kind::Candidate | Kind::Evaluation | Kind::Selection => {
-            // Evolution kinds (spec 0.3) contribute no operational state in
+        Kind::Candidate | Kind::Evaluation => {
+            // Candidates and evaluations contribute no operational state in
             // this fold; standing is a replay-derived report dimension, not
-            // state (SPEC §7.2, delta D6). Approval consumption on Selection
-            // accept lands with the approval-binding rules. Tracked in #25
-            // and #26.
+            // state (SPEC §7.2, delta D6). Tracked in #26.
+        }
+        Kind::Selection => {
+            // A reaffirmation (a Selection carrying a Replace ref) supersedes
+            // its target for context construction, exactly like the other
+            // replaceable kinds (spec 0.3, delta D4). Standing and Selection
+            // approval consumption land in #25/#26.
+            if let Some(replaced_id) = find_replace_ref(&record.refs) {
+                state.replaced_records.insert(replaced_id);
+            }
         }
     }
     Ok(())

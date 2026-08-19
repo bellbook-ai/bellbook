@@ -131,8 +131,9 @@ which has operational teeth (§7.1).
   the record with `RefUnresolved`.
 - `Replace` - this record supersedes the target. The target is never deleted;
   it enters `state.replaced_records`. Only `Summary`, `Capability`,
-  `Approval`, and `Plan` records may be replaced, and only by a record of the
-  same kind with a compatible payload.
+  `Approval`, `Plan`, and `Selection` records may be replaced, and only by a
+  record of the same kind with a compatible payload (a `Selection` Replace is
+  a *reaffirmation*, §7.1).
 
 Payload structs for every kind live in `src/record/payloads.rs`; frozen
 schema-name constants in `src/base/schema.rs`.
@@ -163,12 +164,12 @@ produced software states are proposed, judged, and chosen:
   best-of-N or a repair accept, several for population evolution.
 
 **Implementation status of the evolution rules:** the lineage, selection,
-approval-binding, and standing rules
-([`spec/v0.3-delta.md`](spec/v0.3-delta.md) D3 through D7) are not yet
-implemented. Until they land, records of these kinds are subject to the
-generic checks only (id, schema-kind map, author role, refs, canonical
-payload with the decode bounds above, evidence derivation); this paragraph
-is replaced as those rules land.
+and reaffirmation rules ([`spec/v0.3-delta.md`](spec/v0.3-delta.md) D3 and
+D4) are implemented and specified in §4.1 and §7.1. The Selection
+approval-binding rule (D5) and standing (D6, D7) are not yet implemented;
+until they land, a Selection carries no approval obligation and no receipt
+reports a standing section. This paragraph is trimmed as those remaining
+slices land.
 
 ## 3. Identity and hashing
 
@@ -335,6 +336,52 @@ round-trip (§3), and per-kind rules:
   `Verdict` nor another `Retraction`, and its author must own the target
   or be a configured administrator (§2, §7.1).
 
+The evolution kinds (spec 0.3) add the lineage and selection battery.
+Three payload fields (`CandidateData.parent`, each `SelectionData.considered`
+member, and `EvaluationData.candidate`) are **payload ids, not refs**; each
+must resolve, in the same space, to a previously accepted `Candidate`, else
+`PayloadRefUnresolved`. Retracted or tainted targets still resolve: those
+conditions surface through refs, evidence, and standing, never through
+payload lookup.
+
+- a `Candidate`'s `source` must be well-formed (`tree`, and `commit` when
+  present, lowercase hex of the length its `algo` dictates - 40 for `sha1`,
+  64 for `sha256` - and `manifest_hash` present exactly when
+  `binding == Manifest`), else `SourceBindingInvalid`. Its `basis`
+  obligations must hold, including acceptance of every `Cause` target at
+  commit position: `Root` allows at most one `Cause`, targeting an accepted
+  `Request`, and no `parent`; `Continuation` requires exactly one `Cause` to
+  an accepted `Selection` whose outcome is `Selected`, with `parent` naming a
+  member of that selected set; `Derivation` requires one or more `Cause`
+  refs, each an accepted `Candidate` or `Evaluation` (never a `Selection`),
+  and no `parent`. Violations reject with `LineageInvalid`. `Continuation`
+  uses `Cause`, not `Require`, deliberately: a candidate's evidence reflects
+  its own content and a tainted history must never block recording ongoing
+  work; the lineage consequence of the anchor's health is carried by
+  standing (§7.2, not yet implemented);
+- an `Evaluation` must `Use` the record named in its `candidate` field (the
+  epistemic subject edge, so a retracted candidate taints its evaluations),
+  else `EvaluationInvalid`; `criterion` non-empty and `outcome` within the
+  §2 bounds are enforced by the canonical payload decode (`InvalidPayload`);
+- a `Selection`'s `considered` must be non-empty, unique, and no longer than
+  `max_considered`. When the outcome is `Selected`, its `candidates` must be
+  non-empty, unique, a subset of `considered`, and named by `Require` refs
+  that are exactly the selected set (no unselected `Require` targets); each
+  winner must meet `min_binding`; and when `selection_requires_evaluation`
+  (default true) at least one **accepted** `Evaluation` must be `Use`d. Every
+  `Use`d accepted `Evaluation`'s `candidate` must appear in `considered`.
+  Only accepted evaluations count: `Use`-ing a rejected Evaluation is legal
+  (it degrades the Selection's evidence like any `Use` of bad content) but a
+  repudiated judgment is not evaluation evidence. A `None` decision
+  carries no candidate `Require` refs. Violations reject with
+  `SelectionInvalid`. The winner `Require` refs also give commit-time teeth
+  under the generic rule: a Selection whose winner is retracted or tainted at
+  commit position rejects with `RefUnresolved`;
+- a `Selection` carrying a `Replace` ref is a **reaffirmation** (§7.1): the
+  target must be a `Selection` with the same `objective`, and when
+  `reaffirmation_actors` is configured the author must be listed. Violations
+  reject with `ReaffirmationInvalid`.
+
 `VerdictData { result: Accept | Reject, reason: Option<ReasonCode> }` with
 reason codes:
 
@@ -343,11 +390,27 @@ reason codes:
 `CapabilityDenied`, `ApprovalMissing`, `ApprovalExpired`, `ActionClosed`,
 `ReplacementInvalid`, `ExternalReceiptRequired`, `EvidenceBelowThreshold`,
 `Refused`, `InvalidPayload`, `InvalidCheckpoint`, `AuthorRoleInvalid`,
-`AuthorityRefMissing`.
+`AuthorityRefMissing`, `SourceBindingInvalid`, `LineageInvalid`,
+`PayloadRefUnresolved`, `EvaluationInvalid`, `SelectionInvalid`,
+`ReaffirmationInvalid`.
 
 Signature checks follow §3.2: `SignatureMissing` for a required-but-absent
 signature, `SignatureInvalid` for any present signature that fails strict
 Ed25519 verification or was made with a key not pinned for its actor.
+
+**Selection rule knobs** (`VerifierRules`, spec 0.3): `min_binding`
+(default `Reported`, i.e. no constraint) is the minimum source binding a
+Selection's winners must carry; `Manifest` rejects a selection over
+merely reported bindings with `SelectionInvalid`. `selection_requires_evaluation`
+(default true) requires a `Selected` Selection to `Use` at least one
+`Evaluation`. `reaffirmation_actors` (default empty) is an identity
+allowlist for reaffirming Selections; empty means the Selection
+author-role row alone governs. `max_considered` (default 4096) bounds a
+Selection's `considered` list; because `considered` members carry no refs,
+this bound is independent of `max_refs_per_record` (`ValidationLimits`,
+§12), and a
+comparative Selection that `Use`s one Evaluation per considered candidate
+is still bounded by the receipt ref limit.
 
 ### 4.2 verify_log
 
@@ -626,6 +689,21 @@ any consumer of the report knows the summary's claim no longer rests on
 anything. A later summary that tried to `Use` the retracted result would
 derive `Assumed` evidence and could be rejected outright by an evidence
 threshold.
+
+**Reaffirmation (spec 0.3).** A `Selection` may `Replace` a prior
+`Selection` under the **same `objective`** (the objective string is the
+compatibility key, so hosts treat objectives as identifiers, not prose).
+This is a new decision over the same objective on evidence that currently
+stands: all the ordinary Replace semantics apply (at most one `Replace`
+ref, a same-kind accepted target, the target enters `replaced_records` and
+leaves context construction, no taint or evidence effect, and several
+records may `Replace` one target). It is append-only in the same sense as
+retraction: the earlier Selection and any retraction on its line stay
+permanently in the log. Reaffirmation exists to restore standing for a
+line whose anchor was later compromised; that restoration is a replay-time
+report dimension (§7.2) and lands with the standing slice - the rule
+implemented here is the objective-match and, when configured, the
+`reaffirmation_actors` allowlist.
 
 ## 8. State
 

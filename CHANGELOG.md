@@ -24,11 +24,19 @@ and releases follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   tree via a reported or manifest source binding), `Evaluation` (one
   criterion per record, with decode-enforced score bounds), and
   `Selection` (set-valued outcomes), with author-role rows, base evidence
-  classes, strict typed payloads, vectors, corpus cases (three accepted
-  baselines and three author-machinery rejections), and independent
-  Python validator parity. The lineage, selection, approval-binding, and
-  standing rules land next (#24, #25, #26); until then the generic checks
-  apply.
+  classes, strict typed payloads, vectors, corpus cases, and independent
+  Python validator parity.
+- Evolution lineage and selection rule battery (#24): per-kind
+  `Candidate`/`Evaluation`/`Selection` verification with six new reason
+  codes (`SourceBindingInvalid`, `LineageInvalid`, `PayloadRefUnresolved`,
+  `EvaluationInvalid`, `SelectionInvalid`, `ReaffirmationInvalid`), shared
+  payload-id resolution, source-binding well-formedness, basis obligations
+  over `Cause`/`parent`, selection winner and evaluation discipline, and
+  `Selection` reaffirmation via `Replace`. Adds the `min_binding`,
+  `selection_requires_evaluation`, `reaffirmation_actors`, and
+  `max_considered` rule knobs. Mirrored in the Python validator with a
+  triggering corpus case per check. The Selection approval-binding rule
+  and standing land next (#25, #26).
 - Machine-readable conformance corpus under `spec/conformance/v0.2/`
   (record, receipt, and malformed-document cases) with a runner that
   re-derives every outcome from the stored inputs. It triggers a case for

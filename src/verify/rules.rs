@@ -6,6 +6,7 @@ use crate::base::schema::*;
 use crate::record::author::ActorId;
 use crate::record::evidence::Evidence;
 use crate::record::kind::{AuthorType, Kind, SummaryType};
+use crate::record::payloads::BindingMode;
 use crate::record::record::SpaceId;
 use crate::record::sign::PublicKeyBytes;
 use serde::{Deserialize, Serialize};
@@ -71,6 +72,49 @@ pub struct VerifierRules {
     pub evidence_thresholds: BTreeMap<Kind, Evidence>,
     /// Maximum number of records `build_context` selects per thread.
     pub max_context_records: u32,
+    /// Minimum source binding mode a `Candidate` referenced by a Selection's
+    /// winner `Require` refs must carry. `Reported` (the default) imposes no
+    /// constraint; `Manifest` requires every selected candidate to bind a
+    /// canonical manifest, rejecting a selection over merely reported
+    /// bindings with `SelectionInvalid` (spec 0.3, delta D3).
+    #[serde(default = "default_min_binding")]
+    pub min_binding: BindingMode,
+    /// Whether a `Selected` `Selection` must `Use` at least one `Evaluation`
+    /// (default true): a decision with no evaluation evidence rejects with
+    /// `SelectionInvalid`. Set false for hosts that record ungrounded
+    /// selections deliberately (spec 0.3, delta D3).
+    #[serde(default = "default_true")]
+    pub selection_requires_evaluation: bool,
+    /// Identity allowlist for reaffirming Selections (those carrying a
+    /// `Replace` ref). When non-empty, a reaffirmation whose author is not
+    /// listed rejects with `ReaffirmationInvalid`; empty (the default) lets
+    /// the Selection author-role row alone govern (spec 0.3, delta D4).
+    #[serde(default, with = "strict_set")]
+    pub reaffirmation_actors: BTreeSet<ActorId>,
+    /// Maximum length of a `Selection`'s `considered` list (default 4096).
+    /// `considered` members are payload ids and carry no refs, so this bound
+    /// is independent of `ValidationLimits::max_refs_per_record`; a
+    /// comparative selection that `Use`s one evaluation per considered
+    /// candidate is still bounded by the receipt ref limit (spec 0.3,
+    /// delta D3).
+    #[serde(default = "default_max_considered")]
+    pub max_considered: u32,
+}
+
+/// Default `min_binding`: `Reported` imposes no minimum.
+fn default_min_binding() -> BindingMode {
+    BindingMode::Reported
+}
+
+/// Default `selection_requires_evaluation`: a Selected selection must rest
+/// on at least one evaluation.
+fn default_true() -> bool {
+    true
+}
+
+/// Default `max_considered`: matches `ValidationLimits::max_refs_per_record`.
+fn default_max_considered() -> u32 {
+    4096
 }
 
 mod strict_author_keys {
@@ -144,6 +188,10 @@ impl VerifierRules {
             allowed_summary_types: all_summary_types(),
             evidence_thresholds: BTreeMap::new(),
             max_context_records,
+            min_binding: default_min_binding(),
+            selection_requires_evaluation: default_true(),
+            reaffirmation_actors: BTreeSet::new(),
+            max_considered: default_max_considered(),
         }
     }
 
