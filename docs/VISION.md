@@ -2,9 +2,11 @@
 
 **Status: long-term direction, not current scope.** This document describes
 where Bellbook is headed if — and only if — each stage earns the next one.
-Nothing in it changes what Bellbook is today. The README, SPEC.md, and the
-published crate describe the shipped system; this document describes a
-direction. Where the two disagree about the present, the README is right.
+Nothing in it changes what Bellbook is today. SPEC.md (normative), the
+README, and the published crate describe the shipped system; this document
+describes a direction. Where this document disagrees with them about the
+present, they are right — SPEC.md first, per the repository's own
+normativity rule.
 
 ## North star
 
