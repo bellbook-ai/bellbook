@@ -72,7 +72,7 @@ The architectural principle for the road itself:
 > **Bellbook defines the missing semantics of autonomous software evolution.
 > Git can be the initial storage implementation underneath those semantics.**
 
-### Now: v0.2 (shipped)
+### v0.2 (shipped): the evidence kernel
 
 An embeddable evidence kernel: typed, content-addressed records in an
 append-only log; deterministic re-derivable verdicts; the five-class
@@ -81,14 +81,14 @@ pinning; retraction with transitive taint; portable offline-verifiable
 receipts; a language-neutral conformance corpus with an independent second
 implementation. This is the trust pillar of everything below, and it exists.
 
-### Next: v0.3 (the wedge, under design)
+### Now: v0.3 (shipped): the wedge
 
 **Verifiable candidate selection and lineage for autonomous coding agents**,
 built on top of Git, not instead of it:
 
 - Git remains the source storage substrate. A candidate binds a Git tree
   (identity) and optionally a commit (provenance).
-- `Candidate`, `Evaluation`, and `Selection` become typed record kinds; the
+- `Candidate`, `Evaluation`, and `Selection` are typed record kinds; the
   record remains the only primitive; lineage is derived from canonical
   record relationships, never materialized as a separate structure.
 - The existing kernel supplies evidence, signatures, retraction, taint, and
@@ -98,9 +98,10 @@ built on top of Git, not instead of it:
   repair-and-reevaluate loops. The semantics must serve all three without
   privileging any.
 
-The design is specified in [RFC-0001](rfcs/0001-evolution-semantics.md),
-including pre-registered validation and falsification criteria. The question
-the wedge exists to answer, honestly:
+The design is specified in [RFC-0001](rfcs/0001-evolution-semantics.md)
+(accepted), including pre-registered validation and falsification criteria,
+and is released as `bellbook` 0.3.0. The question the wedge now exists to
+answer, honestly:
 
 > Do autonomous coding systems need a native, verifiable way to represent
 > candidate states, evaluation evidence, selection decisions, and trusted
