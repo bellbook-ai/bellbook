@@ -13,7 +13,7 @@ to cross-check the specification.)
 
 ## Status
 
-Validation and reading. The writer API lands in a later stage (issue #13).
+Validation, reading, and writing (issue #13).
 
 ## Validate
 
@@ -64,6 +64,55 @@ fields (`kind`, `author_type`, `evidence`, and each ref's `type`) are the
 record's Rust variant names, e.g. `"Candidate"`, `"Provider"`, `"Reported"`,
 `"Use"`. `read` raises `ValueError` on bytes that are not a parseable
 receipt.
+
+## Write
+
+`Writer(log_dir, rules)` records evolution to a persistent, single-writer log.
+It holds the same exclusive lock and runs the same replay-on-commit the Rust
+`LogWriter` does. `rules` is a JSON string: the verifier rules the log is
+committed under, the same object a receipt embeds under `rules`.
+
+```python
+import bellbook
+
+w = bellbook.Writer("./mylog", rules_json)
+
+c0 = w.candidate(author="agent", git_tree="a1b2...")            # a Root candidate
+e0 = w.evaluate(author="agent", candidate=c0.id, criterion="builds", passed=True)
+s0 = w.select(author="agent", objective="ship it",
+              consider=[c0.id], choose=[c0.id], uses_eval=[e0.id])
+
+print(c0.id, c0.accepted, c0.reason)   # each commit returns a Commit
+
+# Export and verify in the same process:
+report = bellbook.validate(w.receipt())
+assert report.status == "clean"
+```
+
+Each of `candidate`, `evaluate`, and `select` commits one record and returns a
+`Commit` (`id`, `accepted`, `result`, `reason`). A record is durably committed
+whether accepted or rejected - a rejected record is evidence a proposal was
+refused - so `accepted` may be `False` without an exception. Statically-knowable
+payload violations (an unregistered author, a score scale above 12, an upgrade
+whose tree differs from its target) raise `ValueError` before anything is
+written.
+
+- `candidate(author, git_tree, *, git_commit=None, algo="sha1", note=None,
+  continues=None, parent=None, derives_from=None, upgrades=None, manifest=None)`
+  - basis is exactly one of `continues` (with `parent`), `derives_from`, or
+    `upgrades`; omit all three for a Root. `manifest` (a directory path) binds
+    the source by a canonical manifest hash instead of a reported tree.
+- `evaluate(author, candidate, criterion, *, passed=False, failed=False,
+  score=None, scale=None, procedure=None, uses=None)` - exactly one of
+  `passed`, `failed`, or a `score` (with `scale`, a decimal exponent 0-12).
+- `select(author, objective, consider, *, choose=None, uses_eval=None,
+  none=False, replaces=None, rationale=None)` - exactly one of `choose` (with
+  `uses_eval`) or `none=True`; `replaces` reaffirms a prior selection.
+
+The writer is deliberately single-writer (SPEC 5.1): it holds an exclusive lock
+for the log directory, so a second `Writer` on the same directory raises. Other
+useful members: `w.head` (current head, hex), `w.records` (the committed
+records, as `Record`s), `len(w)`, and `w.receipt()` (portable receipt bytes).
 
 ## Build from source
 

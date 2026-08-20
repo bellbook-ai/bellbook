@@ -7,8 +7,11 @@
 //! - `bellbook.read(data: bytes) -> Receipt` parses a receipt for inspection
 //!   (records, kinds, authors, evidence, refs, payloads). Reading does not
 //!   verify; call `validate` for the decision.
-//!
-//! The writer API lands in a later stage.
+//! - `bellbook.Writer(log_dir, rules)` records evolution to a persistent,
+//!   single-writer log: `candidate`, `evaluate`, and `select` each commit one
+//!   record and return a [`Commit`]. The writer holds the same exclusive lock
+//!   and runs the same replay-on-commit the Rust `LogWriter` does. Export the
+//!   log with `writer.receipt()` and feed it straight back to `validate`.
 
 // `#[pyfunction]` generates a result conversion that clippy reads as a
 // useless `PyErr -> PyErr` conversion for any `PyResult`-returning function.
@@ -16,12 +19,18 @@
 #![allow(clippy::useless_conversion)]
 
 use bellbook_core::{
-    hex_encode, validate as core_validate, Receipt as CoreReceipt, Record as CoreRecord,
-    Report as CoreReport, ValidationStatus,
+    decode, encode, hex_decode, hex_encode, manifest_from_dir, manifest_hash, schema_id,
+    validate as core_validate, verify_and_build_state, Author, BindingMode, CandidateBasis,
+    CandidateData, EvaluationData, EvaluationOutcome, GitSource, Kind, LogWriter, Proposal,
+    Receipt as CoreReceipt, Record as CoreRecord, RecordId, Ref, RefType, Report as CoreReport,
+    ScoredValue, SelectionData, SelectionOutcome, SourceAlgo, SourceBinding, State, ValidationStatus,
+    VerdictResult, VerifierRules, SCHEMA_CANDIDATE, SCHEMA_EVALUATION, SCHEMA_SELECTION,
 };
-use pyo3::exceptions::PyValueError;
+use pyo3::exceptions::{PyRuntimeError, PyValueError};
 use pyo3::prelude::*;
-use pyo3::types::PyDict;
+use pyo3::types::{PyBytes, PyDict};
+use std::collections::BTreeMap;
+use std::path::Path;
 
 /// The result of validating a receipt. A read-only view over the crate's
 /// `Report`; every field is re-derived by validation, never trusted from the
@@ -299,6 +308,484 @@ fn read(data: &[u8]) -> PyResult<Receipt> {
         .map_err(|e| PyValueError::new_err(format!("not a parseable receipt: {e}")))
 }
 
+// ---------------------------------------------------------------------------
+// Writer (persistent, single-writer log)
+// ---------------------------------------------------------------------------
+
+/// The outcome of committing one record. The record is durably appended and
+/// immediately judged by replay. A *rejected* record is still committed - it
+/// is durable evidence that a proposal was refused - so `accepted` is `False`
+/// and `reason` carries the verifier's reason code; the writer does not raise.
+#[pyclass(frozen, name = "Commit", module = "bellbook")]
+struct Commit {
+    /// Content-address id of the committed record, lowercase hex.
+    #[pyo3(get)]
+    id: String,
+    /// `True` if the record was accepted by replay, `False` if rejected.
+    #[pyo3(get)]
+    accepted: bool,
+    /// `"accept"` or `"reject"`.
+    #[pyo3(get)]
+    result: String,
+    /// Verifier reason code when the record was rejected.
+    #[pyo3(get)]
+    reason: Option<String>,
+}
+
+#[pymethods]
+impl Commit {
+    fn __repr__(&self) -> String {
+        format!(
+            "Commit(id={}..., accepted={}, reason={:?})",
+            &self.id[..12.min(self.id.len())],
+            if self.accepted { "True" } else { "False" },
+            self.reason
+        )
+    }
+}
+
+fn parse_id(hex: &str) -> PyResult<RecordId> {
+    hex_decode(hex).ok_or_else(|| PyValueError::new_err(format!("invalid record id {hex:?}")))
+}
+
+/// Encode a payload, then decode it back so the payload's `TryFrom` invariants
+/// (score bounds, non-empty criterion/objective) are checked before the write,
+/// exactly as the CLI does. Without this a statically-knowable violation would
+/// serialize, commit, and only then reject as a durable record with an opaque
+/// reason; here it is a clean `ValueError` and nothing is written.
+fn checked_encode<T>(value: &T) -> PyResult<Vec<u8>>
+where
+    T: serde::Serialize + serde::de::DeserializeOwned,
+{
+    let bytes = encode(value).map_err(|e| PyValueError::new_err(format!("{e}")))?;
+    decode::<T>(&bytes).map_err(|e| PyValueError::new_err(format!("invalid payload: {e}")))?;
+    Ok(bytes)
+}
+
+/// Records evolution to a persistent, single-writer log. A thin wrapper over
+/// the crate's `LogWriter`: it holds the same exclusive `.lock`, re-verifies
+/// the existing log on open, and replays every commit. Rules are the verifier
+/// rules the log is committed under, given as a JSON string (the same object a
+/// receipt embeds under `rules`).
+///
+/// Concurrency (SPEC 5.1): the log is deliberately single-writer. Generate
+/// candidates concurrently, then record them serially through one `Writer`.
+#[pyclass(unsendable, name = "Writer", module = "bellbook")]
+struct Writer {
+    inner: LogWriter,
+    rules: VerifierRules,
+    state: State,
+}
+
+impl Writer {
+    /// Resolve an actor id to an `Author` via the rules' `author_roles`. The
+    /// declared role on a record is never trusted; the writer binds the role
+    /// from the rules, so an unregistered author is refused before any write.
+    fn resolve_author(&self, id: &str) -> PyResult<Author> {
+        let type_ = self.rules.author_roles.get(id).copied().ok_or_else(|| {
+            PyValueError::new_err(format!(
+                "author {id:?} is not registered in the rules' author_roles"
+            ))
+        })?;
+        Ok(Author {
+            id: id.to_string(),
+            type_,
+            signature: None,
+        })
+    }
+
+    fn do_commit(
+        &mut self,
+        author: Author,
+        kind: Kind,
+        schema: bellbook_core::SchemaId,
+        data: Vec<u8>,
+        refs: Vec<Ref>,
+    ) -> PyResult<Commit> {
+        let proposal = Proposal {
+            space: self.rules.space,
+            // Single-thread writer: thread == space id, as the CLI does.
+            thread: self.rules.space,
+            author,
+            kind,
+            schema,
+            data,
+            refs,
+        };
+        let (id, verdict) = self
+            .inner
+            .commit(proposal, &self.rules, &mut self.state)
+            .map_err(|e| PyRuntimeError::new_err(format!("commit failed: {e}")))?;
+        let accepted = verdict.result == VerdictResult::Accept;
+        Ok(Commit {
+            id: hex_encode(&id),
+            accepted,
+            result: if accepted { "accept" } else { "reject" }.to_string(),
+            reason: verdict.reason.map(|r| format!("{r:?}")),
+        })
+    }
+}
+
+#[pymethods]
+impl Writer {
+    /// Open (or create) the log at `log_dir` under `rules` (a JSON string).
+    /// Rebuilds and re-verifies state from the committed records; raises if the
+    /// existing log does not verify, or if another writer holds the lock.
+    #[new]
+    #[pyo3(signature = (log_dir, rules))]
+    fn new(log_dir: &str, rules: &str) -> PyResult<Self> {
+        let rules: VerifierRules = serde_json::from_str(rules)
+            .map_err(|e| PyValueError::new_err(format!("invalid rules JSON: {e}")))?;
+        let inner = LogWriter::open(Path::new(log_dir), &rules)
+            .map_err(|e| PyRuntimeError::new_err(format!("cannot open log: {e}")))?;
+        let state = verify_and_build_state(inner.records(), &rules).map_err(|_| {
+            PyValueError::new_err("the existing log does not verify under these rules")
+        })?;
+        Ok(Writer {
+            inner,
+            rules,
+            state,
+        })
+    }
+
+    /// Record a Candidate (a proposed source state). Basis is chosen by exactly
+    /// one of `continues` (with `parent`), `derives_from`, or `upgrades`;
+    /// omitting all three records a Root. `algo` is `"sha1"` (default) or
+    /// `"sha256"`. Passing `manifest` (a directory path) binds the source by a
+    /// canonical manifest hash; otherwise the git tree is reported.
+    #[pyo3(signature = (author, git_tree, *, git_commit=None, algo="sha1", note=None,
+        continues=None, parent=None, derives_from=None, upgrades=None, manifest=None))]
+    #[allow(clippy::too_many_arguments)]
+    fn candidate(
+        &mut self,
+        author: &str,
+        git_tree: &str,
+        git_commit: Option<String>,
+        algo: &str,
+        note: Option<String>,
+        continues: Option<&str>,
+        parent: Option<&str>,
+        derives_from: Option<Vec<String>>,
+        upgrades: Option<&str>,
+        manifest: Option<&str>,
+    ) -> PyResult<Commit> {
+        let author = self.resolve_author(author)?;
+        let algo = match algo {
+            "sha1" => SourceAlgo::Sha1,
+            "sha256" => SourceAlgo::Sha256,
+            other => return Err(PyValueError::new_err(format!("invalid algo {other:?}"))),
+        };
+
+        // Basis selection is mutually exclusive.
+        let n_basis = [continues.is_some(), derives_from.is_some(), upgrades.is_some()]
+            .iter()
+            .filter(|b| **b)
+            .count();
+        if n_basis > 1 {
+            return Err(PyValueError::new_err(
+                "continues, derives_from, and upgrades are mutually exclusive",
+            ));
+        }
+        // `parent` names the continued-from candidate and is meaningful only
+        // for a continuation; refuse it elsewhere rather than drop stated intent.
+        if continues.is_none() && parent.is_some() {
+            return Err(PyValueError::new_err("parent is only valid with continues"));
+        }
+
+        let (basis, parent_id, refs) = if let Some(sel) = continues {
+            let parent = parent.ok_or_else(|| {
+                PyValueError::new_err("continues requires parent (the continued candidate id)")
+            })?;
+            (
+                CandidateBasis::Continuation,
+                Some(parse_id(parent)?),
+                vec![Ref {
+                    type_: RefType::Cause,
+                    target: parse_id(sel)?,
+                }],
+            )
+        } else if let Some(ids) = &derives_from {
+            if ids.is_empty() {
+                return Err(PyValueError::new_err("derives_from requires at least one id"));
+            }
+            let refs = ids
+                .iter()
+                .map(|s| {
+                    parse_id(s).map(|t| Ref {
+                        type_: RefType::Cause,
+                        target: t,
+                    })
+                })
+                .collect::<PyResult<Vec<_>>>()?;
+            (CandidateBasis::Derivation, None, refs)
+        } else if let Some(target_hex) = upgrades {
+            // Binding upgrade: a Derivation over the target with the SAME tree.
+            let target = parse_id(target_hex)?;
+            let target_data = self
+                .inner
+                .records()
+                .iter()
+                .find(|r| r.id == target && r.kind == Kind::Candidate)
+                .and_then(|r| decode::<CandidateData>(&r.data).ok())
+                .ok_or_else(|| {
+                    PyValueError::new_err(format!(
+                        "upgrades target {target_hex:?} is not a Candidate in this log"
+                    ))
+                })?;
+            if !self.state.accepted_records.contains(&target) {
+                return Err(PyValueError::new_err(format!(
+                    "upgrades target {target_hex:?} is not an accepted Candidate"
+                )));
+            }
+            if self.state.retracted_records.contains(&target) {
+                return Err(PyValueError::new_err(format!(
+                    "upgrades target {target_hex:?} is retracted; upgrade a live candidate"
+                )));
+            }
+            if target_data.source.git.tree != git_tree {
+                return Err(PyValueError::new_err(format!(
+                    "refusing upgrade: git_tree {git_tree:?} differs from the target's tree {:?}",
+                    target_data.source.git.tree
+                )));
+            }
+            (
+                CandidateBasis::Derivation,
+                None,
+                vec![Ref {
+                    type_: RefType::Cause,
+                    target,
+                }],
+            )
+        } else {
+            (CandidateBasis::Root, None, Vec::new())
+        };
+
+        // A manifest binding when `manifest` is given; reported otherwise.
+        let (manifest_hash_val, binding) = match manifest {
+            Some(path) => {
+                let entries = manifest_from_dir(Path::new(path), &BTreeMap::new())
+                    .map_err(|e| PyValueError::new_err(format!("cannot walk tree {path}: {e}")))?;
+                let h = manifest_hash(&entries).ok_or_else(|| {
+                    PyValueError::new_err("manifest has duplicate paths".to_string())
+                })?;
+                (Some(h), BindingMode::Manifest)
+            }
+            None => (None, BindingMode::Reported),
+        };
+
+        let data = checked_encode(&CandidateData {
+            source: SourceBinding {
+                git: GitSource {
+                    algo,
+                    tree: git_tree.to_string(),
+                    commit: git_commit,
+                },
+                manifest_hash: manifest_hash_val,
+                binding,
+            },
+            basis,
+            parent: parent_id,
+            note,
+        })?;
+        self.do_commit(
+            author,
+            Kind::Candidate,
+            schema_id(SCHEMA_CANDIDATE),
+            data,
+            refs,
+        )
+    }
+
+    /// Record an Evaluation of a candidate. Exactly one of `passed`, `failed`,
+    /// or a `score` (with `scale`) states the outcome. The evaluation Uses its
+    /// candidate, plus any extra `uses` ids.
+    #[pyo3(signature = (author, candidate, criterion, *, passed=false, failed=false,
+        score=None, scale=None, procedure=None, uses=None))]
+    #[allow(clippy::too_many_arguments)]
+    fn evaluate(
+        &mut self,
+        author: &str,
+        candidate: &str,
+        criterion: &str,
+        passed: bool,
+        failed: bool,
+        score: Option<i64>,
+        scale: Option<u8>,
+        procedure: Option<String>,
+        uses: Option<Vec<String>>,
+    ) -> PyResult<Commit> {
+        let author = self.resolve_author(author)?;
+        let candidate = parse_id(candidate)?;
+
+        let outcome = match (passed, failed, score) {
+            (true, false, None) => EvaluationOutcome::Passed,
+            (false, true, None) => EvaluationOutcome::Failed,
+            (false, false, Some(value)) => {
+                let scale = scale.ok_or_else(|| {
+                    PyValueError::new_err("score requires scale (the denominator)")
+                })?;
+                EvaluationOutcome::Scored(ScoredValue { value, scale })
+            }
+            _ => {
+                return Err(PyValueError::new_err(
+                    "exactly one of passed, failed, or score is required",
+                ))
+            }
+        };
+
+        // The evaluation must Use its candidate, plus any extra uses refs.
+        let mut refs = vec![Ref {
+            type_: RefType::Use,
+            target: candidate,
+        }];
+        if let Some(extra) = &uses {
+            for s in extra {
+                refs.push(Ref {
+                    type_: RefType::Use,
+                    target: parse_id(s)?,
+                });
+            }
+        }
+
+        let data = checked_encode(&EvaluationData {
+            candidate,
+            criterion: criterion.to_string(),
+            procedure,
+            outcome,
+        })?;
+        self.do_commit(
+            author,
+            Kind::Evaluation,
+            schema_id(SCHEMA_EVALUATION),
+            data,
+            refs,
+        )
+    }
+
+    /// Record a Selection over candidates, or a reaffirmation. Exactly one of
+    /// `choose` (with `uses_eval`) or `none=True` states the outcome. `replaces`
+    /// adds a Replace ref to a prior Selection (a reaffirmation).
+    #[pyo3(signature = (author, objective, consider, *, choose=None, uses_eval=None,
+        none=false, replaces=None, rationale=None))]
+    #[allow(clippy::too_many_arguments)]
+    fn select(
+        &mut self,
+        author: &str,
+        objective: &str,
+        consider: Vec<String>,
+        choose: Option<Vec<String>>,
+        uses_eval: Option<Vec<String>>,
+        none: bool,
+        replaces: Option<&str>,
+        rationale: Option<String>,
+    ) -> PyResult<Commit> {
+        let author = self.resolve_author(author)?;
+        if consider.is_empty() {
+            return Err(PyValueError::new_err(
+                "consider requires at least one candidate id",
+            ));
+        }
+        let considered = consider
+            .iter()
+            .map(|s| parse_id(s))
+            .collect::<PyResult<Vec<_>>>()?;
+
+        if none == choose.is_some() {
+            return Err(PyValueError::new_err(
+                "exactly one of choose or none=True is required",
+            ));
+        }
+
+        let mut refs = Vec::new();
+        let outcome = if none {
+            SelectionOutcome::None
+        } else {
+            let winners = choose
+                .unwrap()
+                .iter()
+                .map(|s| parse_id(s))
+                .collect::<PyResult<Vec<_>>>()?;
+            for w in &winners {
+                refs.push(Ref {
+                    type_: RefType::Require,
+                    target: *w,
+                });
+            }
+            let evals = uses_eval.ok_or_else(|| {
+                PyValueError::new_err("choose requires uses_eval with at least one evaluation")
+            })?;
+            if evals.is_empty() {
+                return Err(PyValueError::new_err("uses_eval requires at least one evaluation"));
+            }
+            for s in &evals {
+                refs.push(Ref {
+                    type_: RefType::Use,
+                    target: parse_id(s)?,
+                });
+            }
+            SelectionOutcome::Selected {
+                candidates: winners,
+            }
+        };
+
+        if let Some(sel) = replaces {
+            refs.push(Ref {
+                type_: RefType::Replace,
+                target: parse_id(sel)?,
+            });
+        }
+
+        let data = checked_encode(&SelectionData {
+            objective: objective.to_string(),
+            considered,
+            outcome,
+            rationale,
+        })?;
+        self.do_commit(
+            author,
+            Kind::Selection,
+            schema_id(SCHEMA_SELECTION),
+            data,
+            refs,
+        )
+    }
+
+    /// The current head id, lowercase hex (all-zero for an empty log).
+    #[getter]
+    fn head(&self) -> String {
+        hex_encode(&self.inner.head())
+    }
+
+    /// The committed records in order (subjects and verdicts).
+    #[getter]
+    fn records(&self) -> Vec<Record> {
+        self.inner
+            .records()
+            .iter()
+            .cloned()
+            .map(|inner| Record { inner })
+            .collect()
+    }
+
+    /// Number of committed records (subjects and verdicts).
+    fn __len__(&self) -> usize {
+        self.inner.records().len()
+    }
+
+    /// Export the log as a portable receipt (canonical JSON bytes). Feed it to
+    /// `validate` or `read`, or hand it to any independent verifier.
+    fn receipt<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyBytes>> {
+        let bytes = CoreReceipt::new(self.inner.records(), &self.rules)
+            .to_bytes()
+            .map_err(|e| PyRuntimeError::new_err(format!("cannot serialize receipt: {e}")))?;
+        Ok(PyBytes::new_bound(py, &bytes))
+    }
+
+    fn __repr__(&self) -> String {
+        format!("Writer(records={})", self.inner.records().len())
+    }
+}
+
 #[pymodule]
 fn bellbook(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add("__version__", env!("CARGO_PKG_VERSION"))?;
@@ -307,5 +794,7 @@ fn bellbook(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<Report>()?;
     m.add_class::<Receipt>()?;
     m.add_class::<Record>()?;
+    m.add_class::<Writer>()?;
+    m.add_class::<Commit>()?;
     Ok(())
 }
