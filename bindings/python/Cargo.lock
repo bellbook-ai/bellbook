@@ -17,6 +17,8 @@ checksum = "2af50177e190e07a26ab74f8b1efbfe2ef87da2116221318cb1c2e82baf7de06"
 [[package]]
 name = "bellbook"
 version = "0.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "dfde4f3518d497a90cbc3fef706b6269c60536fffa743d27482d785452ae9bd6"
 dependencies = [
  "ed25519-dalek",
  "ryu-js",
