@@ -25,23 +25,26 @@ evaluation evidence, and *which* you chose. It never ranks or scores for you.
 
 Verification is relative to a **rules** object - the trust policy (which actor
 ids may author, minimum evidence, and so on). It is embedded in every receipt,
-so a verifier re-derives every decision against it. A minimal starter is
-committed at [`docs/quickstart/rules.json`](quickstart/rules.json); copy it and
-edit the `author_roles` map to your own actor ids:
+so a verifier re-derives every decision against it. Generate a starter with
+`rules init`, binding each actor id to a role
+(`user|provider|system|executor|verifier`):
 
-```json
-"author_roles":{"agent":"Provider","evaluator":"Provider"}
+```sh
+bellbook rules init --author agent:provider --author evaluator:provider --out rules.json
 ```
 
-(Generating a starter file is more ceremony than it should be; a `bellbook
-rules init` command is tracked in #70.)
+That is the one file both surfaces below load. (A ready-made
+[`docs/quickstart/rules.json`](quickstart/rules.json) is also committed if you
+prefer to copy one; from Python you can skip the file entirely with
+`bellbook.default_rules(...)`, shown below.)
 
 ## Python
 
 ```python
 import bellbook
 
-rules = open("rules.json").read()
+# build the rules inline (no file needed), or: rules = open("rules.json").read()
+rules = bellbook.default_rules({"agent": "provider", "evaluator": "provider"})
 w = bellbook.Writer("./mylog", rules)
 
 # best-of-N: three candidates, one evaluation each
@@ -96,10 +99,13 @@ bellbook select --log $LOG --rules $RULES --author agent --objective best-of-n \
 bellbook lineage --log $LOG --rules $RULES $c1
 ```
 
-Offline validation of a receipt is `bellbook validate receipt.json`. Exporting
-a receipt from a CLI-written log currently goes through the Python or Rust API
-(`Writer.receipt()` above, or `Receipt::new(...).to_bytes()`); a `bellbook
-export` command to close that gap is tracked in #71.
+Export the log as a portable receipt and validate it - the whole
+record -> receipt -> validate loop stays in the CLI, no binding required:
+
+```sh
+bellbook export --log $LOG --rules $RULES --out receipt.json
+bellbook validate receipt.json          # -> CLEAN
+```
 
 ## What Clean means (and does not)
 

@@ -30,6 +30,8 @@ jobs:
         run: cargo test --no-default-features --lib --locked
       - name: Example (quickstart)
         run: cargo run --example quickstart --locked
+      - name: Example (export receipt)
+        run: cargo run --example export_receipt --locked
       - name: Example (broken benchmark)
         run: cargo run --example broken_benchmark --locked
       - name: Example (iterative evolution)

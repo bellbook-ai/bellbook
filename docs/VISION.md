@@ -100,7 +100,7 @@ built on top of Git, not instead of it:
 
 The design is specified in [RFC-0001](rfcs/0001-evolution-semantics.md)
 (accepted), including pre-registered validation and falsification criteria,
-and is released as `bellbook` 0.3.0. The question the wedge now exists to
+and was first released as `bellbook` 0.3.0. The question the wedge now exists to
 answer, honestly:
 
 > Do autonomous coding systems need a native, verifiable way to represent

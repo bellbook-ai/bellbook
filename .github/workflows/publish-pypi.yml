@@ -27,8 +27,30 @@ permissions:
   contents: read
 
 jobs:
+  # Guard against tagging a release without bumping the version: on a tag push,
+  # the tag (minus the leading v) must equal the pyproject version, or nothing
+  # builds or publishes. Without this, a stale pyproject would rebuild the old
+  # version and skip-existing would swallow it, publishing nothing while going
+  # green. (workflow_dispatch has no tag, so the check is a no-op there.)
+  verify-version:
+    name: verify tag matches version
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Tag must match the pyproject version
+        if: github.ref_type == 'tag'
+        run: |
+          tag="${GITHUB_REF_NAME#v}"
+          pyproj=$(grep -m1 '^version = ' bindings/python/pyproject.toml | sed 's/.*"\(.*\)".*/\1/')
+          echo "tag=$tag pyproject=$pyproj"
+          if [ "$tag" != "$pyproj" ]; then
+            echo "::error::tag v$tag does not match pyproject version $pyproj - bump the version before tagging"
+            exit 1
+          fi
+
   wheels:
     name: wheel (${{ matrix.os }})
+    needs: verify-version
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -51,6 +73,7 @@ jobs:
 
   sdist:
     name: sdist
+    needs: verify-version
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1

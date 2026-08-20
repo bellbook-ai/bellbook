@@ -219,12 +219,15 @@ New here? [**Quickstart: a verifiable receipt from a best-of-N harness**](docs/q
 takes you from a best-of-N loop to a portable receipt in a few minutes, with
 both the CLI and the Python package side by side.
 
-The same binary records the v0.3 evolution kinds against a persistent log.
-Each command commits one record and prints its id; `--json` prints
-`{ id, result, reason? }` that round-trips, so pipelines can chain ids
-without scraping text.
+The same binary records the v0.3 evolution kinds against a persistent log,
+then bundles the log into a receipt - the whole record -> receipt -> validate
+loop is CLI-only, no language binding required. `rules init` writes a starter
+rule set so you never hand-author one. Each recording command commits one
+record and prints its id; `--json` prints `{ id, result, reason? }` that
+round-trips, so pipelines can chain ids without scraping text.
 
 ```
+bellbook rules init    --author <id>:<role>... [--max-context <n>] [--out <file>]
 bellbook candidate add --log <dir> --rules <file> --author <id> \
          --git-tree <oid> [--continues <sel> --parent <cand>
                            | --derives-from <id>... | --upgrades <cand>]
@@ -233,6 +236,7 @@ bellbook eval add      --log <dir> --rules <file> --author <id> \
 bellbook select        --log <dir> --rules <file> --author <id> --objective <s> \
          --consider <id>... (--choose <id>... --uses-eval <id>... | --none) [--replaces <sel>]
 bellbook lineage       --log <dir> --rules <file> <id> [--json]
+bellbook export        --log <dir> --rules <file> [--out <file>]   # log -> receipt
 ```
 
 The grammar above shows the load-bearing flags; optional ones
@@ -281,7 +285,7 @@ evolution kinds to a log and exports a receipt. See
 
 ## Status
 
-**The published release is 0.3.0, implementing spec v0.3 (evolution
+**The published release is 0.4.0, implementing spec v0.3 (evolution
 semantics: Candidate, Evaluation, and Selection records with replay-derived
 lineage standing).** SPEC.md is the authority for what v0.3 means (design
 notes in [`spec/v0.3-delta.md`](spec/v0.3-delta.md)). The previous epoch,
@@ -299,9 +303,10 @@ source binding, the selection and reaffirmation rule battery, and the
 replay-derived standing section, derived state with incremental/full-build
 equivalence, checkpoints, the crash-safe writer with idempotent
 compare-and-append, and portable receipts with the offline `bellbook
-validate` CLI and the `candidate`/`eval`/`select`/`lineage` recording
-commands - fully tested (every rejection reason code has a triggering
-test), clippy-clean, no `unsafe`, no panics in library code.
+validate` CLI, the `candidate`/`eval`/`select`/`lineage` recording
+commands, and `rules init` / `export` to generate a starter rule set and
+bundle a log into a receipt - fully tested (every rejection reason code has a
+triggering test), clippy-clean, no `unsafe`, no panics in library code.
 
 The repository also carries a language-neutral **conformance corpus**
 (`spec/conformance/v0.3/`: record, malformed, receipt-replay, and standing
@@ -326,13 +331,10 @@ Open work, **not implemented**:
 3. **Profile-aware receipts** - receipts declare claimed profiles;
    the validator reports per-profile conformance instead of trusting
    the declaration.
-4. **Python bindings** - PyO3/maturin wheels wrapping this same core
-   (validation-first), once the current spec epoch is frozen by a release.
-5. **Interop mapping** - a short document mapping Bellbook records
-   outward to OpenTelemetry logs, W3C PROV, in-toto statements, and
-   SCITT receipts, rather than inventing adjacent layers (the boundary
-   definitions are already in
-   [docs/INTEROPERABILITY.md](docs/INTEROPERABILITY.md)).
+
+The Python bindings (`pip install bellbook`) and the outward standards
+mapping ([docs/STANDARDS.md](docs/STANDARDS.md): OpenTelemetry, W3C PROV,
+in-toto, SCITT) have since shipped.
 
 ## License
 

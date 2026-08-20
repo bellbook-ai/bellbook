@@ -72,9 +72,15 @@ It holds the same exclusive lock and runs the same replay-on-commit the Rust
 `LogWriter` does. `rules` is a JSON string: the verifier rules the log is
 committed under, the same object a receipt embeds under `rules`.
 
+`default_rules(authors, max_context=200)` builds that string for you - the
+Python counterpart to `bellbook rules init` - so you never hand-author a rules
+object. `authors` maps an actor id to a role (`user`, `provider`, `system`,
+`executor`, or `verifier`, case-insensitive):
+
 ```python
 import bellbook
 
+rules_json = bellbook.default_rules({"agent": "provider", "evaluator": "provider"})
 w = bellbook.Writer("./mylog", rules_json)
 
 c0 = w.candidate(author="agent", git_tree="a1b2...")            # a Root candidate
@@ -122,7 +128,8 @@ maturin develop            # build and install into the current venv
 pytest bindings/python/tests
 ```
 
-Wheels are built and published in CI (later stages); this is for local
-development.
+Prebuilt wheels (Linux, macOS, Windows) are published to PyPI, so
+`pip install bellbook` needs no Rust toolchain; the steps above are for local
+development against the working tree.
 
 Licensed under MIT OR Apache-2.0.

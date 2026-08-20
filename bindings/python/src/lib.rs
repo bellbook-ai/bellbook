@@ -19,12 +19,13 @@
 #![allow(clippy::useless_conversion)]
 
 use bellbook_core::{
-    decode, encode, hex_decode, hex_encode, manifest_from_dir, manifest_hash, schema_id,
-    validate as core_validate, verify_and_build_state, Author, BindingMode, CandidateBasis,
-    CandidateData, EvaluationData, EvaluationOutcome, GitSource, Kind, LogWriter, Proposal,
-    Receipt as CoreReceipt, Record as CoreRecord, RecordId, Ref, RefType, Report as CoreReport,
-    ScoredValue, SelectionData, SelectionOutcome, SourceAlgo, SourceBinding, State, ValidationStatus,
-    VerdictResult, VerifierRules, SCHEMA_CANDIDATE, SCHEMA_EVALUATION, SCHEMA_SELECTION,
+    decode, default_space, encode, hex_decode, hex_encode, manifest_from_dir, manifest_hash,
+    schema_id, validate as core_validate, verify_and_build_state, Author, AuthorType, BindingMode,
+    CandidateBasis, CandidateData, EvaluationData, EvaluationOutcome, GitSource, Kind, LogWriter,
+    Proposal, Receipt as CoreReceipt, Record as CoreRecord, RecordId, Ref, RefType,
+    Report as CoreReport, ScoredValue, SelectionData, SelectionOutcome, SourceAlgo, SourceBinding,
+    State, ValidationStatus, VerdictResult, VerifierRules, SCHEMA_CANDIDATE, SCHEMA_EVALUATION,
+    SCHEMA_SELECTION,
 };
 use pyo3::exceptions::{PyRuntimeError, PyValueError};
 use pyo3::prelude::*;
@@ -308,6 +309,48 @@ fn read(data: &[u8]) -> PyResult<Receipt> {
         .map_err(|e| PyValueError::new_err(format!("not a parseable receipt: {e}")))
 }
 
+fn parse_role(s: &str) -> PyResult<AuthorType> {
+    match s.to_ascii_lowercase().as_str() {
+        "user" => Ok(AuthorType::User),
+        "provider" => Ok(AuthorType::Provider),
+        "system" => Ok(AuthorType::System),
+        "executor" => Ok(AuthorType::Executor),
+        "verifier" => Ok(AuthorType::Verifier),
+        other => Err(PyValueError::new_err(format!(
+            "invalid role {other:?} (user|provider|system|executor|verifier)"
+        ))),
+    }
+}
+
+/// Build a starter verifier-rules JSON string, binding each actor id to a role.
+/// This is the Python counterpart to `bellbook rules init`: it removes the need
+/// to hand-author a rules object before opening a [`Writer`]. `authors` maps an
+/// actor id to one of `user`, `provider`, `system`, `executor`, or `verifier`
+/// (case-insensitive). The result is a JSON string ready to pass to `Writer`.
+///
+/// ```python
+/// rules = bellbook.default_rules({"agent": "provider", "evaluator": "provider"})
+/// w = bellbook.Writer("./log", rules)
+/// ```
+#[pyfunction]
+#[pyo3(signature = (authors, max_context=200))]
+fn default_rules(authors: BTreeMap<String, String>, max_context: u32) -> PyResult<String> {
+    if authors.is_empty() {
+        return Err(PyValueError::new_err(
+            "default_rules needs at least one author binding",
+        ));
+    }
+    let mut rules = VerifierRules::new(default_space(), max_context);
+    for (id, role) in &authors {
+        if id.is_empty() {
+            return Err(PyValueError::new_err("author id must be non-empty"));
+        }
+        rules = rules.with_author_role(id.clone(), parse_role(role)?);
+    }
+    serde_json::to_string(&rules)
+        .map_err(|e| PyRuntimeError::new_err(format!("cannot serialize rules: {e}")))
+}
+
 // ---------------------------------------------------------------------------
 // Writer (persistent, single-writer log)
 // ---------------------------------------------------------------------------
@@ -477,10 +520,14 @@ impl Writer {
         };
 
         // Basis selection is mutually exclusive.
-        let n_basis = [continues.is_some(), derives_from.is_some(), upgrades.is_some()]
-            .iter()
-            .filter(|b| **b)
-            .count();
+        let n_basis = [
+            continues.is_some(),
+            derives_from.is_some(),
+            upgrades.is_some(),
+        ]
+        .iter()
+        .filter(|b| **b)
+        .count();
         if n_basis > 1 {
             return Err(PyValueError::new_err(
                 "continues, derives_from, and upgrades are mutually exclusive",
@@ -506,7 +553,9 @@ impl Writer {
             )
         } else if let Some(ids) = &derives_from {
             if ids.is_empty() {
-                return Err(PyValueError::new_err("derives_from requires at least one id"));
+                return Err(PyValueError::new_err(
+                    "derives_from requires at least one id",
+                ));
             }
             let refs = ids
                 .iter()
@@ -715,7 +764,9 @@ impl Writer {
                 PyValueError::new_err("choose requires uses_eval with at least one evaluation")
             })?;
             if evals.is_empty() {
-                return Err(PyValueError::new_err("uses_eval requires at least one evaluation"));
+                return Err(PyValueError::new_err(
+                    "uses_eval requires at least one evaluation",
+                ));
             }
             for s in &evals {
                 refs.push(Ref {
@@ -791,6 +842,7 @@ fn bellbook(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add("__version__", env!("CARGO_PKG_VERSION"))?;
     m.add_function(wrap_pyfunction!(validate, m)?)?;
     m.add_function(wrap_pyfunction!(read, m)?)?;
+    m.add_function(wrap_pyfunction!(default_rules, m)?)?;
     m.add_class::<Report>()?;
     m.add_class::<Receipt>()?;
     m.add_class::<Record>()?;
