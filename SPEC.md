@@ -376,7 +376,7 @@ payload lookup.
   uses `Cause`, not `Require`, deliberately: a candidate's evidence reflects
   its own content and a tainted history must never block recording ongoing
   work; the lineage consequence of the anchor's health is carried by
-  standing (§7.2, not yet implemented);
+  standing (§7.2);
 - an `Evaluation` must `Use` the record named in its `candidate` field (the
   epistemic subject edge, so a retracted candidate taints its evaluations),
   else `EvaluationInvalid`; `criterion` non-empty and `outcome` within the
@@ -1043,9 +1043,9 @@ Future receipt profiles should prevent silence from being mistaken for
 evidence. In particular, a profile that introduces required claims or
 verification attempts should define explicit representations for
 conflicting evidence, checks that did not run or failed open, and values
-that were not measured. The v0.2 core has no `Inconclusive` result,
+that were not measured. The current core has no `Inconclusive` result,
 Requirement record, or verification-attempt record, so these principles
-are intentionally not part of v0.2 conformance.
+are intentionally not part of core conformance.
 
 Existing core mechanisms still preserve useful facts without erasure:
 refusals record work that was not performed, rejected records remain in
@@ -1111,6 +1111,28 @@ reference implementation's own test suite exercises instead.
   integration instruments its runtime, which is outside this spec.
   (External anchoring, §11.1, bounds *when* history could have been
   edited; it cannot conjure records that were never written.)
+- **A receipt carries no source contents.** A `Candidate`'s Git OIDs are
+  pointers whose resolution requires the repository; the receipt proves the
+  recorded process (which candidates, evaluations, and selections existed,
+  under what objective, and what is retracted, tainted, or
+  standing-compromised), not the bytes of any tree. Under `manifest`
+  binding a party holding the tree can recompute `manifest_hash` and bind
+  the receipt to actual contents; under `reported` binding they hold a
+  verifiable record of an unverified claim, and the receipt says which,
+  explicitly.
+- **Lineage, standing, and taint are conditional on the producer's
+  recording discipline.** A candidate's `basis`, `parent`, and choice of
+  refs are producer claims. A host that records what is really a
+  continuation as a derivation escapes the standing cascade, and no
+  verifier can detect that, because intent is not checkable. Bellbook proves
+  the recorded structure is internally consistent under its rules; it does
+  not prove the structure faithfully mirrors the development process. A
+  receipt consumer trusts the embedded `rules_hash` *and* the producer's
+  recording conventions - this is the "consistency, not completeness"
+  boundary above, extended one level to the lineage graph. Standing is a
+  replay-derived advisory over that recorded structure, reported alongside
+  kernel taint and never merged into it: it never gates a commit by default
+  and never changes a record's evidence.
 - Author identity is cryptographically bound only for actors pinned in
   `author_keys` on records that carry signatures; unsigned records (and
   unpinned actors) remain claims. Key management and rotation are host
