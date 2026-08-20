@@ -20,6 +20,16 @@ In one line: it turns *"the agent says it did X"* into *"here is
 tamper-evident, replay-verifiable evidence of the agent activity that was
 recorded."*
 
+As of spec v0.3, Bellbook also records how software *evolves*: `Candidate`
+source states bound to a Git tree, `Evaluation`s of them, and set-valued
+`Selection`s between them - so a chosen line of work carries **verifiable
+candidate selection and lineage**. When an evaluation is later retracted
+(say, a benchmark turns out to be broken), replay marks every candidate that
+rested on it compromised, transitively at any depth, and one reaffirming
+selection on surviving evidence restores the line - with the whole episode
+permanently on the record. See [Recording evolution](#recording-evolution-cli)
+and `cargo run --example broken_benchmark`.
+
 One honest boundary up front: Bellbook proves **consistency, not
 completeness**. It verifies that captured history is intact,
 rule-conforming, and honestly graded; whether *everything* the agent did
