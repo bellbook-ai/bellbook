@@ -63,6 +63,16 @@ and releases follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   reaffirmations, the unrestorable retracted-candidate and retracted-parent
   base cases, and the binding-upgrade idiom before and after retraction).
   Completes the spec 0.3 evolution rule set.
+- Canonical manifest v1 (#27): `src/manifest.rs` computes a `manifest`
+  binding's `manifest_hash` = SHA-256 over the JCS bytes of the manifest
+  object mapping each repo-relative POSIX path to `{ mode, sha256 }`, with
+  the mode rules for regular and executable files, symlinks (target string),
+  and gitlinks (submodule commit OID string, sourced from the Git tree object
+  so the manifest is checkout-state independent). `.git` is excluded and the
+  hash is order-independent. Includes a persist-gated worktree walker that
+  treats submodule roots as gitlinks. This is a recording and interop utility
+  (the verifier checks binding well-formedness but never recomputes a
+  manifest).
 - Machine-readable conformance corpus under `spec/conformance/v0.2/`
   (record, receipt, and malformed-document cases) with a runner that
   re-derives every outcome from the stored inputs. It triggers a case for

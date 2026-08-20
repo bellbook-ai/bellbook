@@ -163,10 +163,31 @@ produced software states are proposed, judged, and chosen:
   none, rationale: Option<String> }`. Set-valued: one survivor for
   best-of-N or a repair accept, several for population evolution.
 
+**Canonical manifest v1.** A `manifest` binding's `manifest_hash` is
+`SHA-256` over the JCS bytes of a canonical manifest: a JSON object mapping
+each repo-relative POSIX path to `{ "mode": <string>, "sha256": <64-hex> }`.
+Modes are `100644` and `100755` (the `sha256` is over the file bytes as
+materialized, with no EOL or attribute normalization), `120000` (symlink;
+over the target string), and `160000` (gitlink; over the submodule commit
+OID as a lowercase-hex ASCII string with no trailing newline, sourced from
+the Git tree object and never worktree state, so initialized and
+uninitialized submodule checkouts of the same tree yield the same manifest -
+a gitlink commits to the pointer only, never to submodule contents).
+Directories are implicit and empty directories are unrepresented; `.git` is
+excluded. The manifest object is never stored or embedded; only the hash
+rides in the payload. This makes `manifest_hash` algorithm-independent (the
+same for a SHA-1 and a SHA-256 Git object format, submodules aside), and it
+is the authoritative identity when it and the tree OID disagree - a
+disagreement is detectable only by materializing the tree and recomputing,
+the same boundary §7 draws for `Verified`. The verifier never recomputes a
+manifest (§13); a party holding the tree does, via
+[`manifest_hash`](src/manifest.rs).
+
 The evolution rules ([`spec/v0.3-delta.md`](spec/v0.3-delta.md)) are
 implemented: lineage, selection, reaffirmation, and Selection
 approval-binding (D3, D4, D5) in §4.1 and §7.1, and standing (D6, D7) in
-§7.2 and §12.
+§7.2 and §12. The canonical manifest (D2) is computed by
+[`src/manifest.rs`](src/manifest.rs).
 
 ## 3. Identity and hashing
 
