@@ -32,6 +32,10 @@ jobs:
         run: cargo run --example quickstart --locked
       - name: Example (broken benchmark)
         run: cargo run --example broken_benchmark --locked
+      - name: Example (iterative evolution)
+        run: cargo run --example iterative_evolution --locked
+      - name: Example (repair and reevaluate)
+        run: cargo run --example repair_reevaluate --locked
 
   lint:
     runs-on: ubuntu-latest

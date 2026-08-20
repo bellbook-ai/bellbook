@@ -215,6 +215,10 @@ producer claims a verifier cannot check against intent
 
 ## Recording evolution (CLI)
 
+New here? [**Quickstart: a verifiable receipt from a best-of-N harness**](docs/quickstart-best-of-n.md)
+takes you from a best-of-N loop to a portable receipt in a few minutes, with
+both the CLI and the Python package side by side.
+
 The same binary records the v0.3 evolution kinds against a persistent log.
 Each command commits one record and prints its id; `--json` prints
 `{ id, result, reason? }` that round-trips, so pipelines can chain ids
