@@ -28,8 +28,10 @@ jobs:
       # exercise the persist feature and are gated behind it.
       - name: Test (no default features)
         run: cargo test --no-default-features --lib --locked
-      - name: Example
+      - name: Example (quickstart)
         run: cargo run --example quickstart --locked
+      - name: Example (broken benchmark)
+        run: cargo run --example broken_benchmark --locked
 
   lint:
     runs-on: ubuntu-latest
