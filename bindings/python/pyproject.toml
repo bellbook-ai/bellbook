@@ -5,7 +5,7 @@ build-backend = "maturin"
 [project]
 name = "bellbook"
 version = "0.3.0"
-description = "Python bindings for Bellbook: validate tamper-evident, replay-verifiable agent-activity receipts offline."
+description = "Python bindings for Bellbook: record, read, and validate tamper-evident, replay-verifiable agent-activity receipts offline."
 readme = "README.md"
 requires-python = ">=3.9"
 license = { text = "MIT OR Apache-2.0" }
@@ -23,6 +23,7 @@ classifiers = [
 ]
 
 [project.urls]
+Homepage = "https://bellbook.ai"
 Repository = "https://github.com/bellbook-ai/bellbook"
 Documentation = "https://docs.rs/bellbook"
 

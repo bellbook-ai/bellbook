@@ -1,0 +1,96 @@
+name: Publish to PyPI
+
+# Publishes the `bellbook` Python package (bindings/python) to PyPI via Trusted
+# Publishing (OIDC): no API token is stored anywhere. The workflow builds the
+# abi3 wheels on Linux, macOS, and Windows plus the sdist, then uploads them in
+# one job that exchanges a short-lived OIDC token for upload permission.
+#
+# PyPI must have a matching trusted publisher registered for the project (or a
+# pending publisher, for the first ever upload):
+#   - PyPI project name:   bellbook
+#   - Owner:               bellbook-ai
+#   - Repository name:     bellbook
+#   - Workflow name:       publish-pypi.yml
+#   - Environment name:    pypi
+#
+# Trigger it from the Actions tab ("Run workflow") or by pushing a version tag
+# (v*.*.*). The version published is whatever bindings/python/pyproject.toml
+# declares on the built ref, so bump it before releasing a new version.
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - "v*.*.*"
+
+permissions:
+  contents: read
+
+jobs:
+  wheels:
+    name: wheel (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Build the abi3 wheel
+        uses: PyO3/maturin-action@3e2bdf6ba6453a61e649744019b8a2d906c7eb38 # v1.51.0
+        with:
+          command: build
+          args: --release --out dist
+          working-directory: bindings/python
+          manylinux: auto
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: dist-${{ matrix.os }}
+          path: bindings/python/dist/*.whl
+          if-no-files-found: error
+
+  sdist:
+    name: sdist
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Build the sdist
+        uses: PyO3/maturin-action@3e2bdf6ba6453a61e649744019b8a2d906c7eb38 # v1.51.0
+        with:
+          command: sdist
+          args: --out dist
+          working-directory: bindings/python
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: dist-sdist
+          path: bindings/python/dist/*.tar.gz
+          if-no-files-found: error
+
+  publish:
+    name: publish to PyPI
+    needs: [wheels, sdist]
+    runs-on: ubuntu-latest
+    environment:
+      name: pypi
+      url: https://pypi.org/project/bellbook/
+    permissions:
+      # Required for Trusted Publishing: mint the short-lived OIDC token PyPI
+      # exchanges for upload permission. No secret is used.
+      id-token: write
+    steps:
+      - name: Collect every distribution into dist/
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          path: dist
+          pattern: dist-*
+          merge-multiple: true
+      - name: List what will be uploaded
+        run: ls -l dist
+      - name: Publish to PyPI
+        uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33 # v1.14.2
+        with:
+          packages-dir: dist
+          # Idempotent: a re-run does not hard-fail on files already uploaded
+          # for this version (a version bump is still required to publish new
+          # content).
+          skip-existing: true
