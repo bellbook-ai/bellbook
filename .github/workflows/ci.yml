@@ -91,6 +91,26 @@ jobs:
       - name: v0.2 receipts validate under the published v0.2 validator
         run: python3 scripts/epoch_check_v02.py "$RUNNER_TEMP/bb020/bin/bellbook"
 
+  python-bindings:
+    # Stage 1 of the PyO3 bindings (issue #13): build the extension and run
+    # its parity tests, so the bindings cannot silently rot before the full
+    # multi-platform wheel matrix lands. Single-OS on purpose; the abi3 wheel
+    # matrix is a later stage.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772
+        with:
+          toolchain: stable
+      - name: Build the extension and run parity tests
+        working-directory: bindings/python
+        run: |
+          python3 -m venv .venv
+          . .venv/bin/activate
+          pip install --quiet maturin pytest
+          maturin develop --release
+          pytest tests -q
+
   conformance-py:
     # An independent, from-scratch Python validator (no Rust code path) that
     # reproduces the published vectors and the conformance corpus. Proves

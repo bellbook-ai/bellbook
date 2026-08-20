@@ -1,0 +1,30 @@
+# Python bindings for Bellbook (issue #13), Stage 1: validation-first.
+#
+# A thin PyO3 wrapper over the published `bellbook` crate, never a
+# reimplementation - the crate stays the single source of truth. This is its
+# own workspace so it never joins the library crate's build; the library's
+# CI and `cargo package` are unaffected (the root crate excludes `bindings/`).
+[package]
+name = "bellbook-python"
+version = "0.3.0"
+edition = "2021"
+rust-version = "1.75"
+license = "MIT OR Apache-2.0"
+description = "Python bindings for the Bellbook receipt validator."
+repository = "https://github.com/bellbook-ai/bellbook"
+publish = false
+
+[lib]
+# The importable module is `bellbook`; a C dynamic library for CPython.
+name = "bellbook"
+crate-type = ["cdylib"]
+
+[dependencies]
+# Validation is feature-independent, so the wheel does not pull in `persist`.
+# Renamed to `bellbook_core` so it does not collide with this crate's own
+# library name (`bellbook`, the importable Python module).
+bellbook_core = { package = "bellbook", path = "../..", default-features = false }
+pyo3 = { version = "0.22", features = ["extension-module", "abi3-py39"] }
+
+# Own workspace: keep this crate out of the library crate's workspace.
+[workspace]
