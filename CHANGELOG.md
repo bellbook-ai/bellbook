@@ -17,6 +17,15 @@ and releases follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   (`fuzz/`) runs weekly and on demand for deeper exploration. `SECURITY.md`
   documents both layers and the pending external-review gate. Development-only;
   the published crate API is unchanged.
+- **Adoption worked examples and a best-of-N quickstart** (#66, #67, #68).
+  `examples/iterative_evolution.rs` records a multi-generation
+  fork-evaluate-select loop and reads the surviving lineage back;
+  `examples/repair_reevaluate.rs` shows a single-candidate repair and why a
+  repair *motivated by* a retracted evaluation is not tainted by it (`Cause`
+  carries intent, not taint). `docs/quickstart-best-of-n.md` takes a best-of-N
+  harness to a portable receipt with the CLI and the Python package side by
+  side, with a committed starter `docs/quickstart/rules.json`. Docs/examples
+  only; the published crate API is unchanged.
 
 ## [0.3.0] - 2026-08-20
 

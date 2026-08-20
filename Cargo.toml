@@ -47,6 +47,14 @@ required-features = ["persist"]
 name = "broken_benchmark"
 required-features = ["persist"]
 
+[[example]]
+name = "iterative_evolution"
+required-features = ["persist"]
+
+[[example]]
+name = "repair_reevaluate"
+required-features = ["persist"]
+
 [[test]]
 name = "integration_tests"
 required-features = ["persist"]
