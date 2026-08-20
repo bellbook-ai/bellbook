@@ -8,7 +8,10 @@
 name = "bellbook-python"
 version = "0.3.0"
 edition = "2021"
-rust-version = "1.75"
+# pyo3 0.29 requires Rust 1.83. This is the bindings crate's own MSRV and does
+# not affect the library crate (a separate workspace), whose MSRV job is
+# unchanged. Wheel users are unaffected; this only bounds building from source.
+rust-version = "1.83"
 license = "MIT OR Apache-2.0"
 description = "Python bindings for the Bellbook receipt validator."
 repository = "https://github.com/bellbook-ai/bellbook"
@@ -32,7 +35,7 @@ crate-type = ["cdylib"]
 bellbook_core = { package = "bellbook", version = "0.3", default-features = false, features = [
     "persist",
 ] }
-pyo3 = { version = "0.22", features = ["extension-module", "abi3-py39"] }
+pyo3 = { version = "0.29", features = ["extension-module", "abi3-py39"] }
 # The writer takes verifier rules as a JSON string (the same object embedded in
 # a receipt). serde_json parses it into the crate's `VerifierRules`; serde
 # bounds the pre-commit encode/decode round-trip that checks payload invariants.
