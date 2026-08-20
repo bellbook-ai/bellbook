@@ -2,6 +2,7 @@
 
 [![CI](https://github.com/bellbook-ai/bellbook/actions/workflows/ci.yml/badge.svg)](https://github.com/bellbook-ai/bellbook/actions/workflows/ci.yml)
 [![crates.io](https://img.shields.io/crates/v/bellbook.svg)](https://crates.io/crates/bellbook)
+[![PyPI](https://img.shields.io/pypi/v/bellbook.svg)](https://pypi.org/project/bellbook/)
 [![docs.rs](https://img.shields.io/docsrs/bellbook)](https://docs.rs/bellbook)
 [![License: MIT OR Apache-2.0](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue.svg)](#license)
 
@@ -258,6 +259,21 @@ It records candidates, evaluations, and selections across several
 generations, retracts the broken benchmark, and prints the replay report's
 `standing` section changing from sound, to a compromised descendant line, to
 restored (with the retraction and taint permanently on the record).
+
+## Python
+
+The same core is available from Python. Prebuilt wheels (Linux, macOS,
+Windows) are on PyPI, so no Rust toolchain is required:
+
+```
+pip install bellbook
+```
+
+`bellbook.validate(bytes)` and `bellbook.read(bytes)` reach the exact
+Clean / Tainted / Invalid decision the Rust verifier does - over the same
+core, never a reimplementation - and `bellbook.Writer` records the v0.3
+evolution kinds to a log and exports a receipt. See
+[`bindings/python/`](bindings/python/) for the full API.
 
 ## Status
 
