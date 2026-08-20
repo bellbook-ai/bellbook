@@ -13,12 +13,12 @@ to cross-check the specification.)
 
 ## Status
 
-Stage 1: validation only. `validate(bytes) -> Report` reaches the same
-Clean / Tainted / Invalid decision as the `bellbook validate` CLI, over the
-same core. Receipt reading and the writer API land in later stages (issue
-#13).
+Validation and reading. The writer API lands in a later stage (issue #13).
 
-## Use
+## Validate
+
+`validate(bytes) -> Report` reaches the same Clean / Tainted / Invalid
+decision as the `bellbook validate` CLI, over the same core.
 
 ```python
 import bellbook
@@ -39,6 +39,31 @@ Validation never raises for a bad receipt: an unparseable or failing receipt
 returns a `Report` with `status == "invalid"` and a `problem` or `reason`
 set. As with the CLI, **Clean is relative to the rules embedded in the
 receipt** - compare `rules_hash` against a rule set you trust.
+
+## Read
+
+`read(bytes) -> Receipt` parses a receipt for inspection. Reading does not
+verify - call `validate` for the decision.
+
+```python
+import json
+
+receipt = bellbook.read(open("receipt.json", "rb").read())
+
+print(receipt.spec_version, len(receipt))
+for r in receipt.records:
+    print(r.kind, r.time, r.author_id, r.author_type, r.evidence)
+    for ref in r.refs:
+        print("  ", ref["type"], "->", ref["target"])
+    payload = json.loads(r.payload_json)
+```
+
+A `Record` exposes `id`, `kind`, `time`, `author_id`, `author_type`,
+`signed`, `evidence`, `schema`, `refs`, and `payload_json`. The enum-valued
+fields (`kind`, `author_type`, `evidence`, and each ref's `type`) are the
+record's Rust variant names, e.g. `"Candidate"`, `"Provider"`, `"Reported"`,
+`"Use"`. `read` raises `ValueError` on bytes that are not a parseable
+receipt.
 
 ## Build from source
 
