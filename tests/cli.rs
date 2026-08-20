@@ -468,6 +468,124 @@ fn upgrade_missing_target_is_rejected() {
 }
 
 #[test]
+fn rules_init_output_drives_the_other_commands() {
+    // `rules init` must produce a rules file the recording commands accept -
+    // that is the whole point of removing the hand-authoring step.
+    let dir = tempfile::tempdir().unwrap();
+    let rules = dir.path().join("rules.json");
+    let out = bellbook()
+        .args(["rules", "init", "--author", "agent:provider", "--out"])
+        .arg(&rules)
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    // It parses as VerifierRules with the requested binding.
+    let parsed: VerifierRules = serde_json::from_str(&std::fs::read_to_string(&rules).unwrap())
+        .expect("rules init output must parse as VerifierRules");
+    assert_eq!(
+        parsed.author_roles.get("agent"),
+        Some(&AuthorType::Provider)
+    );
+
+    // And it works end to end: record a candidate against it.
+    let log = dir.path().join("log");
+    let out = bellbook()
+        .args([
+            "candidate",
+            "add",
+            "--author",
+            "agent",
+            "--git-tree",
+            TREE_A,
+            "--json",
+        ])
+        .arg("--log")
+        .arg(&log)
+        .arg("--rules")
+        .arg(&rules)
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+}
+
+#[test]
+fn rules_init_rejects_an_unknown_role() {
+    let out = bellbook()
+        .args(["rules", "init", "--author", "agent:wizard"])
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(64));
+    assert!(String::from_utf8_lossy(&out.stderr).contains("invalid role"));
+}
+
+#[test]
+fn export_round_trips_to_a_clean_receipt() {
+    let env = setup();
+    let root = add_root(&env, TREE_A);
+    let out = run(
+        &env,
+        &[
+            "eval",
+            "add",
+            "--author",
+            "agent",
+            "--candidate",
+            &root,
+            "--criterion",
+            "unit-tests",
+            "--passed",
+            "--json",
+        ],
+    );
+    let eval = committed_id(&out);
+    let out = run(
+        &env,
+        &[
+            "select",
+            "--author",
+            "agent",
+            "--objective",
+            "ship",
+            "--consider",
+            &root,
+            "--choose",
+            &root,
+            "--uses-eval",
+            &eval,
+            "--json",
+        ],
+    );
+    let _ = committed_id(&out);
+
+    // export the log, then validate the receipt with the same binary: the CLI
+    // now closes the record -> receipt -> validate loop without the API.
+    let receipt = env._dir.path().join("receipt.json");
+    let out = run(&env, &["export", "--out", receipt.to_str().unwrap()]);
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    let out = bellbook().arg("validate").arg(&receipt).output().unwrap();
+    assert_eq!(
+        out.status.code(),
+        Some(0),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(String::from_utf8_lossy(&out.stdout).contains("CLEAN"));
+}
+
+#[test]
 fn validate_is_feature_independent() {
     // `validate` needs no log; a missing file is an unreadable-input error (66),
     // proving the command dispatches without touching the persist path.
