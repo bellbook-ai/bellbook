@@ -44,6 +44,8 @@ USAGE:
                            (--choose <id> ... --uses-eval <id> ... | --none)
                            [--replaces <selection-id>] [--rationale <s>] [--json]
     bellbook lineage       --log <dir> --rules <file> <id> [--json]
+    bellbook rules init    --author <id>:<role> ... [--max-context <n>] [--out <file>]
+    bellbook export        --log <dir> --rules <file> [--out <file>]
 
 COMMANDS:
     validate    Verify a receipt offline: ids (RFC 8785 canonical form),
@@ -53,6 +55,10 @@ COMMANDS:
     eval        Record an Evaluation of a candidate.
     select      Record a Selection over candidates (or a reaffirmation).
     lineage     Show a candidate's descent, siblings, taint, and standing.
+    rules init  Generate a starter verifier-rules file. Roles are one of
+                user|provider|system|executor|verifier.
+    export      Bundle a log directory into a portable receipt (the input
+                `bellbook validate` verifies).
 
 EXIT CODES:
     0 clean/success   1 invalid   2 tainted   64 usage   65 command failed
@@ -70,12 +76,127 @@ fn main() -> ExitCode {
     };
     match command {
         "validate" => cmd_validate(&rest),
-        "candidate" | "eval" | "select" | "lineage" => cmd_evolution(command, &rest),
+        "rules" => cmd_rules(&rest),
+        "candidate" | "eval" | "select" | "lineage" | "export" => cmd_evolution(command, &rest),
         other => {
             eprintln!("unknown command {other:?}\n\n{USAGE}");
             ExitCode::from(64)
         }
     }
+}
+
+// ---------------------------------------------------------------------------
+// rules init (feature-independent)
+// ---------------------------------------------------------------------------
+
+fn parse_role(s: &str) -> Option<AuthorType> {
+    match s.to_ascii_lowercase().as_str() {
+        "user" => Some(AuthorType::User),
+        "provider" => Some(AuthorType::Provider),
+        "system" => Some(AuthorType::System),
+        "executor" => Some(AuthorType::Executor),
+        "verifier" => Some(AuthorType::Verifier),
+        _ => None,
+    }
+}
+
+/// `rules init` writes a starter verifier-rules file: the default space, a
+/// context bound, and one author-role binding per `--author <id>:<role>`. It is
+/// the trust policy the CLI's `--rules` flag and the receipt embed; generating
+/// one by hand is the main ceremony a new user hits, so this removes it.
+fn cmd_rules(rest: &[String]) -> ExitCode {
+    let (sub, rest) = match rest.split_first() {
+        Some((s, r)) => (s.as_str(), r),
+        None => {
+            eprintln!("rules needs a subcommand (init)\n\n{USAGE}");
+            return ExitCode::from(64);
+        }
+    };
+    if sub != "init" {
+        eprintln!("unknown rules subcommand {sub:?} (expected init)\n\n{USAGE}");
+        return ExitCode::from(64);
+    }
+
+    let mut authors: Vec<(String, AuthorType)> = Vec::new();
+    let mut max_context: u32 = 200;
+    let mut out: Option<String> = None;
+    let mut it = rest.iter();
+    while let Some(arg) = it.next() {
+        match arg.as_str() {
+            "--author" => {
+                let Some(v) = it.next() else {
+                    eprintln!("--author requires <id>:<role>");
+                    return ExitCode::from(64);
+                };
+                let Some((id, role)) = v.split_once(':') else {
+                    eprintln!("--author must be <id>:<role>, got {v:?}");
+                    return ExitCode::from(64);
+                };
+                if id.is_empty() {
+                    eprintln!("--author id must be non-empty");
+                    return ExitCode::from(64);
+                }
+                let Some(role) = parse_role(role) else {
+                    eprintln!("invalid role {role:?} (user|provider|system|executor|verifier)");
+                    return ExitCode::from(64);
+                };
+                authors.push((id.to_string(), role));
+            }
+            "--max-context" => {
+                let Some(v) = it.next() else {
+                    eprintln!("--max-context requires a value");
+                    return ExitCode::from(64);
+                };
+                match v.parse::<u32>() {
+                    Ok(n) => max_context = n,
+                    Err(_) => {
+                        eprintln!("invalid --max-context value {v:?}");
+                        return ExitCode::from(64);
+                    }
+                }
+            }
+            "--out" => {
+                let Some(v) = it.next() else {
+                    eprintln!("--out requires a path");
+                    return ExitCode::from(64);
+                };
+                out = Some(v.clone());
+            }
+            other => {
+                eprintln!("unexpected argument {other:?}\n\n{USAGE}");
+                return ExitCode::from(64);
+            }
+        }
+    }
+
+    if authors.is_empty() {
+        eprintln!("rules init needs at least one --author <id>:<role>");
+        return ExitCode::from(64);
+    }
+
+    let mut rules = VerifierRules::new(default_space(), max_context);
+    for (id, role) in authors {
+        rules = rules.with_author_role(id, role);
+    }
+    let json = match serde_json::to_string(&rules) {
+        Ok(s) => s,
+        Err(e) => {
+            eprintln!("cannot serialize rules: {e}");
+            return ExitCode::from(70);
+        }
+    };
+    match out {
+        Some(path) => {
+            if let Err(e) = std::fs::write(&path, json.as_bytes()) {
+                eprintln!("cannot write {path}: {e}");
+                return ExitCode::from(66);
+            }
+            // The data output is the file; a confirmation goes to stderr.
+            eprintln!("wrote starter rules to {path}");
+        }
+        None => println!("{json}"),
+    }
+    ExitCode::SUCCESS
 }
 
 // ---------------------------------------------------------------------------
@@ -176,6 +297,7 @@ fn cmd_evolution(command: &str, rest: &[String]) -> ExitCode {
         "eval" => persist_cmds::eval(rest),
         "select" => persist_cmds::select(rest),
         "lineage" => persist_cmds::lineage(rest),
+        "export" => persist_cmds::export(rest),
         _ => unreachable!(),
     };
     match result {
@@ -382,6 +504,33 @@ mod persist_cmds {
         } else {
             ExitCode::from(65)
         })
+    }
+
+    // --- export ------------------------------------------------------------
+
+    /// Bundle a log directory into a portable receipt. `open` rebuilds and
+    /// re-verifies state from the committed records, so a log that does not
+    /// verify under the given rules is refused before anything is written.
+    pub fn export(rest: &[String]) -> Result<ExitCode, String> {
+        let p = parse(rest, &["log", "rules", "out"], &[], &[])?;
+        let rules = load_rules(&p)?;
+        let (writer, _state) = open(&p, &rules)?;
+        let bytes = Receipt::new(writer.records(), &rules)
+            .to_bytes()
+            .map_err(|e| format!("cannot serialize receipt: {e}"))?;
+        match p.singles.get("out") {
+            Some(path) => {
+                std::fs::write(path, &bytes).map_err(|e| format!("cannot write {path}: {e}"))?;
+                eprintln!("wrote receipt to {path} ({} bytes)", bytes.len());
+            }
+            None => {
+                use std::io::Write;
+                std::io::stdout()
+                    .write_all(&bytes)
+                    .map_err(|e| format!("cannot write receipt to stdout: {e}"))?;
+            }
+        }
+        Ok(ExitCode::SUCCESS)
     }
 
     // --- candidate add -----------------------------------------------------

@@ -9,6 +9,13 @@ and releases follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **CLI `bellbook rules init` and `bellbook export`** (#70, #71). `rules init`
+  writes a starter verifier-rules file from `--author <id>:<role>` bindings, so
+  a new user no longer hand-authors one (it is feature-independent, like
+  `validate`). `export` bundles a log directory into a portable receipt,
+  closing the record -> receipt -> validate loop from the CLI alone; previously
+  the export step required the Rust or Python API. Both were surfaced as
+  adoption friction while writing the best-of-N quickstart.
 - **Fuzzing harness over the receipt trust boundary** (#65). A fast, seeded
   harness (`tests/fuzz_trust_boundary.rs`) runs in the ordinary test suite on
   every push, asserting that `validate` never panics and that its reports,
