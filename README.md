@@ -261,13 +261,12 @@ restored (with the retraction and taint permanently on the record).
 
 ## Status
 
-**`main` implements spec v0.3 (evolution semantics: Candidate, Evaluation,
-and Selection records with replay-derived lineage standing), fully tested
-but not yet published as a crate release; the last published epoch is
-0.2.0, implementing spec v0.2.** SPEC.md is the authority for what v0.3
-means (design notes in [`spec/v0.3-delta.md`](spec/v0.3-delta.md)); the
-v0.3 milestone is tracked in issue #19. The v0.2 artifacts stay frozen and
-valid under v0.2 rules forever, and the published 0.2.x release is their
+**The published release is 0.3.0, implementing spec v0.3 (evolution
+semantics: Candidate, Evaluation, and Selection records with replay-derived
+lineage standing).** SPEC.md is the authority for what v0.3 means (design
+notes in [`spec/v0.3-delta.md`](spec/v0.3-delta.md)). The previous epoch,
+0.2.0 implementing spec v0.2, stays published and frozen: its artifacts
+remain valid under v0.2 rules forever, and the 0.2.x release is their
 validator.
 
 It ships exactly what is implemented and tested today: the
