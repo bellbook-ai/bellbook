@@ -7,9 +7,21 @@ and releases follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-08-20
+
+Second public release. Implements Bellbook spec version 0.3, the evolution
+epoch: three new record kinds (`Candidate`, `Evaluation`, `Selection`) that
+bind Git source states, judge them, and record set-valued decisions over
+them, with replay-derived lineage standing layered over the v0.2 trust
+kernel, which is unchanged. Spec v0.2 stays a frozen, still-valid
+compatibility epoch: its artifacts are byte-frozen, the published 0.2.0
+crate remains their validator, and a CI epoch check confirms the committed
+v0.2 receipts validate identically under it. This validator rejects v0.2
+receipts with a clear unsupported-version report.
+
 ### Changed
 
-- **Opened the spec v0.3 development epoch** (design: `spec/v0.3-delta.md`,
+- **Opened the spec v0.3 epoch** (design: `spec/v0.3-delta.md`,
   accepted RFC-0001; tracking: #19). `SPEC_VERSION` is `0.3`, the signing
   domain is `bellbook.record-signature.v0.3`, and the current test vectors
   and conformance corpus live at `spec/test-vectors-v0.3.json` and
@@ -20,6 +32,13 @@ and releases follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- Release epoch check (#34): a CI job installs the published 0.2.0 crate
+  and replays every committed v0.2 receipt case through it, asserting the
+  status, reason, record count, head and rules hashes, and retracted and
+  tainted sets are identical to the recorded expectations
+  (`scripts/epoch_check_v02.py`). This pins the *meaning* of the frozen
+  v0.2 artifacts under the published validator, complementing the byte
+  freeze in `tests/frozen_v02.rs`.
 - Flagship worked example (#32): `examples/broken_benchmark.rs` runs the
   RFC-0001 §10 story end to end - a baseline chosen on a benchmark
   evaluation, a line of continuations and derivations built on it, the

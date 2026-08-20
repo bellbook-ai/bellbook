@@ -72,6 +72,25 @@ jobs:
       - name: Check (MSRV)
         run: cargo check --locked --all-features
 
+  epoch-v02:
+    # Epoch check (issue #34): the committed v0.2 receipts must validate
+    # identically under the *published* 0.2.0 validator, not just the current
+    # tree. Installs the pinned published binary from crates.io and replays
+    # every committed v0.2 receipt case through it, comparing status, reason,
+    # counts, and the head/rules hashes and retracted/tainted sets. This is
+    # the cross-version half of the compatibility promise; the byte-freeze of
+    # the v0.2 artifacts is enforced separately by tests/frozen_v02.rs.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772
+        with:
+          toolchain: stable
+      - name: Install the published v0.2 validator
+        run: cargo install bellbook --version 0.2.0 --root "$RUNNER_TEMP/bb020"
+      - name: v0.2 receipts validate under the published v0.2 validator
+        run: python3 scripts/epoch_check_v02.py "$RUNNER_TEMP/bb020/bin/bellbook"
+
   conformance-py:
     # An independent, from-scratch Python validator (no Rust code path) that
     # reproduces the published vectors and the conformance corpus. Proves

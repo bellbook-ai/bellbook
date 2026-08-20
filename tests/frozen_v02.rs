@@ -1,11 +1,14 @@
 //! Interim freeze gate for the published spec v0.2 artifacts.
 //!
 //! Spec v0.2 is a published compatibility epoch: its vectors and conformance
-//! corpus must never change (SPEC.md §14, CHANGELOG "frozen in place"). Once
-//! the epoch CI job lands (issue #34) the pinned, published v0.2 validator
-//! re-validates the frozen receipts directly; until then this test pins the
-//! SHA-256 of each frozen file so an accidental edit fails CI rather than
-//! passing silently (the live suites now exercise only the v0.3 artifacts).
+//! corpus must never change (SPEC.md §14, CHANGELOG "frozen in place"). This
+//! test pins the SHA-256 of each frozen file so an accidental edit fails CI
+//! rather than passing silently (the live suites now exercise only the v0.3
+//! artifacts). The complementary cross-version check - that the *published*
+//! 0.2.0 validator still reaches the same decision on every committed v0.2
+//! receipt - runs in CI as the `epoch-v02` job
+//! (`scripts/epoch_check_v02.py`); together they pin both the bytes and their
+//! meaning under the published validator.
 //!
 //! The hash is taken over LF-normalized content: `.gitattributes` already
 //! forces these files to LF on every platform, and normalizing here as well
