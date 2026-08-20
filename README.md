@@ -207,6 +207,19 @@ retry-safe batches). The CLI is not a coordination layer, and `--upgrades`
 refuses to record a binding upgrade whose `--git-tree` differs from its
 target's, so a rebinding never silently changes the source identity.
 
+For the evolution semantics end to end - a benchmark found broken, the
+compromise it casts over a line of work, and the one-record recovery - run
+the flagship worked example:
+
+```
+cargo run --example broken_benchmark
+```
+
+It records candidates, evaluations, and selections across several
+generations, retracts the broken benchmark, and prints the replay report's
+`standing` section changing from sound, to a compromised descendant line, to
+restored (with the retraction and taint permanently on the record).
+
 ## Status
 
 **This branch develops spec v0.3 (evolution semantics: Candidate,

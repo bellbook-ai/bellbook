@@ -40,6 +40,10 @@ required-features = ["persist"]
 name = "export_receipt"
 required-features = ["persist"]
 
+[[example]]
+name = "broken_benchmark"
+required-features = ["persist"]
+
 [[test]]
 name = "integration_tests"
 required-features = ["persist"]

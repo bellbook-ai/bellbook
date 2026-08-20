@@ -20,6 +20,18 @@ and releases follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- Flagship worked example (#32): `examples/broken_benchmark.rs` runs the
+  RFC-0001 §10 story end to end - a baseline chosen on a benchmark
+  evaluation, a line of continuations and derivations built on it, the
+  benchmark retracted when found broken, kernel taint reaching the
+  Selection that used it, and the replay report's `standing` section
+  showing the whole descendant line compromised at every depth while a
+  repair derived from the sound baseline stays sound. Work keeps recording
+  under compromise; one reaffirming Selection on a surviving evaluation
+  restores the line, with the retraction and taint permanently on the
+  record. It exports a receipt and validates it offline at each phase, and
+  asserts the standing transitions so `cargo run --example broken_benchmark`
+  is also a CI check.
 - Evolution CLI (#31): the `bellbook` binary gains `candidate add`,
   `eval add`, `select`, and `lineage` subcommands over a persistent log
   (behind the `persist` feature; `validate` stays feature-independent).
