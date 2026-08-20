@@ -1,15 +1,15 @@
 # Independent conformance validator (Python)
 
-A **from-scratch** validation-only implementation of the Bellbook v0.2 wire
+A **from-scratch** validation-only implementation of the Bellbook v0.3 wire
 format, written in Python with no shared code path to the Rust crate. It exists
 to make the specification's central interoperability claim *checkable* rather
 than merely asserted: that an independent implementation in any language
 computes the same canonical forms, record ids, and hashes, and reaches the same
-structural decisions.
+structural and semantic decisions - including the v0.3 evolution semantics
+(`Candidate`, `Evaluation`, `Selection`, standing).
 
-This now covers **both increments of issue #5**. Python bindings that wrap the
-Rust core would not count as an independent implementation; this shares nothing
-with it but the published data files.
+Python bindings that wrap the Rust core would not count as an independent
+implementation; this shares nothing with it but the published data files.
 
 - `bellbook_conformance.py` - canonicalization, ids, hashes, strict decoding,
   and structural log integrity.
@@ -25,9 +25,9 @@ corpus, all independently:
 - **RFC 8785 (JCS) canonicalization** - rebuilds each record's canonical form
   byte-for-byte from the published vectors.
 - **Record ids** - SHA-256 of the canonical id form (which omits `id` and a null
-  `author.signature`, matching the reference). Recomputed for all 112
-  record-case records - and, via the structural check, every receipt-case record
-  - and confirmed equal to the stored ids.
+  `author.signature`, matching the reference). Recomputed for every record-case
+  record - and, via the structural check, every receipt-case record - and
+  confirmed equal to the stored ids.
 - **Head hash and rules hash** - confirmed equal to the corpus's expected values.
 - **Ed25519 signatures** - the domain-wrapped signing form is recomputed
   independently and confirmed equal to the published one, the signed vector's
@@ -48,11 +48,20 @@ corpus, all independently:
   binding, schema/kind checks, signatures, request/capability/approval lifecycle
   (with expiry and single-use consumption), `Require`/`Replace` semantics, the
   evidence lattice and per-kind thresholds, plan consistency, and more.
+- **Evolution rule battery (v0.3)** - the lineage and selection rules for
+  `Candidate`, `Evaluation`, and `Selection` are re-derived to the same verdict:
+  source-binding well-formedness, the shared payload-id resolution, basis
+  obligations, the selection winner/evaluation discipline, `Selection`
+  reaffirmation via `Replace`, and the `Selection` approval-binding subject hash
+  (`bellbook.selection-approval.v0.3`, with single-use consumption). Each of the
+  six new reason codes is reached on its own triggering case.
 - **Whole-log replay** - every receipt case is replayed from genesis to the same
-  status (Clean / Tainted / Invalid), the same first-violation reason, and the
-  same `retracted` and `tainted` id sets, including verdict forgery
-  (re-derivation catches the flipped result) and taint that follows `Use`/
-  `Require` but not `Cause`.
+  status (Clean / Tainted / Invalid), the same first-violation reason, the same
+  `retracted` and `tainted` id sets, and the same **`standing`** section
+  (`compromised`, `unsound`, `restorations`, id-byte-ordered) - re-derived by the
+  independent `derive_standing` and matched byte for decision, the same mechanism
+  that enforces taint agreement. Covers verdict forgery (re-derivation catches
+  the flipped result) and taint that follows `Use`/`Require` but not `Cause`.
 
 ## Scope and limitations
 
