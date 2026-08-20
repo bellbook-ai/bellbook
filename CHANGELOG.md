@@ -20,6 +20,17 @@ and releases follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- Evolution CLI (#31): the `bellbook` binary gains `candidate add`,
+  `eval add`, `select`, and `lineage` subcommands over a persistent log
+  (behind the `persist` feature; `validate` stays feature-independent).
+  Every mutating command commits one record and prints its id; `--json`
+  emits `{ id, result, reason? }` that round-trips. `candidate --upgrades`
+  refuses a binding upgrade whose `--git-tree` differs from its target's,
+  so a rebinding never silently changes the source identity. `lineage`
+  reports a record's ancestors, children, siblings, considering and
+  selecting Selections, taint, and standing. The README documents the
+  single-writer recording pattern (the log takes an exclusive lock) before
+  the commands.
 - Conformance corpus completeness for the evolution rules (#29): with the
   per-reason-code triggering cases (#24/#25), the standing receipt cases and
   byte-for-byte `standing`-section agreement (#26), this adds the

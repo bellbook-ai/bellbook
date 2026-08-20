@@ -178,6 +178,35 @@ reported `rules_hash` against a rule set you trust) - under default rules
 it means "internally consistent", not "meets a shared security
 baseline".
 
+## Recording evolution (CLI)
+
+The same binary records the v0.3 evolution kinds against a persistent log.
+Each command commits one record and prints its id; `--json` prints
+`{ id, result, reason? }` that round-trips, so pipelines can chain ids
+without scraping text.
+
+```
+bellbook candidate add --log <dir> --rules <file> --author <id> \
+         --git-tree <oid> [--continues <sel> --parent <cand>
+                           | --derives-from <id>... | --upgrades <cand>]
+bellbook eval add      --log <dir> --rules <file> --author <id> \
+         --candidate <id> --criterion <s> (--passed | --failed | --score <v> --scale <n>)
+bellbook select        --log <dir> --rules <file> --author <id> --objective <s> \
+         --consider <id>... (--choose <id>... --uses-eval <id>... | --none) [--replaces <sel>]
+bellbook lineage       --log <dir> --rules <file> <id> [--json]
+```
+
+**The log is single-writer by design.** `LogWriter` takes an exclusive
+lock on the directory for the life of the process, so exactly one
+recording process may hold a log at a time; a second concurrent writer
+fails to open rather than corrupting the log. This is deliberate: parallel
+candidate *generation* is the intended workload, parallel *recording* is
+not. Generate candidates concurrently, then record them serially from one
+process (a loop over the commands above, or `checked_batch_commit` for
+retry-safe batches). The CLI is not a coordination layer, and `--upgrades`
+refuses to record a binding upgrade whose `--git-tree` differs from its
+target's, so a rebinding never silently changes the source identity.
+
 ## Status
 
 **This branch develops spec v0.3 (evolution semantics: Candidate,
