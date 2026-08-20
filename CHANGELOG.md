@@ -20,6 +20,14 @@ and releases follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- Extended v0.3 test vectors (#28): the golden vectors now pin every
+  evolution-kind subject shape, not just one per kind - a `manifest`
+  source binding (SHA-256 object format, `commit`, `manifest_hash`), a
+  `continuation` and a `derivation` candidate, `scored` and `passed`
+  evaluations, and `selected`, `none`, and reaffirmation (`Replace`)
+  selections - so the richer canonical forms are held to cross-implementation
+  byte agreement by both the Rust and Python id recomputation. The frozen
+  v0.2 vectors are unchanged.
 - Three record kinds for evolution semantics: `Candidate` (binds a Git
   tree via a reported or manifest source binding), `Evaluation` (one
   criterion per record, with decode-enforced score bounds), and
