@@ -55,3 +55,7 @@ required-features = ["persist"]
 [[test]]
 name = "conformance"
 required-features = ["persist"]
+
+[[test]]
+name = "cli"
+required-features = ["persist"]
