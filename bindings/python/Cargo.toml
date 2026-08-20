@@ -22,11 +22,22 @@ crate-type = ["cdylib"]
 [dependencies]
 # Wraps the published crate (not a path dep), so the sdist and wheels are
 # installable from PyPI, and the bindings track a released core rather than
-# the working tree. Validation is feature-independent, so the wheel does not
-# pull in `persist`. Renamed to `bellbook_core` so it does not collide with
+# the working tree. Renamed to `bellbook_core` so it does not collide with
 # this crate's own library name (`bellbook`, the importable Python module).
-bellbook_core = { package = "bellbook", version = "0.3", default-features = false }
+#
+# The writer API (stage 4) records to a persistent, single-writer log, so the
+# wheel now enables the crate's `persist` feature (cross-platform file locking
+# via `fs4`, which builds on Linux, macOS, and Windows alike). Validation and
+# reading remain feature-independent.
+bellbook_core = { package = "bellbook", version = "0.3", default-features = false, features = [
+    "persist",
+] }
 pyo3 = { version = "0.22", features = ["extension-module", "abi3-py39"] }
+# The writer takes verifier rules as a JSON string (the same object embedded in
+# a receipt). serde_json parses it into the crate's `VerifierRules`; serde
+# bounds the pre-commit encode/decode round-trip that checks payload invariants.
+serde = "1"
+serde_json = "1"
 
 # Own workspace: keep this crate out of the library crate's workspace.
 [workspace]
