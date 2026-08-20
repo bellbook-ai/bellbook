@@ -7,6 +7,16 @@ and releases follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-08-20
+
+Adoption and hardening release. It adds no new record kinds and no spec change -
+it still implements spec epoch 0.3 - and instead closes the gap between the
+shipped wedge and a first successful run: the CLI now completes the
+record -> receipt -> validate loop by itself (no language binding required), the
+receipt trust boundary is fuzzed, and worked examples plus a best-of-N
+quickstart show the three proving workloads. The published crate's API is
+unchanged; existing 0.3.0 receipts and rules validate identically.
+
 ### Added
 
 - **CLI `bellbook rules init` and `bellbook export`** (#70, #71). `rules init`
@@ -16,6 +26,10 @@ and releases follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   closing the record -> receipt -> validate loop from the CLI alone; previously
   the export step required the Rust or Python API. Both were surfaced as
   adoption friction while writing the best-of-N quickstart.
+- **Python `bellbook.default_rules(authors, max_context=200)`.** Builds a
+  starter verifier-rules JSON string from actor-id -> role bindings - the
+  Python counterpart to `bellbook rules init` - so `Writer` users need not
+  hand-author a rules object.
 - **Fuzzing harness over the receipt trust boundary** (#65). A fast, seeded
   harness (`tests/fuzz_trust_boundary.rs`) runs in the ordinary test suite on
   every push, asserting that `validate` never panics and that its reports,

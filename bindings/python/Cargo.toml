@@ -6,7 +6,7 @@
 # CI and `cargo package` are unaffected (the root crate excludes `bindings/`).
 [package]
 name = "bellbook-python"
-version = "0.3.0"
+version = "0.4.0"
 edition = "2021"
 # pyo3 0.29 requires Rust 1.83. This is the bindings crate's own MSRV and does
 # not affect the library crate (a separate workspace), whose MSRV job is
@@ -32,6 +32,10 @@ crate-type = ["cdylib"]
 # wheel now enables the crate's `persist` feature (cross-platform file locking
 # via `fs4`, which builds on Linux, macOS, and Windows alike). Validation and
 # reading remain feature-independent.
+# Tracks the published core library API, which is unchanged in crate 0.4.0
+# (that release adds only the CLI binary, fuzzing, and docs). Pinning the
+# major-compatible 0.3 line keeps the bindings buildable from crates.io without
+# a publish-ordering deadlock; the compiled extension is identical either way.
 bellbook_core = { package = "bellbook", version = "0.3", default-features = false, features = [
     "persist",
 ] }

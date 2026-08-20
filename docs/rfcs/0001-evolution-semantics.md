@@ -2,11 +2,11 @@
 
 **Status:** Accepted (revision 5). This document specifies the design for
 spec v0.3, which is implemented and normatively described by
-[SPEC.md](../../SPEC.md) and released as `bellbook` 0.3.0; it does not
+[SPEC.md](../../SPEC.md) and first released as `bellbook` 0.3.0; it does not
 change spec v0.2 or the 0.2.0 crate. Where this design and SPEC.md differ,
 SPEC.md is authoritative.
 
-**Scope anchor:** the wedge defined in [VISION.md](../VISION.md#next--v03-the-wedge-under-design):
+**Scope anchor:** the wedge defined in [VISION.md](../VISION.md#now-v03-shipped-the-wedge):
 *verifiable candidate selection and lineage for autonomous coding agents*,
 on top of Git, reusing the v0.2 trust kernel unchanged.
 

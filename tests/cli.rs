@@ -586,6 +586,104 @@ fn export_round_trips_to_a_clean_receipt() {
 }
 
 #[test]
+fn rules_init_to_stdout_parses() {
+    // With no --out, the rules JSON goes to stdout and parses as VerifierRules.
+    let out = bellbook()
+        .args(["rules", "init", "--author", "agent:provider"])
+        .output()
+        .unwrap();
+    assert!(out.status.success());
+    let parsed: VerifierRules =
+        serde_json::from_slice(&out.stdout).expect("stdout must be a rules object");
+    assert_eq!(
+        parsed.author_roles.get("agent"),
+        Some(&AuthorType::Provider)
+    );
+}
+
+#[test]
+fn rules_init_binds_multiple_authors_and_max_context() {
+    let out = bellbook()
+        .args([
+            "rules",
+            "init",
+            "--author",
+            "agent:provider",
+            "--author",
+            "human:user",
+            "--max-context",
+            "42",
+        ])
+        .output()
+        .unwrap();
+    assert!(out.status.success());
+    let parsed: VerifierRules = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(
+        parsed.author_roles.get("agent"),
+        Some(&AuthorType::Provider)
+    );
+    assert_eq!(parsed.author_roles.get("human"), Some(&AuthorType::User));
+    assert_eq!(parsed.max_context_records, 42);
+}
+
+#[test]
+fn rules_init_needs_an_author() {
+    let out = bellbook().args(["rules", "init"]).output().unwrap();
+    assert_eq!(out.status.code(), Some(64));
+    assert!(String::from_utf8_lossy(&out.stderr).contains("at least one --author"));
+}
+
+#[test]
+fn rules_init_rejects_bad_max_context() {
+    let out = bellbook()
+        .args([
+            "rules",
+            "init",
+            "--author",
+            "agent:provider",
+            "--max-context",
+            "lots",
+        ])
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(64));
+    assert!(String::from_utf8_lossy(&out.stderr).contains("invalid --max-context"));
+}
+
+#[test]
+fn export_to_stdout_validates() {
+    let env = setup();
+    let _root = add_root(&env, TREE_A);
+    // No --out: the receipt bytes go to stdout; feed them straight to validate.
+    let out = run(&env, &["export"]);
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(!out.stdout.is_empty(), "export wrote nothing to stdout");
+    let receipt = env._dir.path().join("stdout-receipt.json");
+    std::fs::write(&receipt, &out.stdout).unwrap();
+    let out = bellbook().arg("validate").arg(&receipt).output().unwrap();
+    assert_eq!(out.status.code(), Some(0));
+    assert!(String::from_utf8_lossy(&out.stdout).contains("CLEAN"));
+}
+
+#[test]
+fn export_of_an_empty_log_succeeds() {
+    // A fresh log with nothing committed still exports a (trivially valid)
+    // receipt rather than erroring or panicking.
+    let env = setup();
+    let out = run(&env, &["export"]);
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(!out.stdout.is_empty());
+}
+
+#[test]
 fn validate_is_feature_independent() {
     // `validate` needs no log; a missing file is an unreadable-input error (66),
     // proving the command dispatches without touching the persist path.

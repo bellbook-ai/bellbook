@@ -1,6 +1,7 @@
 # Bellbook specification
 
-**Spec version: 0.3 (published as `bellbook` 0.3.0).** The previous epoch
+**Spec version: 0.3 (first published as `bellbook` 0.3.0; also implemented by
+0.4.0 and later).** The previous epoch
 is 0.2; its artifacts remain valid under v0.2 rules forever, and the
 published 0.2.x release is their validator (§14). This document is
 versioned independently of the `bellbook` crate; the crate's CHANGELOG
