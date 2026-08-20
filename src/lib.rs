@@ -71,6 +71,9 @@ pub mod checkpoint;
 pub mod context;
 #[cfg(feature = "persist")]
 pub mod log;
+/// Canonical manifest v1: an algorithm-independent content commitment over a
+/// Git tree (SPEC §5.1).
+pub mod manifest;
 /// The untrusted [`Proposer`] interface - emits proposals, holds no append
 /// authority.
 pub mod propose;
@@ -137,6 +140,10 @@ pub use state::incremental::{apply_record, find_replace_ref};
 pub use state::state::State;
 
 pub use context::context::{build_context, build_context_with, Context, ContextPolicy};
+
+#[cfg(feature = "persist")]
+pub use manifest::manifest_from_dir;
+pub use manifest::{manifest_hash, FileMode, ManifestEntry};
 
 pub use propose::proposer::Proposer;
 
