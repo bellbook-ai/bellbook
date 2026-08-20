@@ -127,10 +127,10 @@ impl Report {
     #[getter]
     fn standing<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyDict>> {
         let s = &self.inner.standing;
-        let out = PyDict::new_bound(py);
+        let out = PyDict::new(py);
         out.set_item("compromised", ids(&s.compromised))?;
         out.set_item("unsound", ids(&s.unsound))?;
-        let restorations = PyDict::new_bound(py);
+        let restorations = PyDict::new(py);
         for (target, replacers) in &s.restorations {
             restorations.set_item(hex_encode(target), ids(replacers))?;
         }
@@ -273,7 +273,7 @@ impl Record {
             .refs
             .iter()
             .map(|r| {
-                let d = PyDict::new_bound(py);
+                let d = PyDict::new(py);
                 d.set_item("type", format!("{:?}", r.type_))?;
                 d.set_item("target", hex_encode(&r.target))?;
                 Ok(d)
@@ -778,7 +778,7 @@ impl Writer {
         let bytes = CoreReceipt::new(self.inner.records(), &self.rules)
             .to_bytes()
             .map_err(|e| PyRuntimeError::new_err(format!("cannot serialize receipt: {e}")))?;
-        Ok(PyBytes::new_bound(py, &bytes))
+        Ok(PyBytes::new(py, &bytes))
     }
 
     fn __repr__(&self) -> String {
