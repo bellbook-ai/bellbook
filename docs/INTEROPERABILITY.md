@@ -79,7 +79,7 @@ declaration.
 ## Standards mapping
 
 The deeper outward mapping (OpenTelemetry log model, W3C PROV, in-toto
-statements, SCITT receipts for anchoring) is tracked separately; see the
-interop mapping issue. The short version: Bellbook specializes in agent
-governance and replay verification, and maps outward to established
+statements, SCITT receipts for anchoring) has its own document:
+[STANDARDS.md](STANDARDS.md). The short version: Bellbook specializes in
+agent governance and replay verification, and maps outward to established
 standards rather than growing competing layers.
