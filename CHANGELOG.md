@@ -20,6 +20,13 @@ and releases follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- Conformance corpus completeness for the evolution rules (#29): with the
+  per-reason-code triggering cases (#24/#25), the standing receipt cases and
+  byte-for-byte `standing`-section agreement (#26), this adds the
+  `max_considered` / receipt-ref-bound interplay - a comparative Selection the
+  verifier accepts at `max_considered` (one evaluation per considered
+  candidate), and the same Selection's ref count rejected structurally by a
+  tight receipt ref budget. Both implementations agree on every case.
 - Extended v0.3 test vectors (#28): the golden vectors now pin every
   evolution-kind subject shape, not just one per kind - a `manifest`
   source binding (SHA-256 object format, `commit`, `manifest_hash`), a
