@@ -1,0 +1,47 @@
+name: Fuzz
+
+# Coverage-guided fuzzing of the receipt trust boundary (issue #65). This is the
+# deep layer; the always-on, per-push layer is tests/fuzz_trust_boundary.rs,
+# which runs in the normal test job. Fuzzing is long-running and
+# non-deterministic, so it runs on a schedule and on demand and NEVER gates a
+# pull request.
+
+on:
+  schedule:
+    - cron: "0 6 * * 1" # Mondays, 06:00 UTC
+  workflow_dispatch:
+    inputs:
+      max_total_time:
+        description: "Seconds to run each fuzz target"
+        default: "300"
+
+permissions:
+  contents: read
+
+jobs:
+  fuzz:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        target: [validate, receipt_parse, canonical_json]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772
+        with:
+          toolchain: nightly
+      - name: Install cargo-fuzz
+        run: cargo install cargo-fuzz --locked
+      - name: Fuzz ${{ matrix.target }}
+        working-directory: fuzz
+        run: |
+          cargo +nightly fuzz run ${{ matrix.target }} -- \
+            -max_total_time=${{ github.event.inputs.max_total_time || '300' }} \
+            -rss_limit_mb=4096
+      - name: Upload crash reproducers
+        if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: fuzz-artifacts-${{ matrix.target }}
+          path: fuzz/artifacts
+          if-no-files-found: ignore

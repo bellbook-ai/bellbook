@@ -10,9 +10,9 @@ repository = "https://github.com/bellbook-ai/bellbook"
 keywords = ["audit", "append-only", "tamper-evident", "agent", "provenance"]
 categories = ["data-structures", "development-tools"]
 readme = "README.md"
-# The Python bindings under bindings/ are their own crate and not part of the
-# published Rust crate.
-exclude = ["bindings"]
+# The Python bindings under bindings/ and the fuzz targets under fuzz/ are their
+# own crates, not part of the published Rust crate.
+exclude = ["bindings", "fuzz"]
 
 # Standalone workspace root - intentionally not a member of any enclosing workspace.
 [workspace]
