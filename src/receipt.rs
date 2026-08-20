@@ -117,6 +117,12 @@ pub struct Report {
     /// records.
     #[serde(with = "strict_set")]
     pub tainted_records: BTreeSet<RecordId>,
+    /// The replay-derived standing section (SPEC §7.2, spec 0.3):
+    /// compromised candidates, unsound Selections, and restorations.
+    /// Re-derived on every validation like the taint sets; nothing standing
+    /// is embedded in the receipt.
+    #[serde(default)]
+    pub standing: crate::verify::standing::StandingSection,
 }
 
 impl Report {
@@ -133,6 +139,7 @@ impl Report {
             rules_hash: [0u8; 32],
             retracted_records: BTreeSet::new(),
             tainted_records: BTreeSet::new(),
+            standing: crate::verify::standing::StandingSection::default(),
         }
     }
 }
@@ -286,6 +293,7 @@ pub fn validate_with_limits(bytes: &[u8], limits: &ValidationLimits) -> Report {
         rules_hash,
         retracted_records: verdict.retracted_records,
         tainted_records: verdict.tainted_records,
+        standing: verdict.standing,
     }
 }
 
@@ -319,6 +327,30 @@ impl std::fmt::Display for Report {
             writeln!(f, "tainted ({}):", self.tainted_records.len())?;
             for id in &self.tainted_records {
                 writeln!(f, "  {}", hex_encode(id))?;
+            }
+        }
+        if !self.standing.is_empty() {
+            let s = &self.standing;
+            if !s.compromised.is_empty() {
+                writeln!(f, "standing-compromised ({}):", s.compromised.len())?;
+                for id in &s.compromised {
+                    writeln!(f, "  {}", hex_encode(id))?;
+                }
+            }
+            if !s.unsound.is_empty() {
+                writeln!(f, "unsound selections ({}):", s.unsound.len())?;
+                for id in &s.unsound {
+                    writeln!(f, "  {}", hex_encode(id))?;
+                }
+            }
+            if !s.restorations.is_empty() {
+                writeln!(f, "restorations ({}):", s.restorations.len())?;
+                for (target, replacers) in &s.restorations {
+                    writeln!(f, "  {} <- ", hex_encode(target))?;
+                    for r in replacers {
+                        writeln!(f, "    {}", hex_encode(r))?;
+                    }
+                }
             }
         }
         Ok(())

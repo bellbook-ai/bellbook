@@ -108,6 +108,15 @@ pub struct VerifierRules {
     /// Action path.
     #[serde(default)]
     pub selection_requires_approval: bool,
+    /// Whether a `Continuation` candidate whose anchor Selection is unsound
+    /// (retracted or tainted) at its commit position is rejected with
+    /// `LineageInvalid` (SPEC §7.2, spec 0.3 delta D6). Default false: by
+    /// default a continuation of an unsound Selection commits and is born
+    /// standing-compromised, because a ledger that cannot record ongoing
+    /// work stops being a ledger. Hosts that want commit-time strictness set
+    /// this.
+    #[serde(default)]
+    pub reject_compromised_continuation: bool,
 }
 
 /// Default `min_binding`: `Reported` imposes no minimum.
@@ -202,6 +211,7 @@ impl VerifierRules {
             reaffirmation_actors: BTreeSet::new(),
             max_considered: default_max_considered(),
             selection_requires_approval: false,
+            reject_compromised_continuation: false,
         }
     }
 

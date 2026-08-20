@@ -268,6 +268,11 @@ pub fn verify_log(
         i += 2;
     }
 
+    // Standing is derived at replay end from the accepted records and the
+    // final retracted/tainted sets (SPEC §7.2). Computed before the sets are
+    // moved out of `state`.
+    let standing = crate::verify::standing::derive_standing(records, &state);
+
     LogVerdict {
         result: VerdictResult::Accept,
         reason: None,
@@ -275,5 +280,6 @@ pub fn verify_log(
         last_time: records.last().map(|r| r.time).unwrap_or(0),
         retracted_records: state.retracted_records,
         tainted_records: state.tainted_records,
+        standing,
     }
 }
