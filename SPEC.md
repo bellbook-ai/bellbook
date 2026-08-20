@@ -1,14 +1,12 @@
 # Bellbook specification
 
-**Spec version: 0.3 (in development, unreleased).** The last published
-epoch is 0.2; its artifacts remain valid under v0.2 rules forever, and the
+**Spec version: 0.3 (published as `bellbook` 0.3.0).** The previous epoch
+is 0.2; its artifacts remain valid under v0.2 rules forever, and the
 published 0.2.x release is their validator (§14). This document is
 versioned independently of the `bellbook` crate; the crate's CHANGELOG
-states which spec version each release implements (see §14). The remaining
-v0.3 rules land section by section from
-[`spec/v0.3-delta.md`](spec/v0.3-delta.md), each together with its
-implementation, so this document always describes what the implementation
-does.
+states which spec version each release implements (see §14). The v0.3
+design notes are in [`spec/v0.3-delta.md`](spec/v0.3-delta.md); this
+document is the normative description of what the implementation does.
 
 This document is **normative**: conformance is defined by this
 specification, not by any implementation. Where the reference

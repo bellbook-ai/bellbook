@@ -1,10 +1,10 @@
 # RFC-0001: Software-evolution semantics (spec v0.3)
 
 **Status:** Accepted (revision 5). This document specifies the design for
-spec v0.3, which is implemented on `main` and normatively described by
-[SPEC.md](../../SPEC.md); it does not change spec v0.2 or the last published
-crate (0.2.0), and spec v0.3 remains unreleased as a crate. Where this
-design and SPEC.md differ, SPEC.md is authoritative.
+spec v0.3, which is implemented and normatively described by
+[SPEC.md](../../SPEC.md) and released as `bellbook` 0.3.0; it does not
+change spec v0.2 or the 0.2.0 crate. Where this design and SPEC.md differ,
+SPEC.md is authoritative.
 
 **Scope anchor:** the wedge defined in [VISION.md](../VISION.md#next--v03-the-wedge-under-design):
 *verifiable candidate selection and lineage for autonomous coding agents*,
