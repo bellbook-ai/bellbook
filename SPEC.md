@@ -376,7 +376,7 @@ payload lookup.
   uses `Cause`, not `Require`, deliberately: a candidate's evidence reflects
   its own content and a tainted history must never block recording ongoing
   work; the lineage consequence of the anchor's health is carried by
-  standing (§7.2, not yet implemented);
+  standing (§7.2);
 - an `Evaluation` must `Use` the record named in its `candidate` field (the
   epistemic subject edge, so a retracted candidate taints its evaluations),
   else `EvaluationInvalid`; `criterion` non-empty and `outcome` within the
@@ -1043,9 +1043,9 @@ Future receipt profiles should prevent silence from being mistaken for
 evidence. In particular, a profile that introduces required claims or
 verification attempts should define explicit representations for
 conflicting evidence, checks that did not run or failed open, and values
-that were not measured. The v0.2 core has no `Inconclusive` result,
+that were not measured. The current core has no `Inconclusive` result,
 Requirement record, or verification-attempt record, so these principles
-are intentionally not part of v0.2 conformance.
+are intentionally not part of core conformance.
 
 Existing core mechanisms still preserve useful facts without erasure:
 refusals record work that was not performed, rejected records remain in

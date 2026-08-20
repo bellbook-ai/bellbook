@@ -116,7 +116,8 @@ embeds.
   reaffirming selection on surviving evidence restores it. Standing is
   re-derived by every validator like the taint set, never embedded in a
   receipt, and never merged into kernel taint or evidence
-  ([SPEC §7.2](SPEC.md); run `cargo run --example broken_benchmark`).
+  ([SPEC §7.2](SPEC.md#72-standing); run `cargo run --example
+  broken_benchmark`).
 - **Honest threat model.** Tamper-*evident*, not tamper-proof: replay
   detects any interior edit to committed history, but the ledger's owner
   can rewrite the whole log from genesis. SPEC §11 states this plainly and
@@ -192,8 +193,11 @@ for the receipt format and the normative truth rules. Two honesty notes.
 reported `rules_hash` against a rule set you trust) - under default rules
 it means "internally consistent", not "meets a shared security
 baseline". And a receipt proves the recorded *process*, not source
-contents: a `Candidate`'s Git OIDs are pointers the repository resolves,
-and the **lineage, standing, and taint guarantees are conditional on the
+contents: a `Candidate`'s Git OIDs are pointers the repository resolves
+(under `manifest` binding a party holding the tree can recompute the hash
+and bind the receipt to actual contents; under `reported` binding it is a
+verifiable record of an unverified claim, and the receipt says which), and
+the **lineage, standing, and taint guarantees are conditional on the
 producer's recording discipline** - `basis`, `parent`, and refs are
 producer claims a verifier cannot check against intent
 ([SPEC §13](SPEC.md#13-known-limitations)).
@@ -215,6 +219,11 @@ bellbook select        --log <dir> --rules <file> --author <id> --objective <s> 
          --consider <id>... (--choose <id>... --uses-eval <id>... | --none) [--replaces <sel>]
 bellbook lineage       --log <dir> --rules <file> <id> [--json]
 ```
+
+The grammar above shows the load-bearing flags; optional ones
+(`--git-commit`, `--algo`, `--manifest`, `--note`, `--procedure`,
+`--uses`, `--rationale`, and `--json` on every command) are omitted for
+brevity. Run `bellbook` with no arguments for the full usage.
 
 **The log is single-writer by design.** `LogWriter` takes an exclusive
 lock on the directory for the life of the process, so exactly one
@@ -289,7 +298,7 @@ Open work, **not implemented**:
    the validator reports per-profile conformance instead of trusting
    the declaration.
 4. **Python bindings** - PyO3/maturin wheels wrapping this same core
-   (validation-first), once the v0.2 format is frozen by a release.
+   (validation-first), once the current spec epoch is frozen by a release.
 5. **Interop mapping** - a short document mapping Bellbook records
    outward to OpenTelemetry logs, W3C PROV, in-toto statements, and
    SCITT receipts, rather than inventing adjacent layers (the boundary
