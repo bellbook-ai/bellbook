@@ -203,12 +203,29 @@ mod persist_cmds {
         positionals: Vec<String>,
     }
 
-    fn parse(rest: &[String], multi: &[&str], bools: &[&str]) -> Result<Parsed, String> {
+    /// Parse `--flag` arguments against the declared flag names for a
+    /// subcommand. `singles` take one value, `multi` repeat/consume a run of
+    /// values, `bools` take none. An unrecognized `--flag` is an error (so a
+    /// typo like `--auther` is caught, not silently treated as a value slot),
+    /// a single-value flag whose next token is itself a declared flag is a
+    /// missing-value error (so `--procedure --passed` cannot silently swallow
+    /// `--passed`), and a single-value flag given twice is an error rather
+    /// than silently last-wins.
+    fn parse(
+        rest: &[String],
+        singles: &[&str],
+        multi: &[&str],
+        bools: &[&str],
+    ) -> Result<Parsed, String> {
         let mut p = Parsed {
             singles: BTreeMap::new(),
             multis: BTreeMap::new(),
             bools: BTreeSet::new(),
             positionals: Vec::new(),
+        };
+        let is_flag = |t: &str| {
+            t.strip_prefix("--")
+                .is_some_and(|n| singles.contains(&n) || multi.contains(&n) || bools.contains(&n))
         };
         let mut i = 0;
         while i < rest.len() {
@@ -228,12 +245,19 @@ mod persist_cmds {
                         return Err(format!("--{name} requires at least one value"));
                     }
                     p.multis.entry(name.to_string()).or_default().extend(vals);
-                } else {
+                } else if singles.contains(&name) {
                     let Some(v) = rest.get(i + 1) else {
                         return Err(format!("--{name} requires a value"));
                     };
-                    p.singles.insert(name.to_string(), v.clone());
+                    if is_flag(v) {
+                        return Err(format!("--{name} requires a value (found flag {v})"));
+                    }
+                    if p.singles.insert(name.to_string(), v.clone()).is_some() {
+                        return Err(format!("--{name} specified more than once"));
+                    }
                     i += 2;
+                } else {
+                    return Err(format!("unknown flag --{name}"));
                 }
             } else {
                 p.positionals.push(tok.clone());
@@ -297,6 +321,22 @@ mod persist_cmds {
         manifest_hash(&entries).ok_or_else(|| "manifest has duplicate paths".to_string())
     }
 
+    /// Encode a payload, then decode it back to run the same invariant checks
+    /// the verifier applies (score bounds, non-empty criterion/objective, ...).
+    /// This turns a statically-knowable payload violation into a clean
+    /// pre-commit error instead of a durable rejected record with an opaque
+    /// reason: `encode` is a bare serialization and never runs the `TryFrom`
+    /// bound checks, so without this round-trip a `--scale 13` would serialize,
+    /// commit, and only then reject.
+    fn checked_encode<T>(value: &T) -> Result<Vec<u8>, String>
+    where
+        T: serde::Serialize + serde::de::DeserializeOwned,
+    {
+        let bytes = encode(value).map_err(|e| format!("{e}"))?;
+        decode::<T>(&bytes).map_err(|e| format!("invalid payload: {e}"))?;
+        Ok(bytes)
+    }
+
     #[derive(serde::Serialize)]
     struct CommitOutput {
         id: String,
@@ -330,7 +370,8 @@ mod persist_cmds {
         } else if accepted {
             println!("{}", out.id);
         } else {
-            println!(
+            // A rejection is a diagnostic, not the command's data output.
+            eprintln!(
                 "{} rejected: {}",
                 out.id,
                 out.reason.as_deref().unwrap_or("?")
@@ -354,7 +395,24 @@ mod persist_cmds {
                 "unknown candidate subcommand {sub:?} (expected add)"
             ));
         }
-        let p = parse(rest, &["derives-from"], &["json"])?;
+        let p = parse(
+            rest,
+            &[
+                "log",
+                "rules",
+                "author",
+                "git-tree",
+                "git-commit",
+                "algo",
+                "note",
+                "manifest",
+                "continues",
+                "parent",
+                "upgrades",
+            ],
+            &["derives-from"],
+            &["json"],
+        )?;
         let rules = load_rules(&p)?;
         let (writer, state) = open(&p, &rules)?;
         let author = author(&rules, &p)?;
@@ -380,6 +438,12 @@ mod persist_cmds {
             return Err(
                 "--continues, --derives-from, and --upgrades are mutually exclusive".into(),
             );
+        }
+        // `--parent` names the continued-from candidate and is meaningful only
+        // for a continuation; silently dropping it elsewhere would lose stated
+        // intent, so reject it instead.
+        if continues.is_none() && p.singles.contains_key("parent") {
+            return Err("--parent is only valid with --continues".into());
         }
 
         let (basis, parent, refs) = if let Some(sel) = continues {
@@ -410,8 +474,21 @@ mod persist_cmds {
             // target's (SPEC §2 recording discipline).
             let target = parse_id(target_hex)?;
             let target_data = find_candidate(writer.records(), target).ok_or_else(|| {
-                format!("--upgrades target {target_hex:?} is not an accepted Candidate")
+                format!("--upgrades target {target_hex:?} is not a Candidate in this log")
             })?;
+            // A Derivation's Cause target must be an accepted, live candidate;
+            // upgrading onto a rejected or retracted one only mints a record
+            // the verifier will reject, so refuse before the write.
+            if !state.accepted_records.contains(&target) {
+                return Err(format!(
+                    "--upgrades target {target_hex:?} is not an accepted Candidate"
+                ));
+            }
+            if state.retracted_records.contains(&target) {
+                return Err(format!(
+                    "--upgrades target {target_hex:?} is retracted; upgrade a live candidate"
+                ));
+            }
             if target_data.source.git.tree != tree {
                 return Err(format!(
                     "refusing upgrade: --git-tree {tree:?} differs from the target candidate's tree {:?}",
@@ -436,7 +513,7 @@ mod persist_cmds {
             None => (None, BindingMode::Reported),
         };
 
-        let data = encode(&CandidateData {
+        let data = checked_encode(&CandidateData {
             source: SourceBinding {
                 git: GitSource { algo, tree, commit },
                 manifest_hash: manifest_hash_val,
@@ -445,8 +522,7 @@ mod persist_cmds {
             basis,
             parent,
             note,
-        })
-        .map_err(|e| format!("{e}"))?;
+        })?;
 
         let proposal = Proposal {
             space: rules.space,
@@ -469,7 +545,21 @@ mod persist_cmds {
         if sub != "add" {
             return Err(format!("unknown eval subcommand {sub:?} (expected add)"));
         }
-        let p = parse(rest, &["uses"], &["json", "passed", "failed"])?;
+        let p = parse(
+            rest,
+            &[
+                "log",
+                "rules",
+                "author",
+                "candidate",
+                "criterion",
+                "procedure",
+                "score",
+                "scale",
+            ],
+            &["uses"],
+            &["json", "passed", "failed"],
+        )?;
         let rules = load_rules(&p)?;
         let (writer, state) = open(&p, &rules)?;
         let author = author(&rules, &p)?;
@@ -511,13 +601,12 @@ mod persist_cmds {
             }
         }
 
-        let data = encode(&EvaluationData {
+        let data = checked_encode(&EvaluationData {
             candidate,
             criterion,
             procedure,
             outcome,
-        })
-        .map_err(|e| format!("{e}"))?;
+        })?;
 
         let proposal = Proposal {
             space: rules.space,
@@ -536,6 +625,14 @@ mod persist_cmds {
     pub fn select(rest: &[String]) -> Result<ExitCode, String> {
         let p = parse(
             rest,
+            &[
+                "log",
+                "rules",
+                "author",
+                "objective",
+                "rationale",
+                "replaces",
+            ],
             &["consider", "choose", "uses-eval"],
             &["json", "none"],
         )?;
@@ -597,13 +694,12 @@ mod persist_cmds {
             });
         }
 
-        let data = encode(&SelectionData {
+        let data = checked_encode(&SelectionData {
             objective,
             considered,
             outcome,
             rationale,
-        })
-        .map_err(|e| format!("{e}"))?;
+        })?;
 
         let proposal = Proposal {
             space: rules.space,
@@ -636,7 +732,7 @@ mod persist_cmds {
     }
 
     pub fn lineage(rest: &[String]) -> Result<ExitCode, String> {
-        let p = parse(rest, &[], &["json"])?;
+        let p = parse(rest, &["log", "rules"], &[], &["json"])?;
         let rules = load_rules(&p)?;
         let dir = require(&p, "log")?;
         let target_hex = p

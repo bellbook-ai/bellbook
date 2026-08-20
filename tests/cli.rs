@@ -285,6 +285,189 @@ fn unknown_author_is_rejected() {
 }
 
 #[test]
+fn out_of_range_score_is_caught_before_commit() {
+    let env = setup();
+    let root = add_root(&env, TREE_A);
+    // scale 13 exceeds the payload's 0..=12 bound. This is statically knowable,
+    // so it must be a clean pre-commit error, not a durable rejected record.
+    let out = run(
+        &env,
+        &[
+            "eval",
+            "add",
+            "--author",
+            "agent",
+            "--candidate",
+            &root,
+            "--criterion",
+            "x",
+            "--score",
+            "5",
+            "--scale",
+            "13",
+        ],
+    );
+    assert!(!out.status.success());
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("invalid payload"),
+        "unexpected stderr: {stderr}"
+    );
+}
+
+#[test]
+fn empty_criterion_is_caught_before_commit() {
+    let env = setup();
+    let root = add_root(&env, TREE_A);
+    let out = run(
+        &env,
+        &[
+            "eval",
+            "add",
+            "--author",
+            "agent",
+            "--candidate",
+            &root,
+            "--criterion",
+            "",
+            "--passed",
+        ],
+    );
+    assert!(!out.status.success());
+    assert!(String::from_utf8_lossy(&out.stderr).contains("invalid payload"));
+}
+
+#[test]
+fn rejected_record_exits_nonzero_with_verdict_json() {
+    let env = setup();
+    // An invalid (non-hex) tree passes payload decoding but the verifier
+    // rejects it (SourceBindingInvalid) at commit: this exercises the reject
+    // branch end to end - valid JSON with result "reject" and a nonzero exit.
+    let out = run(
+        &env,
+        &[
+            "candidate",
+            "add",
+            "--author",
+            "agent",
+            "--git-tree",
+            "not-hex",
+            "--json",
+        ],
+    );
+    assert!(!out.status.success());
+    let v: Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(v["result"], "reject");
+    assert!(v["reason"].is_string());
+    assert_eq!(v["id"].as_str().unwrap().len(), 64);
+}
+
+#[test]
+fn unknown_flag_is_rejected() {
+    let env = setup();
+    let out = run(
+        &env,
+        &[
+            "candidate",
+            "add",
+            "--author",
+            "agent",
+            "--git-tree",
+            TREE_A,
+            "--auther",
+            "oops",
+        ],
+    );
+    assert!(!out.status.success());
+    assert!(String::from_utf8_lossy(&out.stderr).contains("unknown flag --auther"));
+}
+
+#[test]
+fn single_value_flag_does_not_swallow_following_flag() {
+    let env = setup();
+    let root = add_root(&env, TREE_A);
+    // `--procedure` immediately followed by `--passed` must not consume it.
+    let out = run(
+        &env,
+        &[
+            "eval",
+            "add",
+            "--author",
+            "agent",
+            "--candidate",
+            &root,
+            "--procedure",
+            "--passed",
+        ],
+    );
+    assert!(!out.status.success());
+    assert!(String::from_utf8_lossy(&out.stderr).contains("requires a value"));
+}
+
+#[test]
+fn duplicate_single_flag_is_rejected() {
+    let env = setup();
+    let out = run(
+        &env,
+        &[
+            "candidate",
+            "add",
+            "--author",
+            "agent",
+            "--author",
+            "stranger",
+            "--git-tree",
+            TREE_A,
+        ],
+    );
+    assert!(!out.status.success());
+    assert!(String::from_utf8_lossy(&out.stderr).contains("specified more than once"));
+}
+
+#[test]
+fn parent_without_continues_is_rejected() {
+    let env = setup();
+    let out = run(
+        &env,
+        &[
+            "candidate",
+            "add",
+            "--author",
+            "agent",
+            "--git-tree",
+            TREE_A,
+            "--parent",
+            "00000000000000000000000000000000000000000000000000000000000000ab",
+        ],
+    );
+    assert!(!out.status.success());
+    assert!(
+        String::from_utf8_lossy(&out.stderr).contains("--parent is only valid with --continues")
+    );
+}
+
+#[test]
+fn upgrade_missing_target_is_rejected() {
+    let env = setup();
+    // A well-formed id that is not in the log at all.
+    let out = run(
+        &env,
+        &[
+            "candidate",
+            "add",
+            "--author",
+            "agent",
+            "--git-tree",
+            TREE_A,
+            "--upgrades",
+            "00000000000000000000000000000000000000000000000000000000000000ff",
+        ],
+    );
+    assert!(!out.status.success());
+    assert!(String::from_utf8_lossy(&out.stderr).contains("not a Candidate in this log"));
+}
+
+#[test]
 fn validate_is_feature_independent() {
     // `validate` needs no log; a missing file is an unreadable-input error (66),
     // proving the command dispatches without touching the persist path.
