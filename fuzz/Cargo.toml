@@ -1,0 +1,47 @@
+# Coverage-guided fuzz targets for Bellbook (issue #65). Its own crate and its
+# own workspace, excluded from the library crate so `cargo build`, `cargo test`,
+# and `cargo package` at the repo root never pull in libFuzzer or nightly.
+#
+# Run locally with a nightly toolchain:
+#   cargo install cargo-fuzz
+#   cargo +nightly fuzz run validate
+# See README.md.
+[package]
+name = "bellbook-fuzz"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+serde_json = "1"
+# Validation, reading, and canonicalization are feature-independent, so the
+# fuzz build does not need `persist`.
+bellbook = { path = "..", default-features = false }
+
+[[bin]]
+name = "validate"
+path = "fuzz_targets/validate.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "receipt_parse"
+path = "fuzz_targets/receipt_parse.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "canonical_json"
+path = "fuzz_targets/canonical_json.rs"
+test = false
+doc = false
+bench = false
+
+# Own workspace: keep the fuzz crate out of the library crate's workspace.
+[workspace]

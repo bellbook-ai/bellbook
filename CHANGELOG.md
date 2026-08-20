@@ -7,6 +7,17 @@ and releases follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- **Fuzzing harness over the receipt trust boundary** (#65). A fast, seeded
+  harness (`tests/fuzz_trust_boundary.rs`) runs in the ordinary test suite on
+  every push, asserting that `validate` never panics and that its reports,
+  along with `Receipt::from_bytes` and RFC 8785 canonicalization, stay
+  self-consistent for arbitrary input. A coverage-guided libFuzzer target set
+  (`fuzz/`) runs weekly and on demand for deeper exploration. `SECURITY.md`
+  documents both layers and the pending external-review gate. Development-only;
+  the published crate API is unchanged.
+
 ## [0.3.0] - 2026-08-20
 
 Second public release. Implements Bellbook spec version 0.3, the evolution

@@ -41,3 +41,24 @@ author identity is cryptographically bound only for actors with pinned
 signing keys; logs and receipts assume in-memory scale, with validation
 resource-bounded by default (`ValidationLimits`, CLI `--max-size`).
 Reports within those documented bounds are welcome as regular issues.
+
+## Hardening
+
+**Fuzzing.** The receipt trust boundary - the surface that takes untrusted
+bytes: `validate`, `Receipt::from_bytes`, and `canonical_json` - is fuzzed at
+two levels (issue #65):
+
+- A fast, deterministic, seeded harness runs in the ordinary test suite on
+  every push (`tests/fuzz_trust_boundary.rs`). It asserts the invariants that
+  must hold for *any* input: `validate` never panics, a Clean report lists
+  nothing retracted or tainted, an Invalid report always states a reason, and
+  RFC 8785 canonicalization is total and idempotent.
+- A coverage-guided libFuzzer target set (`fuzz/`, run weekly and on demand via
+  `.github/workflows/fuzz.yml`) explores the same entry points more deeply. A
+  crash or a violated invariant there is a security finding, reported as above.
+
+**External security review.** An independent review of the kernel and
+verification path is planned; its acceptance gate is **zero unresolved
+blocker-severity findings**, and its findings will be published. This gap is
+tracked openly in issue #65 rather than implied done - Bellbook does not claim
+assurance it has not earned.
