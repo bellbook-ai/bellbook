@@ -1,9 +1,11 @@
 //! Golden test vectors for the current spec epoch's canonical form (SPEC §3.1).
 //!
 //! Builds a fixed, fully deterministic log containing at least one record of
-//! every kind, and asserts each kind's first record against
-//! `spec/test-vectors-v0.3.json`: canonical id form (the exact JCS bytes
-//! fed to SHA-256) and the resulting id. A deterministic signed vector also
+//! every kind, and asserts one record of each non-evolution kind plus every
+//! evolution-kind subject (so the richer v0.3 canonical forms are each pinned)
+//! against `spec/test-vectors-v0.3.json`: canonical id form (the exact JCS
+//! bytes fed to SHA-256) and the resulting id. A deterministic signed vector
+//! also
 //! fixes the signing form, key material, signature, final id form, and a
 //! key-substitution case. Third-party implementations can reproduce every
 //! byte and id without running Rust.
@@ -376,7 +378,7 @@ fn scripted_log(dir: &std::path::Path) -> Vec<Record> {
         &mut state,
     );
 
-    commit(
+    let selection_id = commit(
         proposal(
             Kind::Selection,
             SCHEMA_SELECTION,
@@ -397,6 +399,141 @@ fn scripted_log(dir: &std::path::Path) -> Vec<Record> {
                 Ref {
                     type_: RefType::Require,
                     target: candidate_id,
+                },
+            ],
+            author("agent", AuthorType::Provider),
+        ),
+        &mut writer,
+        &mut state,
+    );
+
+    // A continuation candidate with a full `manifest` binding: exercises the
+    // SHA-256 object format, the `commit` provenance field, `manifest_hash`,
+    // `basis: continuation`, and `parent` in the canonical form.
+    let continuation_id = commit(
+        proposal(
+            Kind::Candidate,
+            SCHEMA_CANDIDATE,
+            encode(&CandidateData {
+                source: SourceBinding {
+                    git: GitSource {
+                        algo: SourceAlgo::Sha256,
+                        tree: "a".repeat(64),
+                        commit: Some("b".repeat(64)),
+                    },
+                    manifest_hash: Some([0x11u8; 32]),
+                    binding: BindingMode::Manifest,
+                },
+                basis: CandidateBasis::Continuation,
+                parent: Some(candidate_id),
+                note: None,
+            })
+            .unwrap(),
+            vec![cause(selection_id)],
+            author("agent", AuthorType::Provider),
+        ),
+        &mut writer,
+        &mut state,
+    );
+
+    // A derivation candidate (repair/mutation over sibling material).
+    commit(
+        proposal(
+            Kind::Candidate,
+            SCHEMA_CANDIDATE,
+            encode(&CandidateData {
+                source: SourceBinding {
+                    git: GitSource {
+                        algo: SourceAlgo::Sha1,
+                        tree: "4b825dc642cb6eb9a060e54bf8d69288fbee4904".into(),
+                        commit: None,
+                    },
+                    manifest_hash: None,
+                    binding: BindingMode::Reported,
+                },
+                basis: CandidateBasis::Derivation,
+                parent: None,
+                note: Some("repair".into()),
+            })
+            .unwrap(),
+            vec![cause(continuation_id)],
+            author("agent", AuthorType::Provider),
+        ),
+        &mut writer,
+        &mut state,
+    );
+
+    // A `passed` evaluation of the continuation: exercises the unit-variant
+    // outcome canonical form (contrast the earlier `scored` evaluation).
+    commit(
+        proposal(
+            Kind::Evaluation,
+            SCHEMA_EVALUATION,
+            encode(&EvaluationData {
+                candidate: continuation_id,
+                criterion: "lint".into(),
+                procedure: None,
+                outcome: EvaluationOutcome::Passed,
+            })
+            .unwrap(),
+            vec![Ref {
+                type_: RefType::Use,
+                target: continuation_id,
+            }],
+            author("tool-executor", AuthorType::Executor),
+        ),
+        &mut writer,
+        &mut state,
+    );
+
+    // A `none` selection (a prune): exercises the unit-variant outcome with no
+    // candidate Require refs.
+    commit(
+        proposal(
+            Kind::Selection,
+            SCHEMA_SELECTION,
+            encode(&SelectionData {
+                objective: "latency budget".into(),
+                considered: vec![continuation_id],
+                outcome: SelectionOutcome::None,
+                rationale: None,
+            })
+            .unwrap(),
+            vec![],
+            author("agent", AuthorType::Provider),
+        ),
+        &mut writer,
+        &mut state,
+    );
+
+    // A reaffirmation: a Selection that Replaces the earlier one under the same
+    // objective, re-selecting the same candidate (exercises the Replace ref in
+    // the canonical form).
+    commit(
+        proposal(
+            Kind::Selection,
+            SCHEMA_SELECTION,
+            encode(&SelectionData {
+                objective: "all tests green".into(),
+                considered: vec![candidate_id],
+                outcome: SelectionOutcome::Selected {
+                    candidates: vec![candidate_id],
+                },
+                rationale: Some("reaffirmed".into()),
+            })
+            .unwrap(),
+            vec![
+                Ref {
+                    type_: RefType::Use,
+                    target: evaluation_id,
+                },
+                Ref {
+                    type_: RefType::Require,
+                    target: candidate_id,
+                },
+                Ref {
+                    type_: RefType::Replace,
+                    target: selection_id,
                 },
             ],
             author("agent", AuthorType::Provider),
@@ -499,14 +636,20 @@ fn build_signed_vector(unsigned: &Record) -> SignedVector {
 }
 
 fn build_vector_file(records: &[Record]) -> VectorFile {
-    // First record of each kind, in log order.
+    // One record of each non-evolution kind, plus *every* evolution-kind
+    // subject record, so the richer v0.3 canonical forms (manifest binding,
+    // scored vs passed, none vs selected, continuation/derivation, Replace)
+    // are each pinned for cross-implementation byte agreement.
+    let is_evolution = |k: Kind| matches!(k, Kind::Candidate | Kind::Evaluation | Kind::Selection);
     let mut seen: BTreeMap<Kind, ()> = BTreeMap::new();
     let mut vectors = Vec::new();
     for r in records {
-        if seen.contains_key(&r.kind) {
-            continue;
+        if !is_evolution(r.kind) {
+            if seen.contains_key(&r.kind) {
+                continue;
+            }
+            seen.insert(r.kind, ());
         }
-        seen.insert(r.kind, ());
         vectors.push(Vector {
             kind: format!("{:?}", r.kind),
             schema: schema_name_for_id(&r.schema).unwrap().to_string(),
@@ -519,7 +662,7 @@ fn build_vector_file(records: &[Record]) -> VectorFile {
     vectors.sort_by_key(|v| v.time);
     VectorFile {
         spec_version: SPEC_VERSION.into(),
-        description: "One unsigned record of each kind from a fixed scripted log, plus a deterministic signed Request and valid alternate-key substitution. id = SHA-256(canonical id form); the domain-separated signing form wraps the record with id and author.signature omitted, while a signed canonical id form omits only id. space/thread/scope ids are SHA-256 of the given UTF-8 names."
+        description: "One unsigned record of each non-evolution kind plus every evolution-kind (Candidate/Evaluation/Selection) subject from a fixed scripted log, so the richer v0.3 canonical forms (manifest binding, scored vs passed, none vs selected, continuation/derivation, Replace) are each pinned; plus a deterministic signed Request and valid alternate-key substitution. id = SHA-256(canonical id form); the domain-separated signing form wraps the record with id and author.signature omitted, while a signed canonical id form omits only id. space/thread/scope ids are SHA-256 of the given UTF-8 names."
             .into(),
         space_name: SPACE_NAME.into(),
         thread_name: THREAD_NAME.into(),
@@ -534,10 +677,18 @@ fn build_vector_file(records: &[Record]) -> VectorFile {
 fn spec_vectors_match() {
     let dir = tempfile::tempdir().unwrap();
     let records = scripted_log(dir.path());
-    assert_eq!(records.len(), 30); // 15 subjects + 15 verdicts
+    assert_eq!(records.len(), 40); // 20 subjects + 20 verdicts
 
     let built = build_vector_file(&records);
-    assert_eq!(built.vectors.len(), 15, "one vector per kind");
+    // One vector per non-evolution kind, plus every evolution-kind subject
+    // (3 candidates, 2 evaluations, 3 selections).
+    let evolution = built
+        .vectors
+        .iter()
+        .filter(|v| matches!(v.kind.as_str(), "Candidate" | "Evaluation" | "Selection"))
+        .count();
+    assert_eq!(evolution, 8, "richer evolution shapes pinned");
+    assert_eq!(built.vectors.len(), 20);
 
     // Every unsigned and signed vector must round-trip to its published id.
     for v in &built.vectors {
