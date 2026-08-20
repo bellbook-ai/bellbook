@@ -1651,6 +1651,47 @@ fn build_record_cases() -> Vec<RecordCase> {
             ))
         },
     ));
+    // Accept: a comparative Selection exactly at max_considered, Using one
+    // evaluation per considered candidate plus the winner Require. This is the
+    // shape whose ref count (Used evaluations + winners) approaches the receipt
+    // ref limit while the verifier accepts it; the malformed corpus pins the
+    // receipt ref bound biting on the same shape (spec 0.3, delta D3).
+    cases.push(record_case(
+        "accept-selection-comparative-at-max-considered",
+        "A comparative Selection at max_considered, one evaluation per candidate.",
+        rules_max_considered(4),
+        |w, r, s| {
+            let mut cids = Vec::new();
+            let mut eids = Vec::new();
+            for i in 0..4 {
+                let (cid, v) = w
+                    .commit(
+                        candidate_root_note(&format!("c{i}"), provider_author()),
+                        r,
+                        s,
+                    )
+                    .unwrap();
+                assert_eq!(v.result, VerdictResult::Accept);
+                let (eid, v) = w
+                    .commit(evaluation_proposal(cid, executor_author()), r, s)
+                    .unwrap();
+                assert_eq!(v.result, VerdictResult::Accept);
+                cids.push(cid);
+                eids.push(eid);
+            }
+            let mut refs: Vec<Ref> = eids.iter().map(|&e| use_ref(e)).collect();
+            refs.push(require_ref(cids[0]));
+            cand(selection_custom(
+                "latency",
+                cids.clone(),
+                SelectionOutcome::Selected {
+                    candidates: vec![cids[0]],
+                },
+                provider_author(),
+                refs,
+            ))
+        },
+    ));
     // SelectionInvalid: a winner below the configured min_binding.
     cases.push(record_case(
         "reject-selection-min-binding",
@@ -3372,7 +3413,83 @@ fn build_malformed_cases() -> Vec<MalformedCase> {
         ));
     }
 
+    // The receipt ref bound bites on a comparative Selection: the verifier
+    // accepts it at max_considered (see accept-selection-comparative-at-max-
+    // considered), but its Used evaluations plus its winner Require exceed a
+    // tight max_refs_per_record and are rejected structurally before replay
+    // (spec 0.3, delta D3; the effective bound on Used evaluations is the
+    // receipt ref limit).
+    {
+        let json = scripted_comparative_selection_receipt();
+        let limits = CaseLimits {
+            max_bytes: 64 << 20,
+            max_records: 1_000_000,
+            max_payload_bytes: 16 << 20,
+            // The Selection carries 4 Use refs plus 1 winner Require (5); a
+            // budget of 4 rejects it.
+            max_refs_per_record: 4,
+        };
+        let report = validate_with_limits(json.as_bytes(), &to_limits(&limits));
+        cases.push(malformed(
+            "exceeds-max-refs-comparative-selection",
+            "A comparative Selection accepted by the verifier at max_considered, but its ref count exceeds a tight receipt ref budget.",
+            json,
+            Some(limits),
+            &report,
+            "exceeds ref-count limit",
+        ));
+    }
+
     cases
+}
+
+/// Script a clean log ending in a comparative Selection (four candidates, one
+/// evaluation each, one winner) under `max_considered = 4`, and return its
+/// receipt as a JSON string. The Selection carries five refs (four `Use`, one
+/// winner `Require`).
+fn scripted_comparative_selection_receipt() -> String {
+    let rules = rules_max_considered(4);
+    let dir = tempfile::tempdir().unwrap();
+    let mut w = LogWriter::open(dir.path(), &rules).unwrap();
+    let mut st = State::default();
+    let mut cids = Vec::new();
+    let mut refs: Vec<Ref> = Vec::new();
+    for i in 0..4 {
+        let cid = commit_expect(
+            &mut w,
+            &rules,
+            &mut st,
+            candidate_root_note(&format!("c{i}"), provider_author()),
+            VerdictResult::Accept,
+        );
+        let eid = commit_expect(
+            &mut w,
+            &rules,
+            &mut st,
+            evaluation_proposal(cid, executor_author()),
+            VerdictResult::Accept,
+        );
+        cids.push(cid);
+        refs.push(use_ref(eid));
+    }
+    refs.push(require_ref(cids[0]));
+    commit_expect(
+        &mut w,
+        &rules,
+        &mut st,
+        selection_custom(
+            "latency",
+            cids.clone(),
+            SelectionOutcome::Selected {
+                candidates: vec![cids[0]],
+            },
+            provider_author(),
+            refs,
+        ),
+        VerdictResult::Accept,
+    );
+    let receipt = Receipt::new(w.records(), &rules);
+    String::from_utf8(receipt.to_bytes().unwrap()).unwrap()
 }
 
 fn to_limits(l: &CaseLimits) -> ValidationLimits {
