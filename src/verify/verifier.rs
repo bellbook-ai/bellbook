@@ -47,6 +47,10 @@ pub struct LogVerdict {
     /// Ids of records tainted by epistemic dependence on a retracted
     /// record (see `retracted_records` for population rules).
     pub tainted_records: BTreeSet<RecordId>,
+    /// The replay-derived standing section (SPEC §7.2): compromised
+    /// candidates, unsound Selections, and restorations. Populated on Accept
+    /// alongside the taint sets; empty on Reject.
+    pub standing: crate::verify::standing::StandingSection,
 }
 
 /// Build a Reject LogVerdict; taint sets stay empty (only surfaced on Accept).
@@ -58,6 +62,7 @@ fn reject(reason: ReasonCode, checked_records: u64, records: &[Record]) -> LogVe
         last_time: records.last().map(|r| r.time).unwrap_or(0),
         retracted_records: BTreeSet::new(),
         tainted_records: BTreeSet::new(),
+        standing: crate::verify::standing::StandingSection::default(),
     }
 }
 

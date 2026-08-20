@@ -47,7 +47,22 @@ and releases follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `ApprovalMissing`/`ApprovalExpired`; mirrored in the Python validator with
   corpus cases for the approved, missing, mismatched-actor, expired,
   already-consumed, diverted-reaffirmation, and approved-reaffirmation
-  paths. Standing lands next (#26).
+  paths.
+- Standing (#26): the replay report gains a `standing` section
+  (`compromised` candidates, `unsound` Selections, `restorations`),
+  re-derived on every validation from the accepted records at replay end as
+  a pure function of the log. A retracted candidate is compromised
+  unconditionally; continuation standing follows anchor soundness and the
+  parent, derivation standing follows its candidate `Cause` targets, and one
+  reaffirmation re-selecting a parent restores the whole descendant subtree.
+  Receipts are unchanged in shape (nothing standing is embedded). Adds the
+  `reject_compromised_continuation` knob (default false). Mirrored in the
+  Python validator and pinned by standing receipt corpus cases (cascade,
+  derivation non-cascade and cascade, deep reaffirmation recovery,
+  None-reaffirmation, accepted-but-unsound-intermediate chains, competing
+  reaffirmations, the unrestorable retracted-candidate and retracted-parent
+  base cases, and the binding-upgrade idiom before and after retraction).
+  Completes the spec 0.3 evolution rule set.
 - Machine-readable conformance corpus under `spec/conformance/v0.2/`
   (record, receipt, and malformed-document cases) with a runner that
   re-derives every outcome from the stored inputs. It triggers a case for

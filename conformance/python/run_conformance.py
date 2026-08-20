@@ -262,12 +262,37 @@ def run_receipt_cases() -> tuple[int, list[str]]:
             report["tainted"] == expect_tai,
             f"receipt case `{c['name']}`: tainted set differs",
         )
-        assertions += 4
+        # Standing section (SPEC §7.2): compromised/unsound id sets and the
+        # restorations map, re-derived independently and compared byte for
+        # decision.
+        exp_std = expect.get("standing", {}) or {}
+        exp_comp = sorted(bb.bytes32(x).hex() for x in exp_std.get("compromised", []))
+        exp_uns = sorted(bb.bytes32(x).hex() for x in exp_std.get("unsound", []))
+        exp_rest = sorted(
+            (bb.bytes32(k).hex(), sorted(bb.bytes32(v).hex() for v in vs))
+            for k, vs in exp_std.get("restorations", [])
+        )
+        got_std = report["standing"]
+        got_rest = [(k, list(vs)) for k, vs in got_std["restorations"]]
+        check(
+            got_std["compromised"] == exp_comp,
+            f"receipt case `{c['name']}`: standing.compromised differs",
+        )
+        check(
+            got_std["unsound"] == exp_uns,
+            f"receipt case `{c['name']}`: standing.unsound differs",
+        )
+        check(
+            got_rest == exp_rest,
+            f"receipt case `{c['name']}`: standing.restorations differs",
+        )
+        assertions += 7
         statuses[report["status"]] = statuses.get(report["status"], 0) + 1
 
     notes = [
-        "independently replayed each receipt: status, reason, retracted and tainted "
-        f"sets match ({statuses['Clean']} Clean, {statuses['Tainted']} Tainted, "
+        "independently replayed each receipt: status, reason, retracted/tainted, "
+        "and the standing section (compromised, unsound, restorations) match "
+        f"({statuses['Clean']} Clean, {statuses['Tainted']} Tainted, "
         f"{statuses['Invalid']} Invalid)",
     ]
     if sig_skipped:

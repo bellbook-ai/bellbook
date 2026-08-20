@@ -129,6 +129,7 @@ pub use receipt::{
 };
 
 pub use verify::rules::VerifierRules;
+pub use verify::standing::{derive_standing, StandingSection};
 pub use verify::verifier::{verify_log, verify_record, LogVerdict};
 
 pub use state::build::{build_state_unchecked, verify_and_build_state};

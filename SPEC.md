@@ -163,12 +163,10 @@ produced software states are proposed, judged, and chosen:
   none, rationale: Option<String> }`. Set-valued: one survivor for
   best-of-N or a repair accept, several for population evolution.
 
-**Implementation status of the evolution rules:** the lineage, selection,
-reaffirmation, and Selection approval-binding rules
-([`spec/v0.3-delta.md`](spec/v0.3-delta.md) D3, D4, and D5) are implemented
-and specified in §4.1 and §7.1. Standing (D6, D7) is not yet implemented;
-until it lands, no receipt reports a standing section. This paragraph is
-trimmed when that final slice lands.
+The evolution rules ([`spec/v0.3-delta.md`](spec/v0.3-delta.md)) are
+implemented: lineage, selection, reaffirmation, and Selection
+approval-binding (D3, D4, D5) in §4.1 and §7.1, and standing (D6, D7) in
+§7.2 and §12.
 
 ## 3. Identity and hashing
 
@@ -436,6 +434,10 @@ this bound is independent of `max_refs_per_record` (`ValidationLimits`,
 comparative Selection that `Use`s one Evaluation per considered candidate
 is still bounded by the receipt ref limit. `selection_requires_approval`
 (default false) requires every Selection to carry the bound approval above.
+`reject_compromised_continuation` (default false) rejects, with
+`LineageInvalid`, a `Continuation` whose anchor Selection is unsound
+(retracted or tainted) at its commit position; by default such a
+continuation commits and is born standing-compromised (§7.2).
 
 ### 4.2 verify_log
 
@@ -726,9 +728,64 @@ records may `Replace` one target). It is append-only in the same sense as
 retraction: the earlier Selection and any retraction on its line stay
 permanently in the log. Reaffirmation exists to restore standing for a
 line whose anchor was later compromised; that restoration is a replay-time
-report dimension (§7.2) and lands with the standing slice - the rule
-implemented here is the objective-match and, when configured, the
-`reaffirmation_actors` allowlist.
+report dimension (§7.2). The verifier rule here is the objective-match and,
+when configured, the `reaffirmation_actors` allowlist; the restoration
+consequence is derived at replay end.
+
+### 7.2 Standing
+
+**Standing** answers, for each candidate: does its membership in a chosen
+line still rest on states and decisions that stand? It is derived at replay
+end, from accepted records only, as a pure function of the log - exactly as
+deterministic and forgery-resistant as the taint sets, because a validator
+re-derives it. It is **not** kernel taint: it does not affect evidence
+derivation, does not gate commits by default, and is reported alongside
+taint, never merged with it.
+
+A `Selection` is **unsound** at replay end iff it is retracted or tainted.
+(A rejected Selection can never be an anchor: the `LineageInvalid` rule
+requires every `Cause` target of a Candidate to be accepted at commit, and
+acceptance is permanent, so an anchor becomes unsound only later, via
+retraction or taint.)
+
+**Anchor soundness** for a continuation candidate C with `Cause` to
+Selection S and `parent` P: S itself is sound, or some accepted, sound
+Selection S2 exists with a `Replace` chain to S (one or more hops, every
+intermediate accepted) whose selected set contains P. Any sound replacement
+suffices (an existential over the fixed replay-end set, so the result is
+deterministic and order-independent). Intermediates need only be accepted,
+not sound.
+
+**Standing recursion** (well-founded; all edges point to earlier records):
+
+- A **retracted Candidate is compromised, unconditionally and
+  unrestorably**; no anchor, parent, or reaffirmation rule applies to it. A
+  state asserted wrong has no legitimate membership in any line, and without
+  this base case a same-tree derivation of a retracted candidate would
+  re-enter the line with sound standing.
+- A `Root` candidate (not retracted) is sound.
+- A `Continuation` candidate (not retracted) is sound iff its anchor is
+  sound and its parent's standing is sound.
+- A `Derivation` candidate (not retracted) is sound iff every `Cause`d
+  Candidate has sound standing; Evaluation targets carry no standing, so a
+  derivation with only Evaluation targets is sound.
+
+Whenever any candidate is compromised, some record is necessarily retracted
+or tainted, so the report status is already `Tainted` under the unchanged
+v0.2 status mapping; standing only adds which lineage is affected and what
+restored it. Standing does not reject new continuations of an unsound
+Selection by default; they commit and are born compromised (a ledger that
+cannot record ongoing work stops being a ledger, and rejection would create
+the perverse incentive to mislabel continuations as derivations). Rules MAY
+opt into commit-time strictness with `reject_compromised_continuation`.
+
+**Reachability pre-commitment.** `parent`, each `considered` member, and
+`EvaluationData.candidate` are edges a ref-walking tool cannot see.
+Reachability over the evolution kinds is therefore **payload-aware**: any
+future garbage collection, synchronization, or checkpoint tooling MUST treat
+these payload ids as reachability edges, or it would silently sever the
+standing spine. This is recorded now, before any such tooling exists, so no
+later stage inherits ref-only reachability as a hidden default.
 
 ## 8. State
 
@@ -910,6 +967,19 @@ externally anchored head attestation, §11.1) and `rules_hash` (compare
 against rules agreed out of band: acceptance is always relative to the
 embedded rules, and a validator cannot know whether those rules are the
 ones the parties intended).
+
+The `Report` also carries a **`standing`** section (§7.2), re-derived on
+every validation exactly like the retracted and tainted sets; the receipt
+embeds nothing standing, so there is nothing to forge. Its content:
+`compromised` (the standing-compromised Candidate ids), `unsound` (the
+unsound Selection ids), and `restorations` (for each unsound Selection with
+at least one sound replacement chain, the set of sound replacing Selection
+ids). Sets are id-byte-ordered like the existing report sets, and
+`restorations` encodes as pairs sorted by key id with each value set
+id-byte-ordered, so conforming implementations produce byte-identical
+sections. A validator that derives a different `standing` section from the
+same records is nonconforming, which the conformance corpus detects the same
+way it detects taint disagreement.
 
 Receipt decoding is strict for this version. Unknown fields in the
 receipt, rule document, record envelope, author, signature, ref, or typed

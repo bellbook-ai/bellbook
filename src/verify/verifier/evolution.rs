@@ -71,7 +71,7 @@ fn resolve_candidate<'a>(
 pub(super) fn check_candidate(
     record: &Record,
     prior: &Prior<'_>,
-    _rules: &VerifierRules,
+    rules: &VerifierRules,
     state: &State,
 ) -> Option<ReasonCode> {
     let data: CandidateData = dec!(&record.data, CandidateData);
@@ -120,6 +120,17 @@ pub(super) fn check_candidate(
             }
             let anchor = causes[0];
             if anchor.kind != Kind::Selection || !state.accepted_records.contains(&anchor.id) {
+                return Some(ReasonCode::LineageInvalid);
+            }
+            // Optional commit-time strictness (delta D6): reject a
+            // continuation whose anchor is already unsound (retracted or
+            // tainted) at this position. Off by default so the ledger can
+            // always record ongoing work; the standing report (SPEC §7.2)
+            // carries the lineage consequence otherwise.
+            if rules.reject_compromised_continuation
+                && (state.retracted_records.contains(&anchor.id)
+                    || state.tainted_records.contains(&anchor.id))
+            {
                 return Some(ReasonCode::LineageInvalid);
             }
             let Some(parent) = data.parent else {

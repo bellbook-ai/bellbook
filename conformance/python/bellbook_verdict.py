@@ -425,6 +425,7 @@ class Rules:
         self.reaffirmation_actors = set(wire.get("reaffirmation_actors", []))
         self.max_considered = wire.get("max_considered", 4096)
         self.selection_requires_approval = wire.get("selection_requires_approval", False)
+        self.reject_compromised_continuation = wire.get("reject_compromised_continuation", False)
 
 
 # ---------------------------------------------------------------------------
@@ -1375,6 +1376,12 @@ def _check_candidate(record, prior, rules, state):
         anchor = causes[0]
         if anchor["kind"] != "Selection" or h(anchor["id"]) not in state.accepted:
             return "LineageInvalid"
+        # Optional commit-time strictness (delta D6): reject a continuation
+        # whose anchor is already unsound (retracted or tainted).
+        if rules.reject_compromised_continuation and (
+            h(anchor["id"]) in state.retracted or h(anchor["id"]) in state.tainted
+        ):
+            return "LineageInvalid"
         if parent is None:
             return "LineageInvalid"
         anchor_data = payload(anchor)
@@ -1557,14 +1564,114 @@ def verify_record(record: dict, prior_records: list[dict], rules: Rules, state: 
     return {"result": "Reject", "reason": reason}
 
 
+_EMPTY_STANDING = {"compromised": [], "unsound": [], "restorations": []}
+
+
+def derive_standing(records: list[dict], state: State) -> dict:
+    """Replay-derived standing section (src/verify/standing.rs, SPEC §7.2).
+    Pure function of the accepted records at replay end. Sets are returned as
+    sorted hex-id lists (lowercase-hex sort equals the reference's id-byte
+    order); restorations as pairs sorted by key with sorted value lists."""
+    candidates: dict[str, dict] = {}
+    selections: dict[str, dict] = {}
+    for record in records:
+        rid = h(record["id"])
+        if rid not in state.accepted:
+            continue
+        k = record["kind"]
+        if k == "Candidate":
+            data = payload(record)
+            causes = [h(r["target"]) for r in record["refs"] if r["type"] == "Cause"]
+            parent = h(data["parent"]) if data.get("parent") is not None else None
+            candidates[rid] = {"basis": data["basis"], "parent": parent, "causes": causes}
+        elif k == "Selection":
+            data = payload(record)
+            outcome = data["outcome"]
+            if isinstance(outcome, dict) and "selected" in outcome:
+                selected = set(h(c) for c in outcome["selected"]["candidates"])
+            else:
+                selected = set()
+            replace_refs = [r for r in record["refs"] if r["type"] == "Replace"]
+            replace_target = h(replace_refs[0]["target"]) if replace_refs else None
+            selections[rid] = {"selected": selected, "replace_target": replace_target}
+
+    def is_unsound(sid: str) -> bool:
+        return sid in state.retracted or sid in state.tainted
+
+    unsound = set(s for s in selections if is_unsound(s))
+
+    # replacers[A] = sound Selections with a Replace chain reaching A (proper
+    # ancestor); intermediates need only be accepted, which every chain member
+    # is.
+    replacers: dict[str, set] = {}
+    for s2, info in selections.items():
+        if is_unsound(s2):
+            continue
+        hop = info["replace_target"]
+        guard = 0
+        while hop is not None:
+            replacers.setdefault(hop, set()).add(s2)
+            nxt = selections.get(hop)
+            hop = nxt["replace_target"] if nxt else None
+            guard += 1
+            if guard > len(selections):
+                break
+
+    restorations = {s: set(replacers[s]) for s in unsound if replacers.get(s)}
+
+    def anchor_sound(anchor: str, parent: str) -> bool:
+        if not is_unsound(anchor):
+            return True
+        return any(
+            parent in selections.get(s2, {}).get("selected", set())
+            for s2 in replacers.get(anchor, ())
+        )
+
+    sound: dict[str, bool] = {}
+
+    def standing_sound(cid: str) -> bool:
+        if cid in sound:
+            return sound[cid]
+        info = candidates.get(cid)
+        if info is None:
+            return False
+        if cid in state.retracted:
+            sound[cid] = False
+            return False
+        basis = info["basis"]
+        if basis == "root":
+            val = True
+        elif basis == "continuation":
+            anchor = info["causes"][0] if info["causes"] else None
+            parent = info["parent"]
+            val = (
+                anchor is not None
+                and parent is not None
+                and anchor_sound(anchor, parent)
+                and standing_sound(parent)
+            )
+        else:  # derivation
+            val = all(standing_sound(t) for t in info["causes"] if t in candidates)
+        sound[cid] = val
+        return val
+
+    compromised = set(cid for cid in candidates if not standing_sound(cid))
+    return {
+        "compromised": sorted(compromised),
+        "unsound": sorted(unsound),
+        "restorations": sorted((k, sorted(v)) for k, v in restorations.items()),
+    }
+
+
 class LogVerdict:
-    def __init__(self, result, reason, checked, last_time, retracted, tainted):
+    def __init__(self, result, reason, checked, last_time, retracted, tainted, standing=None):
         self.result = result
         self.reason = reason
         self.checked = checked
         self.last_time = last_time
         self.retracted = retracted
         self.tainted = tainted
+        self.standing = standing if standing is not None else dict(_EMPTY_STANDING)
 
 
 def _reject(reason, checked, records):
@@ -1643,7 +1750,10 @@ def verify_log(records: list[dict], rules: Rules) -> LogVerdict:
         i += 2
 
     last_time = records[-1]["time"] if records else 0
-    return LogVerdict("Accept", None, checked, last_time, state.retracted, state.tainted)
+    standing = derive_standing(records, state)
+    return LogVerdict(
+        "Accept", None, checked, last_time, state.retracted, state.tainted, standing
+    )
 
 
 def validate_receipt(records: list[dict], rules_wire: dict) -> dict:
@@ -1654,7 +1764,13 @@ def validate_receipt(records: list[dict], rules_wire: dict) -> dict:
     `Invalid` with no reason code, exactly like an unparseable receipt."""
     for r in records:
         if not _structurally_decodes(r):
-            return {"status": "Invalid", "reason": None, "retracted": [], "tainted": []}
+            return {
+                "status": "Invalid",
+                "reason": None,
+                "retracted": [],
+                "tainted": [],
+                "standing": dict(_EMPTY_STANDING),
+            }
     rules = Rules(rules_wire)
     v = verify_log(records, rules)
     if v.result == "Reject":
@@ -1668,4 +1784,5 @@ def validate_receipt(records: list[dict], rules_wire: dict) -> dict:
         "reason": v.reason,
         "retracted": sorted(v.retracted),
         "tainted": sorted(v.tainted),
+        "standing": v.standing,
     }

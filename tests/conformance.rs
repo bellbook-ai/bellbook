@@ -415,6 +415,12 @@ fn rules_reaffirmation_actors(actors: &[&str]) -> VerifierRules {
     r
 }
 
+fn rules_reject_compromised_continuation() -> VerifierRules {
+    let mut r = base_rules();
+    r.reject_compromised_continuation = true;
+    r
+}
+
 /// Commit a clean best-of-one lineage: a root candidate, an evaluation of
 /// it, and a Selection that selects it. Returns (candidate, evaluation,
 /// selection) ids for building continuation/reaffirmation cases on top.
@@ -727,6 +733,7 @@ struct ExpectReport {
     rules_hash: Hash256,
     retracted: Vec<RecordId>,
     tainted: Vec<RecordId>,
+    standing: StandingSection,
 }
 
 #[derive(serde::Serialize, serde::Deserialize, PartialEq, Debug, Clone)]
@@ -778,6 +785,7 @@ fn expect_from_report(r: &Report) -> ExpectReport {
         rules_hash: r.rules_hash,
         retracted: r.retracted_records.iter().copied().collect(),
         tainted: r.tainted_records.iter().copied().collect(),
+        standing: r.standing.clone(),
     }
 }
 
@@ -1705,6 +1713,51 @@ fn build_record_cases() -> Vec<RecordCase> {
         },
     ));
 
+    // LineageInvalid: a continuation of an unsound anchor rejects at commit
+    // when reject_compromised_continuation is set (spec 0.3, delta D6).
+    cases.push(record_case(
+        "reject-continuation-compromised-anchor",
+        "A Continuation of a retracted anchor Selection under reject_compromised_continuation.",
+        rules_reject_compromised_continuation(),
+        |w, r, s| {
+            let (cid, v) = w
+                .commit(candidate_proposal(provider_author()), r, s)
+                .unwrap();
+            assert_eq!(v.result, VerdictResult::Accept);
+            let (eid, v) = w
+                .commit(evaluation_proposal(cid, executor_author()), r, s)
+                .unwrap();
+            assert_eq!(v.result, VerdictResult::Accept);
+            let (sid, v) = w
+                .commit(
+                    selection_custom(
+                        "obj",
+                        vec![cid],
+                        SelectionOutcome::Selected {
+                            candidates: vec![cid],
+                        },
+                        provider_author(),
+                        vec![use_ref(eid), require_ref(cid)],
+                    ),
+                    r,
+                    s,
+                )
+                .unwrap();
+            assert_eq!(v.result, VerdictResult::Accept);
+            let (_ret, v) = w.commit(retraction_proposal(sid), r, s).unwrap();
+            assert_eq!(v.result, VerdictResult::Accept);
+            // The anchor sid is now retracted; the continuation rejects.
+            cand(candidate_custom(
+                default_source(),
+                CandidateBasis::Continuation,
+                Some(cid),
+                Some("late"),
+                provider_author(),
+                vec![cause_ref(sid)],
+            ))
+        },
+    ));
+
     // --- Selection approval binding battery (spec 0.3, delta D5). ---
 
     // Accept: a Selection Requiring a valid approval that binds its subject.
@@ -2217,7 +2270,914 @@ fn build_receipt_cases() -> Vec<ReceiptCase> {
         });
     }
 
+    cases.extend(build_standing_receipt_cases());
     cases
+}
+
+/// Commit a proposal into a scripted receipt log, asserting the expected
+/// verdict result. Returns the committed record id.
+fn commit_expect(
+    w: &mut LogWriter,
+    rules: &VerifierRules,
+    st: &mut State,
+    p: Proposal,
+    expect: VerdictResult,
+) -> RecordId {
+    let (id, v) = w.commit(p, rules, st).unwrap();
+    assert_eq!(v.result, expect, "scripted standing log verdict mismatch");
+    id
+}
+
+/// Standing (SPEC §7.2) receipt cases: whole-log validation whose report
+/// carries a `standing` section. Each builds an evolution log, validates it,
+/// and stores the report Rust derived; the Python validator must reproduce
+/// the same `standing` bytes.
+fn build_standing_receipt_cases() -> Vec<ReceiptCase> {
+    let mut cases = Vec::new();
+
+    let mut push = |name: &str, description: &str, records: &[Record], rules: &VerifierRules| {
+        let receipt = Receipt::new(records, rules);
+        let report = validate(&receipt.to_bytes().unwrap());
+        cases.push(ReceiptCase {
+            name: name.into(),
+            description: description.into(),
+            receipt,
+            expect: expect_from_report(&report),
+        });
+    };
+
+    // A: continuation compromise cascade - retracting the anchor Selection
+    // compromises the continuation whose lineage rests on it.
+    {
+        let rules = base_rules();
+        let dir = tempfile::tempdir().unwrap();
+        let mut w = LogWriter::open(dir.path(), &rules).unwrap();
+        let mut st = State::default();
+        let c0 = commit_expect(
+            &mut w,
+            &rules,
+            &mut st,
+            candidate_proposal(provider_author()),
+            VerdictResult::Accept,
+        );
+        let e0 = commit_expect(
+            &mut w,
+            &rules,
+            &mut st,
+            evaluation_proposal(c0, executor_author()),
+            VerdictResult::Accept,
+        );
+        let s0 = commit_expect(
+            &mut w,
+            &rules,
+            &mut st,
+            selection_custom(
+                "obj",
+                vec![c0],
+                SelectionOutcome::Selected {
+                    candidates: vec![c0],
+                },
+                provider_author(),
+                vec![use_ref(e0), require_ref(c0)],
+            ),
+            VerdictResult::Accept,
+        );
+        let _c1 = commit_expect(
+            &mut w,
+            &rules,
+            &mut st,
+            candidate_custom(
+                default_source(),
+                CandidateBasis::Continuation,
+                Some(c0),
+                Some("c1"),
+                provider_author(),
+                vec![cause_ref(s0)],
+            ),
+            VerdictResult::Accept,
+        );
+        let _ret = commit_expect(
+            &mut w,
+            &rules,
+            &mut st,
+            retraction_proposal(s0),
+            VerdictResult::Accept,
+        );
+        push(
+            "standing-continuation-cascade",
+            "Retracting an anchor Selection compromises the continuation resting on it.",
+            w.records(),
+            &rules,
+        );
+    }
+
+    // B: derivation with only an Evaluation motivation stays sound even when
+    // that evaluation is retracted (evaluation targets carry no standing).
+    {
+        let rules = base_rules();
+        let dir = tempfile::tempdir().unwrap();
+        let mut w = LogWriter::open(dir.path(), &rules).unwrap();
+        let mut st = State::default();
+        let c0 = commit_expect(
+            &mut w,
+            &rules,
+            &mut st,
+            candidate_proposal(provider_author()),
+            VerdictResult::Accept,
+        );
+        let e0 = commit_expect(
+            &mut w,
+            &rules,
+            &mut st,
+            evaluation_proposal(c0, executor_author()),
+            VerdictResult::Accept,
+        );
+        let _d1 = commit_expect(
+            &mut w,
+            &rules,
+            &mut st,
+            candidate_custom(
+                default_source(),
+                CandidateBasis::Derivation,
+                None,
+                Some("d1"),
+                provider_author(),
+                vec![cause_ref(e0)],
+            ),
+            VerdictResult::Accept,
+        );
+        let _ret = commit_expect(
+            &mut w,
+            &rules,
+            &mut st,
+            retraction_proposal(e0),
+            VerdictResult::Accept,
+        );
+        push("standing-derivation-evaluation-only", "A derivation motivated only by an Evaluation stays sound when that evaluation is retracted.", w.records(), &rules);
+    }
+
+    // C: derivation cascade - a derivation over a compromised candidate is
+    // itself compromised.
+    {
+        let rules = base_rules();
+        let dir = tempfile::tempdir().unwrap();
+        let mut w = LogWriter::open(dir.path(), &rules).unwrap();
+        let mut st = State::default();
+        let c0 = commit_expect(
+            &mut w,
+            &rules,
+            &mut st,
+            candidate_proposal(provider_author()),
+            VerdictResult::Accept,
+        );
+        let e0 = commit_expect(
+            &mut w,
+            &rules,
+            &mut st,
+            evaluation_proposal(c0, executor_author()),
+            VerdictResult::Accept,
+        );
+        let s0 = commit_expect(
+            &mut w,
+            &rules,
+            &mut st,
+            selection_custom(
+                "obj",
+                vec![c0],
+                SelectionOutcome::Selected {
+                    candidates: vec![c0],
+                },
+                provider_author(),
+                vec![use_ref(e0), require_ref(c0)],
+            ),
+            VerdictResult::Accept,
+        );
+        let c1 = commit_expect(
+            &mut w,
+            &rules,
+            &mut st,
+            candidate_custom(
+                default_source(),
+                CandidateBasis::Continuation,
+                Some(c0),
+                Some("c1"),
+                provider_author(),
+                vec![cause_ref(s0)],
+            ),
+            VerdictResult::Accept,
+        );
+        let _d2 = commit_expect(
+            &mut w,
+            &rules,
+            &mut st,
+            candidate_custom(
+                default_source(),
+                CandidateBasis::Derivation,
+                None,
+                Some("d2"),
+                provider_author(),
+                vec![cause_ref(c1)],
+            ),
+            VerdictResult::Accept,
+        );
+        let _ret = commit_expect(
+            &mut w,
+            &rules,
+            &mut st,
+            retraction_proposal(s0),
+            VerdictResult::Accept,
+        );
+        push(
+            "standing-derivation-cascade",
+            "A derivation over a compromised candidate is itself compromised.",
+            w.records(),
+            &rules,
+        );
+    }
+
+    // D: deep reaffirmation recovery - one reaffirmation re-selecting the
+    // parent restores the entire descendant subtree.
+    {
+        let rules = base_rules();
+        let dir = tempfile::tempdir().unwrap();
+        let mut w = LogWriter::open(dir.path(), &rules).unwrap();
+        let mut st = State::default();
+        let c0 = commit_expect(
+            &mut w,
+            &rules,
+            &mut st,
+            candidate_proposal(provider_author()),
+            VerdictResult::Accept,
+        );
+        let e0 = commit_expect(
+            &mut w,
+            &rules,
+            &mut st,
+            evaluation_proposal(c0, executor_author()),
+            VerdictResult::Accept,
+        );
+        let s0 = commit_expect(
+            &mut w,
+            &rules,
+            &mut st,
+            selection_custom(
+                "obj",
+                vec![c0],
+                SelectionOutcome::Selected {
+                    candidates: vec![c0],
+                },
+                provider_author(),
+                vec![use_ref(e0), require_ref(c0)],
+            ),
+            VerdictResult::Accept,
+        );
+        let c1 = commit_expect(
+            &mut w,
+            &rules,
+            &mut st,
+            candidate_custom(
+                default_source(),
+                CandidateBasis::Continuation,
+                Some(c0),
+                Some("c1"),
+                provider_author(),
+                vec![cause_ref(s0)],
+            ),
+            VerdictResult::Accept,
+        );
+        let e1 = commit_expect(
+            &mut w,
+            &rules,
+            &mut st,
+            evaluation_proposal(c1, executor_author()),
+            VerdictResult::Accept,
+        );
+        let s1 = commit_expect(
+            &mut w,
+            &rules,
+            &mut st,
+            selection_custom(
+                "obj2",
+                vec![c1],
+                SelectionOutcome::Selected {
+                    candidates: vec![c1],
+                },
+                provider_author(),
+                vec![use_ref(e1), require_ref(c1)],
+            ),
+            VerdictResult::Accept,
+        );
+        let _c2 = commit_expect(
+            &mut w,
+            &rules,
+            &mut st,
+            candidate_custom(
+                default_source(),
+                CandidateBasis::Continuation,
+                Some(c1),
+                Some("c2"),
+                provider_author(),
+                vec![cause_ref(s1)],
+            ),
+            VerdictResult::Accept,
+        );
+        let _ret = commit_expect(
+            &mut w,
+            &rules,
+            &mut st,
+            retraction_proposal(s0),
+            VerdictResult::Accept,
+        );
+        // Reaffirm S0 (same objective), re-selecting C0.
+        let _s2 = commit_expect(
+            &mut w,
+            &rules,
+            &mut st,
+            selection_custom(
+                "obj",
+                vec![c0],
+                SelectionOutcome::Selected {
+                    candidates: vec![c0],
+                },
+                provider_author(),
+                vec![use_ref(e0), require_ref(c0), replace_ref(s0)],
+            ),
+            VerdictResult::Accept,
+        );
+        push(
+            "standing-deep-reaffirmation-recovery",
+            "One reaffirmation re-selecting the parent restores the whole descendant subtree.",
+            w.records(),
+            &rules,
+        );
+    }
+
+    // E: a None-decision reaffirmation restores nothing (the parent is not in
+    // any selected set), though it is still a sound replacer.
+    {
+        let rules = base_rules();
+        let dir = tempfile::tempdir().unwrap();
+        let mut w = LogWriter::open(dir.path(), &rules).unwrap();
+        let mut st = State::default();
+        let c0 = commit_expect(
+            &mut w,
+            &rules,
+            &mut st,
+            candidate_proposal(provider_author()),
+            VerdictResult::Accept,
+        );
+        let e0 = commit_expect(
+            &mut w,
+            &rules,
+            &mut st,
+            evaluation_proposal(c0, executor_author()),
+            VerdictResult::Accept,
+        );
+        let s0 = commit_expect(
+            &mut w,
+            &rules,
+            &mut st,
+            selection_custom(
+                "obj",
+                vec![c0],
+                SelectionOutcome::Selected {
+                    candidates: vec![c0],
+                },
+                provider_author(),
+                vec![use_ref(e0), require_ref(c0)],
+            ),
+            VerdictResult::Accept,
+        );
+        let _c1 = commit_expect(
+            &mut w,
+            &rules,
+            &mut st,
+            candidate_custom(
+                default_source(),
+                CandidateBasis::Continuation,
+                Some(c0),
+                Some("c1"),
+                provider_author(),
+                vec![cause_ref(s0)],
+            ),
+            VerdictResult::Accept,
+        );
+        let _ret = commit_expect(
+            &mut w,
+            &rules,
+            &mut st,
+            retraction_proposal(s0),
+            VerdictResult::Accept,
+        );
+        let _s2 = commit_expect(
+            &mut w,
+            &rules,
+            &mut st,
+            selection_custom(
+                "obj",
+                vec![c0],
+                SelectionOutcome::None,
+                provider_author(),
+                vec![replace_ref(s0)],
+            ),
+            VerdictResult::Accept,
+        );
+        push(
+            "standing-none-reaffirmation-restores-nothing",
+            "A None-decision reaffirmation is a sound replacer but restores no descendant.",
+            w.records(),
+            &rules,
+        );
+    }
+
+    // G: a replacement chain through an accepted-but-unsound intermediate
+    // still restores (intermediates need only be accepted).
+    {
+        let rules = base_rules();
+        let dir = tempfile::tempdir().unwrap();
+        let mut w = LogWriter::open(dir.path(), &rules).unwrap();
+        let mut st = State::default();
+        let c0 = commit_expect(
+            &mut w,
+            &rules,
+            &mut st,
+            candidate_proposal(provider_author()),
+            VerdictResult::Accept,
+        );
+        let e0 = commit_expect(
+            &mut w,
+            &rules,
+            &mut st,
+            evaluation_proposal(c0, executor_author()),
+            VerdictResult::Accept,
+        );
+        let s0 = commit_expect(
+            &mut w,
+            &rules,
+            &mut st,
+            selection_custom(
+                "obj",
+                vec![c0],
+                SelectionOutcome::Selected {
+                    candidates: vec![c0],
+                },
+                provider_author(),
+                vec![use_ref(e0), require_ref(c0)],
+            ),
+            VerdictResult::Accept,
+        );
+        let _c1 = commit_expect(
+            &mut w,
+            &rules,
+            &mut st,
+            candidate_custom(
+                default_source(),
+                CandidateBasis::Continuation,
+                Some(c0),
+                Some("c1"),
+                provider_author(),
+                vec![cause_ref(s0)],
+            ),
+            VerdictResult::Accept,
+        );
+        let s1 = commit_expect(
+            &mut w,
+            &rules,
+            &mut st,
+            selection_custom(
+                "obj",
+                vec![c0],
+                SelectionOutcome::Selected {
+                    candidates: vec![c0],
+                },
+                provider_author(),
+                vec![use_ref(e0), require_ref(c0), replace_ref(s0)],
+            ),
+            VerdictResult::Accept,
+        );
+        let _s2 = commit_expect(
+            &mut w,
+            &rules,
+            &mut st,
+            selection_custom(
+                "obj",
+                vec![c0],
+                SelectionOutcome::Selected {
+                    candidates: vec![c0],
+                },
+                provider_author(),
+                vec![use_ref(e0), require_ref(c0), replace_ref(s1)],
+            ),
+            VerdictResult::Accept,
+        );
+        // Retract both S0 and the intermediate S1; only S2 stays sound.
+        let _r0 = commit_expect(
+            &mut w,
+            &rules,
+            &mut st,
+            retraction_proposal(s0),
+            VerdictResult::Accept,
+        );
+        let _r1 = commit_expect(
+            &mut w,
+            &rules,
+            &mut st,
+            retraction_proposal(s1),
+            VerdictResult::Accept,
+        );
+        push("standing-chain-through-unsound-intermediate", "A sound reaffirmation restores through an accepted-but-unsound intermediate replacement.", w.records(), &rules);
+    }
+
+    // H: a retracted candidate is compromised unconditionally, and its
+    // continuation stays compromised (unrestorable base case).
+    {
+        let rules = base_rules();
+        let dir = tempfile::tempdir().unwrap();
+        let mut w = LogWriter::open(dir.path(), &rules).unwrap();
+        let mut st = State::default();
+        let c0 = commit_expect(
+            &mut w,
+            &rules,
+            &mut st,
+            candidate_proposal(provider_author()),
+            VerdictResult::Accept,
+        );
+        let e0 = commit_expect(
+            &mut w,
+            &rules,
+            &mut st,
+            evaluation_proposal(c0, executor_author()),
+            VerdictResult::Accept,
+        );
+        let s0 = commit_expect(
+            &mut w,
+            &rules,
+            &mut st,
+            selection_custom(
+                "obj",
+                vec![c0],
+                SelectionOutcome::Selected {
+                    candidates: vec![c0],
+                },
+                provider_author(),
+                vec![use_ref(e0), require_ref(c0)],
+            ),
+            VerdictResult::Accept,
+        );
+        let _c1 = commit_expect(
+            &mut w,
+            &rules,
+            &mut st,
+            candidate_custom(
+                default_source(),
+                CandidateBasis::Continuation,
+                Some(c0),
+                Some("c1"),
+                provider_author(),
+                vec![cause_ref(s0)],
+            ),
+            VerdictResult::Accept,
+        );
+        let _ret = commit_expect(
+            &mut w,
+            &rules,
+            &mut st,
+            retraction_proposal(c0),
+            VerdictResult::Accept,
+        );
+        push("standing-retracted-candidate-unrestorable", "A retracted candidate is compromised unconditionally, and its continuation stays compromised.", w.records(), &rules);
+    }
+
+    // I: competing reaffirmations - two reaffirmations of one anchor each
+    // restore only the subtree whose parent they re-select; restorations
+    // lists both replacers.
+    {
+        let rules = base_rules();
+        let dir = tempfile::tempdir().unwrap();
+        let mut w = LogWriter::open(dir.path(), &rules).unwrap();
+        let mut st = State::default();
+        let c0 = commit_expect(
+            &mut w,
+            &rules,
+            &mut st,
+            candidate_proposal(provider_author()),
+            VerdictResult::Accept,
+        );
+        let cx = commit_expect(
+            &mut w,
+            &rules,
+            &mut st,
+            candidate_root_note("cx", provider_author()),
+            VerdictResult::Accept,
+        );
+        let e0 = commit_expect(
+            &mut w,
+            &rules,
+            &mut st,
+            evaluation_proposal(c0, executor_author()),
+            VerdictResult::Accept,
+        );
+        let ex = commit_expect(
+            &mut w,
+            &rules,
+            &mut st,
+            evaluation_proposal(cx, executor_author()),
+            VerdictResult::Accept,
+        );
+        let s0 = commit_expect(
+            &mut w,
+            &rules,
+            &mut st,
+            selection_custom(
+                "obj",
+                vec![c0, cx],
+                SelectionOutcome::Selected {
+                    candidates: vec![c0, cx],
+                },
+                provider_author(),
+                vec![use_ref(e0), use_ref(ex), require_ref(c0), require_ref(cx)],
+            ),
+            VerdictResult::Accept,
+        );
+        let _c1 = commit_expect(
+            &mut w,
+            &rules,
+            &mut st,
+            candidate_custom(
+                default_source(),
+                CandidateBasis::Continuation,
+                Some(c0),
+                Some("c1"),
+                provider_author(),
+                vec![cause_ref(s0)],
+            ),
+            VerdictResult::Accept,
+        );
+        let _cx1 = commit_expect(
+            &mut w,
+            &rules,
+            &mut st,
+            candidate_custom(
+                default_source(),
+                CandidateBasis::Continuation,
+                Some(cx),
+                Some("cx1"),
+                provider_author(),
+                vec![cause_ref(s0)],
+            ),
+            VerdictResult::Accept,
+        );
+        let _ret = commit_expect(
+            &mut w,
+            &rules,
+            &mut st,
+            retraction_proposal(s0),
+            VerdictResult::Accept,
+        );
+        let _s2 = commit_expect(
+            &mut w,
+            &rules,
+            &mut st,
+            selection_custom(
+                "obj",
+                vec![c0],
+                SelectionOutcome::Selected {
+                    candidates: vec![c0],
+                },
+                provider_author(),
+                vec![use_ref(e0), require_ref(c0), replace_ref(s0)],
+            ),
+            VerdictResult::Accept,
+        );
+        let _s3 = commit_expect(
+            &mut w,
+            &rules,
+            &mut st,
+            selection_custom(
+                "obj",
+                vec![cx],
+                SelectionOutcome::Selected {
+                    candidates: vec![cx],
+                },
+                provider_author(),
+                vec![use_ref(ex), require_ref(cx), replace_ref(s0)],
+            ),
+            VerdictResult::Accept,
+        );
+        push("standing-competing-reaffirmations", "Two reaffirmations of one anchor each restore only the parent they re-select; restorations lists both.", w.records(), &rules);
+    }
+
+    // J: retracted parent (middle of a chain) - the descendant is compromised
+    // and unrestorable while the root stays sound.
+    {
+        let rules = base_rules();
+        let dir = tempfile::tempdir().unwrap();
+        let mut w = LogWriter::open(dir.path(), &rules).unwrap();
+        let mut st = State::default();
+        let c0 = commit_expect(
+            &mut w,
+            &rules,
+            &mut st,
+            candidate_proposal(provider_author()),
+            VerdictResult::Accept,
+        );
+        let e0 = commit_expect(
+            &mut w,
+            &rules,
+            &mut st,
+            evaluation_proposal(c0, executor_author()),
+            VerdictResult::Accept,
+        );
+        let s0 = commit_expect(
+            &mut w,
+            &rules,
+            &mut st,
+            selection_custom(
+                "obj",
+                vec![c0],
+                SelectionOutcome::Selected {
+                    candidates: vec![c0],
+                },
+                provider_author(),
+                vec![use_ref(e0), require_ref(c0)],
+            ),
+            VerdictResult::Accept,
+        );
+        let c1 = commit_expect(
+            &mut w,
+            &rules,
+            &mut st,
+            candidate_custom(
+                default_source(),
+                CandidateBasis::Continuation,
+                Some(c0),
+                Some("c1"),
+                provider_author(),
+                vec![cause_ref(s0)],
+            ),
+            VerdictResult::Accept,
+        );
+        let e1 = commit_expect(
+            &mut w,
+            &rules,
+            &mut st,
+            evaluation_proposal(c1, executor_author()),
+            VerdictResult::Accept,
+        );
+        let s1 = commit_expect(
+            &mut w,
+            &rules,
+            &mut st,
+            selection_custom(
+                "obj2",
+                vec![c1],
+                SelectionOutcome::Selected {
+                    candidates: vec![c1],
+                },
+                provider_author(),
+                vec![use_ref(e1), require_ref(c1)],
+            ),
+            VerdictResult::Accept,
+        );
+        let _c2 = commit_expect(
+            &mut w,
+            &rules,
+            &mut st,
+            candidate_custom(
+                default_source(),
+                CandidateBasis::Continuation,
+                Some(c1),
+                Some("c2"),
+                provider_author(),
+                vec![cause_ref(s1)],
+            ),
+            VerdictResult::Accept,
+        );
+        // Retract the middle parent candidate C1: base-case compromise, and it
+        // taints S1 (which Requires it), so the leaf's anchor is unsound too.
+        let _ret = commit_expect(
+            &mut w,
+            &rules,
+            &mut st,
+            retraction_proposal(c1),
+            VerdictResult::Accept,
+        );
+        push("standing-retracted-parent-unrestorable", "Retracting a middle-of-chain parent candidate compromises the descendant unrestorably while the root stays sound.", w.records(), &rules);
+    }
+
+    // K: binding-upgrade idiom, sound before retraction - a manifest-binding
+    // derivation upgrade of a reported-binding candidate carries sound
+    // standing.
+    let manifest_source = SourceBinding {
+        git: GitSource {
+            algo: SourceAlgo::Sha1,
+            tree: "4b825dc642cb6eb9a060e54bf8d69288fbee4904".into(),
+            commit: None,
+        },
+        manifest_hash: Some([7u8; 32]),
+        binding: BindingMode::Manifest,
+    };
+    {
+        let rules = base_rules();
+        let dir = tempfile::tempdir().unwrap();
+        let mut w = LogWriter::open(dir.path(), &rules).unwrap();
+        let mut st = State::default();
+        let c0 = commit_expect(
+            &mut w,
+            &rules,
+            &mut st,
+            candidate_proposal(provider_author()),
+            VerdictResult::Accept,
+        );
+        let _u = commit_expect(
+            &mut w,
+            &rules,
+            &mut st,
+            candidate_custom(
+                manifest_source.clone(),
+                CandidateBasis::Derivation,
+                None,
+                Some("upgrade"),
+                provider_author(),
+                vec![cause_ref(c0)],
+            ),
+            VerdictResult::Accept,
+        );
+        push("standing-binding-upgrade-sound", "A manifest-binding derivation upgrade of a reported candidate is standing-sound before any retraction.", w.records(), &rules);
+    }
+
+    // L: binding-upgrade idiom, compromised after retraction - retracting the
+    // original reported candidate compromises the upgrade; the idiom cannot
+    // launder a retracted state.
+    {
+        let rules = base_rules();
+        let dir = tempfile::tempdir().unwrap();
+        let mut w = LogWriter::open(dir.path(), &rules).unwrap();
+        let mut st = State::default();
+        let c0 = commit_expect(
+            &mut w,
+            &rules,
+            &mut st,
+            candidate_proposal(provider_author()),
+            VerdictResult::Accept,
+        );
+        let _u = commit_expect(
+            &mut w,
+            &rules,
+            &mut st,
+            candidate_custom(
+                manifest_source,
+                CandidateBasis::Derivation,
+                None,
+                Some("upgrade"),
+                provider_author(),
+                vec![cause_ref(c0)],
+            ),
+            VerdictResult::Accept,
+        );
+        let _ret = commit_expect(
+            &mut w,
+            &rules,
+            &mut st,
+            retraction_proposal(c0),
+            VerdictResult::Accept,
+        );
+        push("standing-binding-upgrade-compromised", "Retracting the original candidate compromises its manifest-binding upgrade; the idiom cannot launder a retracted state.", w.records(), &rules);
+    }
+
+    cases
+}
+
+/// Standing is a pure function of the accepted records at replay end:
+/// re-deriving it is deterministic, and the `verify_log` and `validate`
+/// entry points agree. At least one scenario must exercise a non-empty
+/// section so the property is not vacuous.
+#[test]
+fn standing_is_deterministic_and_consistent() {
+    let mut saw_nonempty = false;
+    for case in build_standing_receipt_cases() {
+        let bytes = case.receipt.to_bytes().unwrap();
+        let r1 = validate(&bytes);
+        let r2 = validate(&bytes);
+        assert_eq!(
+            r1.standing, r2.standing,
+            "standing not deterministic for {}",
+            case.name
+        );
+        let v = verify_log(&case.receipt.records, &case.receipt.rules, None);
+        assert_eq!(
+            v.standing, r1.standing,
+            "verify_log and validate disagree on standing for {}",
+            case.name
+        );
+        if !r1.standing.is_empty() {
+            saw_nonempty = true;
+        }
+    }
+    assert!(
+        saw_nonempty,
+        "standing property test exercised no compromise"
+    );
 }
 
 // ---------------------------------------------------------------------------
