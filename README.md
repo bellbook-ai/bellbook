@@ -36,12 +36,12 @@ Bellbook is an evidence layer, not an identity provider or runtime
 policy engine. Identity systems establish who an agent is and what
 access it holds. Policy engines decide whether an action may execute.
 Bellbook preserves captured requests, authority, actions, and results as a
-portable receipt that another party can verify independently. Spec v0.2 does
+portable receipt that another party can verify independently. The spec does
 not include a record for an external policy engine's decision. Bellbook's own
 `Verdict` records are its deterministic
 judgment that the *ledger followed its rules*; they are never a
 substitute for an external policy engine's permit/deny decision, and
-the separately scoped `PolicyDecision` work is not implemented in v0.2.
+the separately scoped `PolicyDecision` work is not implemented.
 See [docs/ECOSYSTEM.md](docs/ECOSYSTEM.md) for how surrounding systems
 relate to Bellbook and
 [docs/INTEROPERABILITY.md](docs/INTEROPERABILITY.md) for the boundary
@@ -102,6 +102,21 @@ embeds.
   epistemically depended on it (via `Use`/`Require` refs) are marked
   tainted; a tainted chain still replays and verifies, and the report
   surfaces exactly which claims no longer rest on anything.
+- **Evolution semantics (spec v0.3).** Three more record kinds capture how
+  work evolves: a `Candidate` binds a source state (a Git tree, `reported`
+  or committed to a canonical `manifest`), an `Evaluation` records one
+  criterion's judgment of one candidate, and a set-valued `Selection`
+  chooses among considered candidates under an objective, grounded on
+  evaluations. A `Replace` on a Selection reaffirms an earlier decision.
+  On top of these, the replay report gains a **standing** section: a
+  purely replay-derived lineage dimension that marks which candidates rest
+  on decisions and states that no longer stand. When a benchmark's
+  evaluations are retracted, taint reaches the selections that used them
+  and standing marks the descendant line compromised at any depth; one
+  reaffirming selection on surviving evidence restores it. Standing is
+  re-derived by every validator like the taint set, never embedded in a
+  receipt, and never merged into kernel taint or evidence
+  ([SPEC §7.2](SPEC.md); run `cargo run --example broken_benchmark`).
 - **Honest threat model.** Tamper-*evident*, not tamper-proof: replay
   detects any interior edit to committed history, but the ledger's owner
   can rewrite the whole log from genesis. SPEC §11 states this plainly and
@@ -172,11 +187,16 @@ bellbook validate receipt.json --json   # same report as JSON
 ```
 
 Exit codes: `0` clean, `1` invalid, `2` valid-but-tainted. See SPEC §12
-for the receipt format and the normative truth rules. One honesty note:
+for the receipt format and the normative truth rules. Two honesty notes.
 **Clean is relative to the rules embedded in the receipt** (compare the
 reported `rules_hash` against a rule set you trust) - under default rules
 it means "internally consistent", not "meets a shared security
-baseline".
+baseline". And a receipt proves the recorded *process*, not source
+contents: a `Candidate`'s Git OIDs are pointers the repository resolves,
+and the **lineage, standing, and taint guarantees are conditional on the
+producer's recording discipline** - `basis`, `parent`, and refs are
+producer claims a verifier cannot check against intent
+([SPEC §13](SPEC.md#13-known-limitations)).
 
 ## Recording evolution (CLI)
 
@@ -222,36 +242,40 @@ restored (with the retraction and taint permanently on the record).
 
 ## Status
 
-**This branch develops spec v0.3 (evolution semantics: Candidate,
-Evaluation, and Selection records with replay-derived lineage standing);
-the published release remains 0.2.0, implementing spec v0.2.** The v0.3
-design is in [`spec/v0.3-delta.md`](spec/v0.3-delta.md); progress is
-tracked in issue #19.
+**`main` implements spec v0.3 (evolution semantics: Candidate, Evaluation,
+and Selection records with replay-derived lineage standing), fully tested
+but not yet published as a crate release; the last published epoch is
+0.2.0, implementing spec v0.2.** SPEC.md is the authority for what v0.3
+means (design notes in [`spec/v0.3-delta.md`](spec/v0.3-delta.md)); the
+v0.3 milestone is tracked in issue #19. The v0.2 artifacts stay frozen and
+valid under v0.2 rules forever, and the published 0.2.x release is their
+validator.
 
-**Bellbook 0.2 is an early release. Its implemented compatibility contract is
-defined by the SPEC.md shipped with the 0.2.0 release (this `main` now
-develops spec 0.3) and the committed v0.2 test vectors.**
 It ships exactly what is implemented and tested today: the
 content-addressed (JCS-canonical) record model, the deterministic verifier
 with replayable `verify_log` (identity-to-role binding, authority binding
 and revocation, single-use exact approvals, explicit request lifecycle,
-advisory plan consistency checks), Ed25519
-signatures, retraction with taint, derived state with
-incremental/full-build equivalence, checkpoints, the crash-safe writer
-with idempotent compare-and-append, and portable receipts with the
-offline `bellbook validate` CLI - fully tested (every rejection reason
-code has a triggering test), clippy-clean, no `unsafe`, no panics in
-library code.
+advisory plan consistency checks), Ed25519 signatures, retraction with
+taint, the v0.3 evolution kinds (Candidate / Evaluation / Selection) with
+source binding, the selection and reaffirmation rule battery, and the
+replay-derived standing section, derived state with incremental/full-build
+equivalence, checkpoints, the crash-safe writer with idempotent
+compare-and-append, and portable receipts with the offline `bellbook
+validate` CLI and the `candidate`/`eval`/`select`/`lineage` recording
+commands - fully tested (every rejection reason code has a triggering
+test), clippy-clean, no `unsafe`, no panics in library code.
 
 The repository also carries a language-neutral **conformance corpus**
-(`spec/conformance/v0.2/`: record, malformed, and receipt-replay cases,
-run by `tests/conformance.rs`) and an **independent Python implementation**
-of the verifier (`conformance/python/`) that shares no code with this crate,
-recomputes every record id, and re-derives every verdict across the corpus,
-agreeing with this reference on every case - including the deliberately
-malformed and forged inputs it must reject.
+(`spec/conformance/v0.3/`: record, malformed, receipt-replay, and standing
+cases, run by `tests/conformance.rs`; the frozen `spec/conformance/v0.2/`
+corpus stays valid under v0.2 rules) and an **independent Python
+implementation** of the verifier (`conformance/python/`) that shares no
+code with this crate, recomputes every record id, and re-derives every
+verdict and standing section across the corpus, agreeing with this
+reference on every case - including the deliberately malformed and forged
+inputs it must reject.
 
-Open work, **not implemented in v0.2**:
+Open work, **not implemented**:
 
 1. **`bellbook-core-v1` baseline profile** - a fixed minimum rule set
    (required signatures, pinned keys, evidence thresholds) for comparing

@@ -1111,6 +1111,28 @@ reference implementation's own test suite exercises instead.
   integration instruments its runtime, which is outside this spec.
   (External anchoring, §11.1, bounds *when* history could have been
   edited; it cannot conjure records that were never written.)
+- **A receipt carries no source contents.** A `Candidate`'s Git OIDs are
+  pointers whose resolution requires the repository; the receipt proves the
+  recorded process (which candidates, evaluations, and selections existed,
+  under what objective, and what is retracted, tainted, or
+  standing-compromised), not the bytes of any tree. Under `manifest`
+  binding a party holding the tree can recompute `manifest_hash` and bind
+  the receipt to actual contents; under `reported` binding they hold a
+  verifiable record of an unverified claim, and the receipt says which,
+  explicitly.
+- **Lineage, standing, and taint are conditional on the producer's
+  recording discipline.** A candidate's `basis`, `parent`, and choice of
+  refs are producer claims. A host that records what is really a
+  continuation as a derivation escapes the standing cascade, and no
+  verifier can detect that, because intent is not checkable. Bellbook proves
+  the recorded structure is internally consistent under its rules; it does
+  not prove the structure faithfully mirrors the development process. A
+  receipt consumer trusts the embedded `rules_hash` *and* the producer's
+  recording conventions - this is the "consistency, not completeness"
+  boundary above, extended one level to the lineage graph. Standing is a
+  replay-derived advisory over that recorded structure, reported alongside
+  kernel taint and never merged into it: it never gates a commit by default
+  and never changes a record's evidence.
 - Author identity is cryptographically bound only for actors pinned in
   `author_keys` on records that carry signatures; unsigned records (and
   unpinned actors) remain claims. Key management and rotation are host
