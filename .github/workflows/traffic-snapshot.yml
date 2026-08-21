@@ -2,16 +2,18 @@ name: Traffic snapshot
 
 # GitHub's traffic API only retains the last 14 days of clones and views, and
 # referrers are a point-in-time top list. This job snapshots all three weekly
-# and commits the history into metrics/ so the record survives that window.
-# Clone/view counts and referrers are aggregate, non-personal data.
+# and commits the history to a dedicated, unprotected `metrics` branch (not
+# main, which is protected and should not carry bot commits). Clone/view counts
+# and referrers are aggregate, non-personal data.
 #
 # Requires a token that can read repository traffic. The built-in GITHUB_TOKEN
 # CANNOT read the traffic API, so create a repository secret named
 # TRAFFIC_TOKEN, one of:
 #   - a fine-grained PAT scoped to this repo with "Administration: read", or
 #   - a classic PAT with the "repo" scope.
-# Without the secret the job logs a warning and exits cleanly rather than
-# failing, so a fork without the secret stays green.
+# Without the secret the job logs a warning and exits cleanly, so a fork
+# without the secret stays green. Pushing to the `metrics` branch uses the
+# built-in GITHUB_TOKEN (contents: write); the PAT is only for the API read.
 
 on:
   schedule:
@@ -30,29 +32,49 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - name: Guard on the traffic token
+      - name: Snapshot traffic into the metrics branch
         env:
           TRAFFIC_TOKEN: ${{ secrets.TRAFFIC_TOKEN }}
-        run: |
-          if [ -z "$TRAFFIC_TOKEN" ]; then
-            echo "::warning::TRAFFIC_TOKEN secret is not set; skipping snapshot. See the workflow header for setup."
-            echo "skip=1" >> "$GITHUB_ENV"
-          fi
-      - name: Fetch and merge traffic
-        if: env.skip != '1'
-        env:
-          GH_TOKEN: ${{ secrets.TRAFFIC_TOKEN }}
+          PUSH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           REPO: ${{ github.repository }}
-        run: python3 .github/scripts/traffic_snapshot.py
-      - name: Commit the snapshot
-        if: env.skip != '1'
         run: |
-          git config user.name "Cristian Ducu"
-          git config user.email "32098558+cristianducu@users.noreply.github.com"
-          git add metrics/
+          set -euo pipefail
+
+          if [ -z "${TRAFFIC_TOKEN:-}" ]; then
+            echo "::warning::TRAFFIC_TOKEN secret is not set; skipping snapshot. See the workflow header for setup."
+            exit 0
+          fi
+
+          script="$GITHUB_WORKSPACE/.github/scripts/traffic_snapshot.py"
+          work="$RUNNER_TEMP/metrics-branch"
+          remote="https://x-access-token:${PUSH_TOKEN}@github.com/${REPO}.git"
+
+          # Check out the metrics branch, creating it as an orphan on first run.
+          if git clone --depth 1 --branch metrics "$remote" "$work" 2>/dev/null; then
+            echo "Using existing metrics branch."
+          else
+            echo "metrics branch not found; creating it."
+            git clone --depth 1 "$remote" "$work"
+            git -C "$work" checkout --orphan metrics
+            git -C "$work" rm -rf . >/dev/null 2>&1 || true
+          fi
+
+          # Seed the data-branch README from main on first run.
+          mkdir -p "$work/metrics"
+          if [ ! -f "$work/metrics/README.md" ] && [ -f "$GITHUB_WORKSPACE/metrics/README.md" ]; then
+            cp "$GITHUB_WORKSPACE/metrics/README.md" "$work/metrics/README.md"
+          fi
+
+          # Fetch and merge the snapshot in the data-branch working tree.
+          cd "$work"
+          GH_TOKEN="$TRAFFIC_TOKEN" REPO="$REPO" python3 "$script"
+
+          git add -A
           if git diff --cached --quiet; then
             echo "No traffic changes to commit."
-          else
-            git commit -m "metrics: weekly traffic snapshot"
-            git push
+            exit 0
           fi
+          git -c user.name="Cristian Ducu" \
+              -c user.email="32098558+cristianducu@users.noreply.github.com" \
+              commit -m "metrics: weekly traffic snapshot"
+          git push "$remote" HEAD:metrics
