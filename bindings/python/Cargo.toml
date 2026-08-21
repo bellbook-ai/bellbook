@@ -36,7 +36,7 @@ crate-type = ["cdylib"]
 # (that release adds only the CLI binary, fuzzing, and docs). Pinning the
 # major-compatible 0.3 line keeps the bindings buildable from crates.io without
 # a publish-ordering deadlock; the compiled extension is identical either way.
-bellbook_core = { package = "bellbook", version = "0.3", default-features = false, features = [
+bellbook_core = { package = "bellbook", version = "0.4", default-features = false, features = [
     "persist",
 ] }
 pyo3 = { version = "0.29", features = ["extension-module", "abi3-py39"] }
