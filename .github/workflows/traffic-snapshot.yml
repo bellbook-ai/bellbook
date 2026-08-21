@@ -1,0 +1,58 @@
+name: Traffic snapshot
+
+# GitHub's traffic API only retains the last 14 days of clones and views, and
+# referrers are a point-in-time top list. This job snapshots all three weekly
+# and commits the history into metrics/ so the record survives that window.
+# Clone/view counts and referrers are aggregate, non-personal data.
+#
+# Requires a token that can read repository traffic. The built-in GITHUB_TOKEN
+# CANNOT read the traffic API, so create a repository secret named
+# TRAFFIC_TOKEN, one of:
+#   - a fine-grained PAT scoped to this repo with "Administration: read", or
+#   - a classic PAT with the "repo" scope.
+# Without the secret the job logs a warning and exits cleanly rather than
+# failing, so a fork without the secret stays green.
+
+on:
+  schedule:
+    - cron: "17 6 * * 1" # Mondays 06:17 UTC
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: traffic-snapshot
+  cancel-in-progress: false
+
+jobs:
+  snapshot:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Guard on the traffic token
+        env:
+          TRAFFIC_TOKEN: ${{ secrets.TRAFFIC_TOKEN }}
+        run: |
+          if [ -z "$TRAFFIC_TOKEN" ]; then
+            echo "::warning::TRAFFIC_TOKEN secret is not set; skipping snapshot. See the workflow header for setup."
+            echo "skip=1" >> "$GITHUB_ENV"
+          fi
+      - name: Fetch and merge traffic
+        if: env.skip != '1'
+        env:
+          GH_TOKEN: ${{ secrets.TRAFFIC_TOKEN }}
+          REPO: ${{ github.repository }}
+        run: python3 .github/scripts/traffic_snapshot.py
+      - name: Commit the snapshot
+        if: env.skip != '1'
+        run: |
+          git config user.name "Cristian Ducu"
+          git config user.email "32098558+cristianducu@users.noreply.github.com"
+          git add metrics/
+          if git diff --cached --quiet; then
+            echo "No traffic changes to commit."
+          else
+            git commit -m "metrics: weekly traffic snapshot"
+            git push
+          fi
