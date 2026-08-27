@@ -43,6 +43,8 @@ USAGE:
                            --objective <s> --consider <id> ...
                            (--choose <id> ... --uses-eval <id> ... | --none)
                            [--replaces <selection-id>] [--rationale <s>] [--json]
+    bellbook retract       --log <dir> --rules <file> --author <id>
+                           --target <record-id> --reason <text> [--json]
     bellbook lineage       --log <dir> --rules <file> <id> [--json]
     bellbook rules init    --author <id>:<role> ... [--admin <id>] ... [--reaffirmer <id>] ...
                            [--max-context <n>] [--out <file>]
@@ -55,6 +57,9 @@ COMMANDS:
     candidate   Record a Candidate (a proposed source state).
     eval        Record an Evaluation of a candidate.
     select      Record a Selection over candidates (or a reaffirmation).
+    retract     Assert a committed record's content is wrong. The target
+                stays in the log; the receipt reports Tainted from then on.
+                Accepted only from the target's author or an admin actor.
     lineage     Show a candidate's descent, siblings, taint, and standing.
     rules init  Generate a starter verifier-rules file. Roles are one of
                 user|provider|system|executor|verifier. --admin allows an
@@ -80,7 +85,9 @@ fn main() -> ExitCode {
     match command {
         "validate" => cmd_validate(&rest),
         "rules" => cmd_rules(&rest),
-        "candidate" | "eval" | "select" | "lineage" | "export" => cmd_evolution(command, &rest),
+        "candidate" | "eval" | "select" | "retract" | "lineage" | "export" => {
+            cmd_evolution(command, &rest)
+        }
         other => {
             eprintln!("unknown command {other:?}\n\n{USAGE}");
             ExitCode::from(64)
@@ -343,6 +350,7 @@ fn cmd_evolution(command: &str, rest: &[String]) -> ExitCode {
         "candidate" => persist_cmds::candidate(rest),
         "eval" => persist_cmds::eval(rest),
         "select" => persist_cmds::select(rest),
+        "retract" => persist_cmds::retract(rest),
         "lineage" => persist_cmds::lineage(rest),
         "export" => persist_cmds::export(rest),
         _ => unreachable!(),
@@ -810,6 +818,53 @@ mod persist_cmds {
             author,
             kind: Kind::Evaluation,
             schema: schema_id(SCHEMA_EVALUATION),
+            data,
+            refs,
+        };
+        commit_and_print(writer, &rules, state, proposal, p.bools.contains("json"))
+    }
+
+    // --- retract -----------------------------------------------------------
+
+    /// Retract a committed record: assert its content is wrong. The target
+    /// stays in the log; on acceptance its id enters the retracted set, its
+    /// epistemic dependents become tainted, and the receipt reports Tainted
+    /// from then on - permanently. Ownership is the verifier's (SPEC 2): the
+    /// retraction is accepted only when `--author` is the target's author or
+    /// an admin retraction actor (`rules init --admin`); an Executor may
+    /// never author one; a Verdict or Retraction cannot be retracted. A
+    /// rejected retraction is still durably committed, exit 65, with the
+    /// verifier's reason.
+    pub fn retract(rest: &[String]) -> Result<ExitCode, String> {
+        let p = parse(
+            rest,
+            &["log", "rules", "author", "target", "reason"],
+            &[],
+            &["json"],
+        )?;
+        let rules = load_rules(&p)?;
+        let (writer, state) = open(&p, &rules)?;
+        let author = author(&rules, &p)?;
+
+        let target = parse_id(require(&p, "target")?)?;
+        let reason = require(&p, "reason")?.to_string();
+
+        // The verifier requires exactly one Cause ref naming the target.
+        let refs = vec![Ref {
+            type_: RefType::Cause,
+            target,
+        }];
+        let data = checked_encode(&RetractionData {
+            target_id: target,
+            reason,
+        })?;
+
+        let proposal = Proposal {
+            space: rules.space,
+            thread: rules.space,
+            author,
+            kind: Kind::Retraction,
+            schema: schema_id(SCHEMA_RETRACTION),
             data,
             refs,
         };

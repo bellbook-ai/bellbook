@@ -9,6 +9,17 @@ and releases follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **CLI `bellbook retract`** (#83). Retract a committed record from a log:
+  `bellbook retract --log DIR --rules FILE --author ID --target RECORD_ID
+  --reason TEXT [--json]`, with the same conventions as the other mutating
+  commands (prints the committed id, exit 65 on a rejected commit). With
+  #82's Python verb, the retraction story now runs from both adoption
+  surfaces, and the v0.5.0 gate is enforced in CI (#87): the
+  broken-benchmark story - Clean, retract, standing collapse, reaffirm,
+  restoration with the receipt Tainted permanently - is replayed end to end
+  by a CLI test and a Python test, plus an ownership battery (cross-author
+  rejected, admin accepted, Verdict/Retraction/missing targets rejected).
+
 - **Python `Writer.retract(author, target, reason)`** (#82). Commits a
   `Retraction` record (payload `{target_id, reason}` with the exactly-one
   `Cause` ref the verifier checks) and returns a `Commit` like the other
