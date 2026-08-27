@@ -1,10 +1,10 @@
 //! `bellbook` - accountability-ledger CLI.
 //!
 //! `validate <receipt>` verifies a receipt offline (feature-independent). The
-//! evolution subcommands (`candidate`, `eval`, `select`, `lineage`) are thin
-//! wrappers over the crate that operate on a persistent log and therefore need
-//! the `persist` feature; JSON in/out, and every mutating command prints the
-//! committed record id.
+//! evolution subcommands (`candidate`, `eval`, `select`, `retract`,
+//! `lineage`, `query`) are thin wrappers over the crate that operate on a
+//! persistent log and therefore need the `persist` feature; JSON in/out, and
+//! every mutating command prints the committed record id.
 //!
 //! **Concurrency (SPEC §5.1):** the persistent log is deliberately
 //! single-writer - `LogWriter` holds an exclusive lock. Parallel candidate
@@ -46,6 +46,8 @@ USAGE:
     bellbook retract       --log <dir> --rules <file> --author <id>
                            --target <record-id> --reason <text> [--json]
     bellbook lineage       --log <dir> --rules <file> <id> [--json]
+    bellbook query <name> [<id>|<objective>]
+                           (--log <dir> --rules <file> | --receipt <file>) [--json]
     bellbook rules init    --author <id>:<role> ... [--admin <id>] ... [--reaffirmer <id>] ...
                            [--max-context <n>] [--out <file>]
     bellbook export        --log <dir> --rules <file> [--out <file>]
@@ -61,6 +63,11 @@ COMMANDS:
                 stays in the log; the receipt reports Tainted from then on.
                 Accepted only from the target's author or an admin actor.
     lineage     Show a candidate's descent, siblings, taint, and standing.
+    query       Run one named read-side query (RFC-0002) over a verified
+                log or a portable receipt: descent <id>, descendants <id>,
+                siblings <id>, frontier, standing <id>, evidence <id>,
+                selected <objective>. Deterministic and read-only; the
+                --json output is the shared shape every surface emits.
     rules init  Generate a starter verifier-rules file. Roles are one of
                 user|provider|system|executor|verifier. --admin allows an
                 actor to retract records it did not author; --reaffirmer
@@ -85,7 +92,7 @@ fn main() -> ExitCode {
     match command {
         "validate" => cmd_validate(&rest),
         "rules" => cmd_rules(&rest),
-        "candidate" | "eval" | "select" | "retract" | "lineage" | "export" => {
+        "candidate" | "eval" | "select" | "retract" | "lineage" | "export" | "query" => {
             cmd_evolution(command, &rest)
         }
         other => {
@@ -353,6 +360,7 @@ fn cmd_evolution(command: &str, rest: &[String]) -> ExitCode {
         "retract" => persist_cmds::retract(rest),
         "lineage" => persist_cmds::lineage(rest),
         "export" => persist_cmds::export(rest),
+        "query" => persist_cmds::query(rest),
         _ => unreachable!(),
     };
     match result {
@@ -980,6 +988,216 @@ mod persist_cmds {
         siblings: Vec<String>,
         considered_by: Vec<String>,
         selected_by: Vec<String>,
+    }
+
+    // --- query -------------------------------------------------------------
+
+    /// One node as a single human-readable fragment: id plus the
+    /// annotations a reader needs to judge it (kind, standing, taint,
+    /// retraction).
+    fn node_str(n: &Node) -> String {
+        let mut s = format!("{} [{} {}", n.id, n.kind, n.standing);
+        if n.tainted {
+            s.push_str(", tainted");
+        }
+        if n.retracted {
+            s.push_str(", retracted");
+        }
+        s.push(']');
+        s
+    }
+
+    fn print_json<T: serde::Serialize>(value: &T) -> Result<(), String> {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(value).map_err(|e| format!("{e}"))?
+        );
+        Ok(())
+    }
+
+    fn evidence_lines(indent: &str, entries: &[EvidenceEntry]) {
+        for e in entries {
+            println!(
+                "{indent}{} -> {}  {}",
+                e.criterion,
+                e.outcome,
+                node_str(&e.node)
+            );
+        }
+    }
+
+    /// `query <name> [arg]` runs one named read-side query (RFC-0002) over
+    /// a verified log (`--log` with `--rules`) or a portable receipt
+    /// (`--receipt`, rules embedded), printing the shared JSON shape with
+    /// `--json` or a human rendering. Queries never answer over unverified
+    /// history: an invalid log or receipt is an error, not data.
+    pub fn query(rest: &[String]) -> Result<ExitCode, String> {
+        let (name, rest) = rest.split_first().ok_or_else(|| {
+            "query needs a name \
+             (descent|descendants|siblings|frontier|standing|evidence|selected)"
+                .to_string()
+        })?;
+        let p = parse(rest, &["log", "rules", "receipt"], &[], &["json"])?;
+
+        let has_log = p.singles.contains_key("log");
+        let has_receipt = p.singles.contains_key("receipt");
+        if has_log == has_receipt {
+            return Err(
+                "query requires exactly one input: --log with --rules, or --receipt".to_string(),
+            );
+        }
+        // A receipt embeds its rules; a separate --rules with --receipt is
+        // stated intent that cannot be honored, so refuse rather than drop it.
+        if has_receipt && p.singles.contains_key("rules") {
+            return Err("--rules is not valid with --receipt (a receipt embeds its rules)".into());
+        }
+        if p.positionals.len() > 1 {
+            return Err(format!(
+                "query {name} takes at most one argument, got {:?}",
+                p.positionals
+            ));
+        }
+
+        let (records, rules): (Vec<Record>, VerifierRules) = if has_log {
+            let rules = load_rules(&p)?;
+            let dir = require(&p, "log")?;
+            let writer =
+                LogWriter::open(std::path::Path::new(dir), &rules).map_err(|e| format!("{e:?}"))?;
+            (writer.records().to_vec(), rules)
+        } else {
+            let path = require(&p, "receipt")?;
+            let bytes =
+                std::fs::read(path).map_err(|e| format!("cannot read receipt {path}: {e}"))?;
+            // The full offline validation first, so a structurally broken
+            // receipt reports its problem (limits, strict decoding, spec
+            // version), not a replay error.
+            let report = validate(&bytes);
+            if report.status == ValidationStatus::Invalid {
+                let why = report
+                    .problem
+                    .or_else(|| report.reason.map(|r| format!("{r:?}")))
+                    .unwrap_or_else(|| "?".to_string());
+                return Err(format!("receipt does not validate: {why}"));
+            }
+            let receipt = Receipt::from_bytes(&bytes)
+                .map_err(|e| format!("cannot parse receipt {path}: {e}"))?;
+            (receipt.records, receipt.rules)
+        };
+
+        let q = Queries::new(&records, &rules).map_err(|e| format!("{e}"))?;
+        let json = p.bools.contains("json");
+        let arg_id = || -> Result<RecordId, String> {
+            let hex = p
+                .positionals
+                .first()
+                .ok_or_else(|| format!("query {name} requires a record id"))?;
+            parse_id(hex)
+        };
+
+        match name.as_str() {
+            "descent" => {
+                let r = q.descent(arg_id()?).map_err(|e| format!("{e}"))?;
+                if json {
+                    print_json(&r)?;
+                } else {
+                    println!("target: {}", node_str(&r.target));
+                    println!("line ({}):", r.line.len());
+                    for s in &r.line {
+                        println!("  via {:<20} {}", s.via, node_str(&s.node));
+                    }
+                }
+            }
+            "descendants" => {
+                let r = q.descendants(arg_id()?).map_err(|e| format!("{e}"))?;
+                if json {
+                    print_json(&r)?;
+                } else {
+                    println!("target: {}", node_str(&r.target));
+                    println!("descendants ({}):", r.descendants.len());
+                    for n in &r.descendants {
+                        println!("  {}", node_str(n));
+                    }
+                }
+            }
+            "siblings" => {
+                let r = q.siblings(arg_id()?).map_err(|e| format!("{e}"))?;
+                if json {
+                    print_json(&r)?;
+                } else {
+                    println!("target: {}", node_str(&r.target));
+                    println!("siblings ({}):", r.siblings.len());
+                    for n in &r.siblings {
+                        println!("  {}", node_str(n));
+                    }
+                }
+            }
+            "frontier" => {
+                if !p.positionals.is_empty() {
+                    return Err("query frontier takes no argument".to_string());
+                }
+                let r = q.frontier();
+                if json {
+                    print_json(&r)?;
+                } else {
+                    println!("frontier ({}):", r.frontier.len());
+                    for e in &r.frontier {
+                        println!("  {:<26} {}", e.reason, node_str(&e.node));
+                    }
+                }
+            }
+            "standing" => {
+                let r = q.standing(arg_id()?).map_err(|e| format!("{e}"))?;
+                if json {
+                    print_json(&r)?;
+                } else {
+                    println!("node: {}", node_str(&r.node));
+                    println!("restorations ({}):", r.restorations.len());
+                    for id in &r.restorations {
+                        println!("  {id}");
+                    }
+                }
+            }
+            "evidence" => {
+                let r = q.evidence(arg_id()?).map_err(|e| format!("{e}"))?;
+                if json {
+                    print_json(&r)?;
+                } else {
+                    println!("target: {}", node_str(&r.target));
+                    println!("rests_on ({} selections):", r.rests_on.len());
+                    for se in &r.rests_on {
+                        println!("  selection: {}", node_str(&se.selection));
+                        evidence_lines("    ", &se.evidence);
+                    }
+                }
+            }
+            "selected" => {
+                let objective = p
+                    .positionals
+                    .first()
+                    .ok_or_else(|| "query selected requires an objective string".to_string())?;
+                let r = q.selected(objective);
+                if json {
+                    print_json(&r)?;
+                } else {
+                    println!("objective: {}", r.objective);
+                    println!("selections ({}):", r.selections.len());
+                    for s in &r.selections {
+                        println!("  selection: {}", node_str(&s.selection));
+                        for c in &s.chosen {
+                            println!("    chosen: {}", node_str(c));
+                        }
+                        evidence_lines("    ", &s.evidence);
+                    }
+                }
+            }
+            other => {
+                return Err(format!(
+                    "unknown query {other:?} \
+                     (descent|descendants|siblings|frontier|standing|evidence|selected)"
+                ))
+            }
+        }
+        Ok(ExitCode::SUCCESS)
     }
 
     pub fn lineage(rest: &[String]) -> Result<ExitCode, String> {

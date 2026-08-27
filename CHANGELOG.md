@@ -30,6 +30,14 @@ and releases follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   gains `bellbook_queries.py`, a from-scratch implementation of the named
   set that re-derives every vector from the stored receipt and matches
   the reference's surface JSON byte for byte.
+- **CLI `bellbook query`** (#91). Run any named query from the command
+  line: `bellbook query NAME [ID|OBJECTIVE] (--log DIR --rules FILE |
+  --receipt FILE) [--json]`, over an open log or a portable receipt
+  alike, with byte-identical `--json` output on both inputs (asserted in
+  CI). An invalid log or receipt is an error, never data. The CLI suite
+  also carries the RFC-0002 section 8 gate proof: the canary best-of-N
+  field test rewritten against the named set, every question answered by
+  `bellbook query` alone with zero hand-walking of records.
 
 ## [0.5.0] - 2026-08-27
 

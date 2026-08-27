@@ -1,5 +1,6 @@
 //! End-to-end tests for the `bellbook` evolution CLI (`candidate`, `eval`,
-//! `select`, `lineage`). Each test drives the real compiled binary against a
+//! `select`, `retract`, `lineage`, `query`). Each test drives the real
+//! compiled binary against a
 //! throwaway log directory, so it exercises the whole path: argument parsing,
 //! rules loading, verified open, commit, and JSON output. The binary is
 //! single-writer by design, so every command runs as its own process and the
@@ -1019,4 +1020,423 @@ fn retract_requires_target_and_reason() {
     );
     assert_eq!(out.status.code(), Some(65));
     assert!(String::from_utf8_lossy(&out.stderr).contains("--target"));
+}
+
+// --- query: the RFC-0002 named set, and the section 8 gate proof -----------
+
+/// Run a query with `--json` and parse the shared JSON shape.
+fn query_json(env: &Env, args: &[&str]) -> Value {
+    let mut full: Vec<&str> = args.to_vec();
+    full.push("--json");
+    let out = run(env, &full);
+    assert!(
+        out.status.success(),
+        "query failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    serde_json::from_slice(&out.stdout).unwrap()
+}
+
+fn eval_failed(env: &Env, author: &str, candidate: &str, criterion: &str) -> String {
+    let out = run(
+        env,
+        &[
+            "eval",
+            "add",
+            "--author",
+            author,
+            "--candidate",
+            candidate,
+            "--criterion",
+            criterion,
+            "--failed",
+            "--json",
+        ],
+    );
+    committed_id(&out)
+}
+
+fn derive_candidate(env: &Env, tree: &str, from: &str) -> String {
+    let out = run(
+        env,
+        &[
+            "candidate",
+            "add",
+            "--author",
+            "agent",
+            "--git-tree",
+            tree,
+            "--derives-from",
+            from,
+            "--json",
+        ],
+    );
+    committed_id(&out)
+}
+
+/// RFC-0002 section 8, validation criterion 1 - the gate proof. The canary
+/// best-of-N field test (2026-08-26) plus the retraction story, rewritten
+/// against the named query set: every question the field test answered by
+/// hand-walking records is answered here by `bellbook query` alone. No
+/// records() walk, no manual ref-chasing, no receipt parsing - if any
+/// assertion below needed one, the named set missed its shape.
+#[test]
+fn field_test_story_needs_zero_hand_walking() {
+    let env = story_env();
+
+    // The story: a baseline adopted on a benchmark, a best-of-N round over
+    // its continuation, then the benchmark turns out broken and is
+    // retracted, and the baseline is re-adopted on fresh evidence.
+    let c0 = add_root(&env, TREE_A);
+    let bench = eval_passed(&env, "evaluator", &c0, "benchmark");
+    let out = run(
+        &env,
+        &[
+            "select",
+            "--author",
+            "agent",
+            "--objective",
+            "adopt-baseline",
+            "--consider",
+            &c0,
+            "--choose",
+            &c0,
+            "--uses-eval",
+            &bench,
+            "--json",
+        ],
+    );
+    let s0 = committed_id(&out);
+    let out = run(
+        &env,
+        &[
+            "candidate",
+            "add",
+            "--author",
+            "agent",
+            "--git-tree",
+            TREE_B,
+            "--continues",
+            &s0,
+            "--parent",
+            &c0,
+            "--json",
+        ],
+    );
+    let c1 = committed_id(&out);
+    let c2 = derive_candidate(&env, "2222222222222222222222222222222222222222", &c1);
+    let c3 = derive_candidate(&env, "3333333333333333333333333333333333333333", &c1);
+    let e2 = eval_passed(&env, "evaluator", &c2, "unit-tests");
+    let _e3 = eval_failed(&env, "evaluator", &c3, "unit-tests");
+    let out = run(
+        &env,
+        &[
+            "select",
+            "--author",
+            "agent",
+            "--objective",
+            "adopt",
+            "--consider",
+            &c2,
+            &c3,
+            "--choose",
+            &c2,
+            "--uses-eval",
+            &e2,
+            "--json",
+        ],
+    );
+    let s1 = committed_id(&out);
+    let out = run(
+        &env,
+        &[
+            "retract",
+            "--author",
+            "evaluator",
+            "--target",
+            &bench,
+            "--reason",
+            "benchmark harness measured the wrong thing",
+            "--json",
+        ],
+    );
+    committed_id(&out);
+    let review = eval_passed(&env, "evaluator", &c0, "benchmark-v2");
+    let out = run(
+        &env,
+        &[
+            "select",
+            "--author",
+            "agent",
+            "--objective",
+            "adopt-baseline",
+            "--consider",
+            &c0,
+            "--choose",
+            &c0,
+            "--uses-eval",
+            &review,
+            "--replaces",
+            &s0,
+            "--json",
+        ],
+    );
+    let s2 = committed_id(&out);
+
+    // Q1 (field test: "which candidate won the round, on what evidence?").
+    let v = query_json(&env, &["query", "selected", "adopt"]);
+    let sels = v["selections"].as_array().unwrap();
+    assert_eq!(sels.len(), 1);
+    assert_eq!(sels[0]["selection"]["id"], Value::from(s1.clone()));
+    assert_eq!(sels[0]["chosen"][0]["id"], Value::from(c2.clone()));
+    assert_eq!(sels[0]["evidence"][0]["criterion"], "unit-tests");
+    assert_eq!(sels[0]["evidence"][0]["outcome"], "passed");
+
+    // Q2 ("what is the winner's full line of descent?").
+    let v = query_json(&env, &["query", "descent", &c2]);
+    let line = v["line"].as_array().unwrap();
+    let step = |i: usize| {
+        (
+            line[i]["node"]["id"].as_str().unwrap(),
+            line[i]["via"].as_str().unwrap(),
+        )
+    };
+    assert_eq!(line.len(), 3);
+    assert_eq!(step(0), (c1.as_str(), "derivation"));
+    assert_eq!(step(1), (s0.as_str(), "continuation-anchor"));
+    assert_eq!(step(2), (c0.as_str(), "parent"));
+
+    // Q3 ("what does the line rest on?" - the question that exposed the
+    // broken benchmark). The retracted evaluation surfaces, annotated.
+    let v = query_json(&env, &["query", "evidence", &c2]);
+    let rests = v["rests_on"].as_array().unwrap();
+    assert_eq!(rests.len(), 1);
+    assert_eq!(rests[0]["selection"]["id"], Value::from(s0.clone()));
+    assert_eq!(rests[0]["evidence"][0]["node"]["id"], Value::from(bench));
+    assert_eq!(
+        rests[0]["evidence"][0]["node"]["retracted"],
+        Value::from(true)
+    );
+    assert_eq!(rests[0]["evidence"][0]["criterion"], "benchmark");
+
+    // Q4 ("what happened to the adoption after the retraction?"). The
+    // anchor Selection is unsound and tainted; the re-adoption restored its
+    // standing, on the record - and restoration is not erasure.
+    let v = query_json(&env, &["query", "standing", &s0]);
+    assert_eq!(v["node"]["standing"], "unsound");
+    assert_eq!(v["node"]["tainted"], Value::from(true));
+    assert_eq!(v["restorations"], Value::from(vec![s2]));
+
+    // Q5 ("what is still open?"). The continuation was never considered;
+    // the round's winner has no continuation yet. Nothing else.
+    let v = query_json(&env, &["query", "frontier"]);
+    let frontier = v["frontier"].as_array().unwrap();
+    assert_eq!(frontier.len(), 2);
+    assert_eq!(frontier[0]["node"]["id"], Value::from(c1));
+    assert_eq!(frontier[0]["reason"], "unconsidered");
+    assert_eq!(frontier[1]["node"]["id"], Value::from(c2.clone()));
+    assert_eq!(frontier[1]["reason"], "selected-no-continuation");
+
+    // Q6 ("who else was in the winner's generation?").
+    let v = query_json(&env, &["query", "siblings", &c2]);
+    let sibs = v["siblings"].as_array().unwrap();
+    assert_eq!(sibs.len(), 1);
+    assert_eq!(sibs[0]["id"], Value::from(c3));
+
+    // Q7 ("everything downstream of the baseline?").
+    let v = query_json(&env, &["query", "descendants", &c0]);
+    let ids: Vec<&str> = v["descendants"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|n| n["id"].as_str().unwrap())
+        .collect();
+    assert_eq!(ids.len(), 3, "c1, c2, c3 all descend from c0");
+    assert!(ids.contains(&c2.as_str()));
+}
+
+#[test]
+fn query_log_and_receipt_agree_byte_for_byte() {
+    // The same query over the open log and over its exported receipt emits
+    // identical bytes - the shared-shape claim (RFC-0002 C4), asserted.
+    let env = story_env();
+    let c0 = add_root(&env, TREE_A);
+    let bench = eval_passed(&env, "evaluator", &c0, "benchmark");
+    let out = run(
+        &env,
+        &[
+            "select",
+            "--author",
+            "agent",
+            "--objective",
+            "ship",
+            "--consider",
+            &c0,
+            "--choose",
+            &c0,
+            "--uses-eval",
+            &bench,
+            "--json",
+        ],
+    );
+    committed_id(&out);
+
+    let receipt = env._dir.path().join("r.json");
+    let out = run(&env, &["export", "--out", receipt.to_str().unwrap()]);
+    assert!(out.status.success());
+
+    for args in [
+        vec!["query", "descent", c0.as_str()],
+        vec!["query", "frontier"],
+        vec!["query", "selected", "ship"],
+        vec!["query", "standing", c0.as_str()],
+    ] {
+        let mut log_args = args.clone();
+        log_args.push("--json");
+        let from_log = run(&env, &log_args);
+        let mut receipt_cmd = bellbook();
+        receipt_cmd.args(&args).arg("--json");
+        receipt_cmd.arg("--receipt").arg(&receipt);
+        let from_receipt = receipt_cmd.output().unwrap();
+        assert!(from_log.status.success() && from_receipt.status.success());
+        assert_eq!(
+            from_log.stdout, from_receipt.stdout,
+            "log/receipt divergence on {args:?}"
+        );
+    }
+}
+
+#[test]
+fn query_error_battery() {
+    let env = story_env();
+    let c0 = add_root(&env, TREE_A);
+    let bench = eval_passed(&env, "evaluator", &c0, "benchmark");
+
+    // A rejected record is durably in the log but not addressable.
+    let out = run(
+        &env,
+        &[
+            "retract", "--author", "agent", "--target", &bench, "--reason", "not mine", "--json",
+        ],
+    );
+    assert_eq!(out.status.code(), Some(65));
+    let v: Value = serde_json::from_slice(&out.stdout).unwrap();
+    let rejected = v["id"].as_str().unwrap().to_string();
+    let out = run(&env, &["query", "standing", &rejected]);
+    assert_eq!(out.status.code(), Some(65));
+    assert!(String::from_utf8_lossy(&out.stderr).contains("rejected at commit"));
+
+    // Kind mismatch: descent addresses candidates only.
+    let out = run(&env, &["query", "descent", &bench]);
+    assert_eq!(out.status.code(), Some(65));
+    assert!(String::from_utf8_lossy(&out.stderr).contains("not a Candidate"));
+
+    // Not found.
+    let ghost = "f".repeat(64);
+    let out = run(&env, &["query", "descent", &ghost]);
+    assert_eq!(out.status.code(), Some(65));
+    assert!(String::from_utf8_lossy(&out.stderr).contains("not found"));
+
+    // Unknown query name.
+    let out = run(&env, &["query", "best-descendant", &c0]);
+    assert_eq!(out.status.code(), Some(65));
+    assert!(String::from_utf8_lossy(&out.stderr).contains("unknown query"));
+
+    // Missing input, and both inputs at once.
+    let out = bellbook().args(["query", "frontier"]).output().unwrap();
+    assert_eq!(out.status.code(), Some(65));
+    let receipt = env._dir.path().join("r.json");
+    let out = run(&env, &["export", "--out", receipt.to_str().unwrap()]);
+    assert!(out.status.success());
+    let out = run(
+        &env,
+        &["query", "frontier", "--receipt", receipt.to_str().unwrap()],
+    );
+    assert_eq!(out.status.code(), Some(65));
+    assert!(String::from_utf8_lossy(&out.stderr).contains("exactly one input"));
+
+    // An unreadable receipt is refused with the validation problem, and
+    // queries never answer over it.
+    let bad = env._dir.path().join("bad.json");
+    std::fs::write(&bad, b"not json").unwrap();
+    let out = bellbook()
+        .args(["query", "frontier", "--receipt", bad.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(65));
+    assert!(String::from_utf8_lossy(&out.stderr).contains("does not validate"));
+
+    // A receipt embeds its rules; naming both is refused, not resolved.
+    let out = bellbook()
+        .args(["query", "frontier", "--receipt", receipt.to_str().unwrap()])
+        .arg("--rules")
+        .arg(&env.rules)
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(65));
+    assert!(String::from_utf8_lossy(&out.stderr).contains("embeds its rules"));
+
+    // frontier takes no argument; id queries take exactly one.
+    let out = run(&env, &["query", "frontier", &c0]);
+    assert_eq!(out.status.code(), Some(65));
+    let out = run(&env, &["query", "descent"]);
+    assert_eq!(out.status.code(), Some(65));
+    assert!(String::from_utf8_lossy(&out.stderr).contains("requires a record id"));
+}
+
+#[test]
+fn query_human_rendering_reports_annotations() {
+    // The default (non-JSON) rendering carries the same annotations: after
+    // a retraction, the human output says so in words.
+    let env = story_env();
+    let c0 = add_root(&env, TREE_A);
+    let bench = eval_passed(&env, "evaluator", &c0, "benchmark");
+    let out = run(
+        &env,
+        &[
+            "select",
+            "--author",
+            "agent",
+            "--objective",
+            "ship",
+            "--consider",
+            &c0,
+            "--choose",
+            &c0,
+            "--uses-eval",
+            &bench,
+            "--json",
+        ],
+    );
+    let s0 = committed_id(&out);
+    let out = run(
+        &env,
+        &[
+            "retract",
+            "--author",
+            "evaluator",
+            "--target",
+            &bench,
+            "--reason",
+            "broken",
+            "--json",
+        ],
+    );
+    committed_id(&out);
+
+    let out = run(&env, &["query", "standing", &s0]);
+    assert!(out.status.success());
+    let text = String::from_utf8_lossy(&out.stdout).to_string();
+    assert!(
+        text.contains("unsound") && text.contains("tainted"),
+        "{text}"
+    );
+
+    let out = run(&env, &["query", "evidence", &s0]);
+    assert!(out.status.success());
+    let text = String::from_utf8_lossy(&out.stdout).to_string();
+    assert!(
+        text.contains("retracted") && text.contains("benchmark -> passed"),
+        "{text}"
+    );
 }
