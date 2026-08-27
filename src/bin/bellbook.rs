@@ -44,7 +44,8 @@ USAGE:
                            (--choose <id> ... --uses-eval <id> ... | --none)
                            [--replaces <selection-id>] [--rationale <s>] [--json]
     bellbook lineage       --log <dir> --rules <file> <id> [--json]
-    bellbook rules init    --author <id>:<role> ... [--max-context <n>] [--out <file>]
+    bellbook rules init    --author <id>:<role> ... [--admin <id>] ... [--reaffirmer <id>] ...
+                           [--max-context <n>] [--out <file>]
     bellbook export        --log <dir> --rules <file> [--out <file>]
 
 COMMANDS:
@@ -56,7 +57,9 @@ COMMANDS:
     select      Record a Selection over candidates (or a reaffirmation).
     lineage     Show a candidate's descent, siblings, taint, and standing.
     rules init  Generate a starter verifier-rules file. Roles are one of
-                user|provider|system|executor|verifier.
+                user|provider|system|executor|verifier. --admin allows an
+                actor to retract records it did not author; --reaffirmer
+                restricts reaffirming selections to the listed actors.
     export      Bundle a log directory into a portable receipt (the input
                 `bellbook validate` verifies).
 
@@ -101,9 +104,12 @@ fn parse_role(s: &str) -> Option<AuthorType> {
 }
 
 /// `rules init` writes a starter verifier-rules file: the default space, a
-/// context bound, and one author-role binding per `--author <id>:<role>`. It is
-/// the trust policy the CLI's `--rules` flag and the receipt embed; generating
-/// one by hand is the main ceremony a new user hits, so this removes it.
+/// context bound, one author-role binding per `--author <id>:<role>`, and
+/// optionally the two retraction-story knobs - `--admin <id>` (may retract
+/// records it did not author) and `--reaffirmer <id>` (restricts reaffirming
+/// selections to the listed actors). It is the trust policy the CLI's
+/// `--rules` flag and the receipt embed; generating one by hand is the main
+/// ceremony a new user hits, so this removes it.
 fn cmd_rules(rest: &[String]) -> ExitCode {
     let (sub, rest) = match rest.split_first() {
         Some((s, r)) => (s.as_str(), r),
@@ -118,11 +124,35 @@ fn cmd_rules(rest: &[String]) -> ExitCode {
     }
 
     let mut authors: Vec<(String, AuthorType)> = Vec::new();
+    let mut admins: Vec<String> = Vec::new();
+    let mut reaffirmers: Vec<String> = Vec::new();
     let mut max_context: u32 = 200;
     let mut out: Option<String> = None;
     let mut it = rest.iter();
     while let Some(arg) = it.next() {
         match arg.as_str() {
+            "--admin" => {
+                let Some(v) = it.next() else {
+                    eprintln!("--admin requires an actor id");
+                    return ExitCode::from(64);
+                };
+                if v.is_empty() {
+                    eprintln!("--admin id must be non-empty");
+                    return ExitCode::from(64);
+                }
+                admins.push(v.clone());
+            }
+            "--reaffirmer" => {
+                let Some(v) = it.next() else {
+                    eprintln!("--reaffirmer requires an actor id");
+                    return ExitCode::from(64);
+                };
+                if v.is_empty() {
+                    eprintln!("--reaffirmer id must be non-empty");
+                    return ExitCode::from(64);
+                }
+                reaffirmers.push(v.clone());
+            }
             "--author" => {
                 let Some(v) = it.next() else {
                     eprintln!("--author requires <id>:<role>");
@@ -174,9 +204,26 @@ fn cmd_rules(rest: &[String]) -> ExitCode {
         return ExitCode::from(64);
     }
 
+    // An admin or reaffirmer with no role binding could never author an
+    // accepted record, so the flag would be a silent no-op; refuse instead.
+    for (flag, ids) in [("--admin", &admins), ("--reaffirmer", &reaffirmers)] {
+        for id in ids {
+            if !authors.iter().any(|(a, _)| a == id) {
+                eprintln!("{flag} {id:?} has no --author {id}:<role> binding; add one");
+                return ExitCode::from(64);
+            }
+        }
+    }
+
     let mut rules = VerifierRules::new(default_space(), max_context);
     for (id, role) in authors {
         rules = rules.with_author_role(id, role);
+    }
+    for id in admins {
+        rules = rules.with_admin_retraction_actor(id);
+    }
+    for id in reaffirmers {
+        rules = rules.with_reaffirmation_actor(id);
     }
     let json = match serde_json::to_string(&rules) {
         Ok(s) => s,

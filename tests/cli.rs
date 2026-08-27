@@ -634,6 +634,69 @@ fn rules_init_needs_an_author() {
 }
 
 #[test]
+fn rules_init_binds_admins_and_reaffirmers() {
+    let out = bellbook()
+        .args([
+            "rules",
+            "init",
+            "--author",
+            "agent:provider",
+            "--author",
+            "human:user",
+            "--admin",
+            "human",
+            "--reaffirmer",
+            "human",
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let parsed: VerifierRules = serde_json::from_slice(&out.stdout).unwrap();
+    assert!(parsed.admin_retraction_actors.contains("human"));
+    assert!(parsed.reaffirmation_actors.contains("human"));
+    // The knobs are opt-in: nothing leaks into the sets besides what was asked.
+    assert_eq!(parsed.admin_retraction_actors.len(), 1);
+    assert_eq!(parsed.reaffirmation_actors.len(), 1);
+}
+
+#[test]
+fn rules_init_rejects_an_admin_without_an_author_binding() {
+    // An admin with no role binding could never author an accepted record,
+    // so the flag would be a silent no-op; it must be refused instead.
+    let out = bellbook()
+        .args([
+            "rules",
+            "init",
+            "--author",
+            "agent:provider",
+            "--admin",
+            "ghost",
+        ])
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(64));
+    assert!(String::from_utf8_lossy(&out.stderr).contains("no --author"));
+
+    let out = bellbook()
+        .args([
+            "rules",
+            "init",
+            "--author",
+            "agent:provider",
+            "--reaffirmer",
+            "ghost",
+        ])
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(64));
+    assert!(String::from_utf8_lossy(&out.stderr).contains("no --author"));
+}
+
+#[test]
 fn rules_init_rejects_bad_max_context() {
     let out = bellbook()
         .args([

@@ -49,3 +49,29 @@ def test_default_rules_rejects_bad_role():
 def test_default_rules_rejects_empty():
     with pytest.raises(ValueError, match="at least one"):
         bellbook.default_rules({})
+
+
+def test_default_rules_binds_admins_and_reaffirmers():
+    rules = json.loads(
+        bellbook.default_rules(
+            {"agent": "provider", "human": "user"},
+            admins=["human"],
+            reaffirmers=["human"],
+        )
+    )
+    assert rules["admin_retraction_actors"] == ["human"]
+    assert rules["reaffirmation_actors"] == ["human"]
+
+    # The knobs are opt-in: omitted, both sets stay empty.
+    bare = json.loads(bellbook.default_rules({"agent": "provider"}))
+    assert bare["admin_retraction_actors"] == []
+    assert bare["reaffirmation_actors"] == []
+
+
+def test_default_rules_rejects_admin_without_author_binding():
+    # An admin with no role binding could never author an accepted record,
+    # so listing it would be a silent no-op; it must be refused instead.
+    with pytest.raises(ValueError, match="no author binding"):
+        bellbook.default_rules({"agent": "provider"}, admins=["ghost"])
+    with pytest.raises(ValueError, match="no author binding"):
+        bellbook.default_rules({"agent": "provider"}, reaffirmers=["ghost"])

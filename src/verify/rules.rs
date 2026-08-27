@@ -221,6 +221,24 @@ impl VerifierRules {
         self.author_roles.insert(actor.into(), role);
         self
     }
+
+    /// Allow an actor to retract records it did not author (see
+    /// `admin_retraction_actors`). The actor still needs an `author_roles`
+    /// binding for its Retraction records to be accepted at all. Returns
+    /// self for chaining during rules construction.
+    pub fn with_admin_retraction_actor(mut self, actor: impl Into<ActorId>) -> Self {
+        self.admin_retraction_actors.insert(actor.into());
+        self
+    }
+
+    /// Restrict reaffirming Selections to an identity allowlist (see
+    /// `reaffirmation_actors`); the first call switches the set from
+    /// "anyone with a valid role" to "listed actors only". Returns self for
+    /// chaining during rules construction.
+    pub fn with_reaffirmation_actor(mut self, actor: impl Into<ActorId>) -> Self {
+        self.reaffirmation_actors.insert(actor.into());
+        self
+    }
 }
 
 /// Build the frozen kind-schema map.
