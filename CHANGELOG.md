@@ -7,6 +7,16 @@ and releases follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-08-27
+
+Retraction and standing on every surface. No new record kinds and no spec
+change - the epoch stays 0.3 - and the library API is unchanged. What
+changes is reach: the semantics that define Bellbook (retraction,
+transitive taint, standing, restoration) were previously exercisable only
+from the Rust core; the CLI and the Python package can now tell the whole
+story, and the story is enforced in CI on both surfaces. Existing 0.3/0.4
+receipts and rules validate identically.
+
 ### Added
 
 - **CLI `bellbook retract`** (#83). Retract a committed record from a log:

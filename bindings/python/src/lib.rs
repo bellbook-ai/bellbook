@@ -8,10 +8,11 @@
 //!   (records, kinds, authors, evidence, refs, payloads). Reading does not
 //!   verify; call `validate` for the decision.
 //! - `bellbook.Writer(log_dir, rules)` records evolution to a persistent,
-//!   single-writer log: `candidate`, `evaluate`, and `select` each commit one
-//!   record and return a [`Commit`]. The writer holds the same exclusive lock
-//!   and runs the same replay-on-commit the Rust `LogWriter` does. Export the
-//!   log with `writer.receipt()` and feed it straight back to `validate`.
+//!   single-writer log: `candidate`, `evaluate`, `select`, and `retract`
+//!   each commit one record and return a [`Commit`]. The writer holds the
+//!   same exclusive lock and runs the same replay-on-commit the Rust
+//!   `LogWriter` does. Export the log with `writer.receipt()` and feed it
+//!   straight back to `validate`.
 
 // `#[pyfunction]` generates a result conversion that clippy reads as a
 // useless `PyErr -> PyErr` conversion for any `PyResult`-returning function.
