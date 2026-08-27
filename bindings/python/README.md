@@ -72,10 +72,13 @@ It holds the same exclusive lock and runs the same replay-on-commit the Rust
 `LogWriter` does. `rules` is a JSON string: the verifier rules the log is
 committed under, the same object a receipt embeds under `rules`.
 
-`default_rules(authors, max_context=200)` builds that string for you - the
-Python counterpart to `bellbook rules init` - so you never hand-author a rules
-object. `authors` maps an actor id to a role (`user`, `provider`, `system`,
-`executor`, or `verifier`, case-insensitive):
+`default_rules(authors, max_context=200, admins=None, reaffirmers=None)` builds
+that string for you - the Python counterpart to `bellbook rules init` - so you
+never hand-author a rules object. `authors` maps an actor id to a role (`user`,
+`provider`, `system`, `executor`, or `verifier`, case-insensitive). `admins`
+lists actors allowed to retract records they did not author; `reaffirmers`,
+when given, restricts reaffirming selections to the listed actors. Both must
+also appear in `authors`:
 
 ```python
 import bellbook

@@ -7,6 +7,21 @@ and releases follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- **Retraction-story rules knobs on both surfaces** (#84). `bellbook rules
+  init` gains repeatable `--admin <id>` (populates `admin_retraction_actors`:
+  actors allowed to retract records they did not author) and
+  `--reaffirmer <id>` (populates `reaffirmation_actors`: when non-empty,
+  restricts reaffirming selections to the listed actors); Python
+  `default_rules` gains matching `admins=` and `reaffirmers=` keyword
+  arguments, and `VerifierRules` gains the corresponding builder methods.
+  Both surfaces refuse an admin or reaffirmer id that has no author binding,
+  since such an actor could never author an accepted record. Without these,
+  Executor-authored records were retractable only through a knob no adoption
+  surface could set. The rules shape is unchanged - the fields existed since
+  their spec epochs; only the generation surface grew.
+
 ## [0.4.0] - 2026-08-20
 
 Adoption and hardening release. It adds no new record kinds and no spec change -

@@ -328,13 +328,26 @@ fn parse_role(s: &str) -> PyResult<AuthorType> {
 /// actor id to one of `user`, `provider`, `system`, `executor`, or `verifier`
 /// (case-insensitive). The result is a JSON string ready to pass to `Writer`.
 ///
+/// `admins` lists actors allowed to retract records they did not author (a
+/// Retraction is otherwise valid only from the target's own author, and an
+/// Executor may never author one). `reaffirmers`, when non-empty, restricts
+/// reaffirming selections to the listed actors. Both must also appear in
+/// `authors`: an actor with no role binding could never author an accepted
+/// record, so listing it here would be a silent no-op.
+///
 /// ```python
-/// rules = bellbook.default_rules({"agent": "provider", "evaluator": "provider"})
+/// rules = bellbook.default_rules({"agent": "provider", "evaluator": "provider"},
+///                                admins=["agent"])
 /// w = bellbook.Writer("./log", rules)
 /// ```
 #[pyfunction]
-#[pyo3(signature = (authors, max_context=200))]
-fn default_rules(authors: BTreeMap<String, String>, max_context: u32) -> PyResult<String> {
+#[pyo3(signature = (authors, max_context=200, admins=None, reaffirmers=None))]
+fn default_rules(
+    authors: BTreeMap<String, String>,
+    max_context: u32,
+    admins: Option<Vec<String>>,
+    reaffirmers: Option<Vec<String>>,
+) -> PyResult<String> {
     if authors.is_empty() {
         return Err(PyValueError::new_err(
             "default_rules needs at least one author binding",
@@ -346,6 +359,24 @@ fn default_rules(authors: BTreeMap<String, String>, max_context: u32) -> PyResul
             return Err(PyValueError::new_err("author id must be non-empty"));
         }
         rules = rules.with_author_role(id.clone(), parse_role(role)?);
+    }
+    for (name, ids) in [("admins", &admins), ("reaffirmers", &reaffirmers)] {
+        for id in ids.iter().flatten() {
+            if !authors.contains_key(id) {
+                return Err(PyValueError::new_err(format!(
+                    "{name} entry {id:?} has no author binding; add it to authors"
+                )));
+            }
+        }
+    }
+    // Insert into the public sets directly rather than through the core's
+    // builder methods, so the binding keeps building against the published
+    // core crate (the builders arrive with the next core release).
+    for id in admins.iter().flatten() {
+        rules.admin_retraction_actors.insert(id.clone().into());
+    }
+    for id in reaffirmers.iter().flatten() {
+        rules.reaffirmation_actors.insert(id.clone().into());
     }
     serde_json::to_string(&rules)
         .map_err(|e| PyRuntimeError::new_err(format!("cannot serialize rules: {e}")))

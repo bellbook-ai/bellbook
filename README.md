@@ -227,7 +227,8 @@ record and prints its id; `--json` prints `{ id, result, reason? }` that
 round-trips, so pipelines can chain ids without scraping text.
 
 ```
-bellbook rules init    --author <id>:<role>... [--max-context <n>] [--out <file>]
+bellbook rules init    --author <id>:<role>... [--admin <id>]... [--reaffirmer <id>]...
+                       [--max-context <n>] [--out <file>]
 bellbook candidate add --log <dir> --rules <file> --author <id> \
          --git-tree <oid> [--continues <sel> --parent <cand>
                            | --derives-from <id>... | --upgrades <cand>]
