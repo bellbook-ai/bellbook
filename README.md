@@ -236,6 +236,8 @@ bellbook eval add      --log <dir> --rules <file> --author <id> \
          --candidate <id> --criterion <s> (--passed | --failed | --score <v> --scale <n>)
 bellbook select        --log <dir> --rules <file> --author <id> --objective <s> \
          --consider <id>... (--choose <id>... --uses-eval <id>... | --none) [--replaces <sel>]
+bellbook retract       --log <dir> --rules <file> --author <id> \
+         --target <record-id> --reason <text>   # receipt reports Tainted from then on
 bellbook lineage       --log <dir> --rules <file> <id> [--json]
 bellbook export        --log <dir> --rules <file> [--out <file>]   # log -> receipt
 ```
@@ -304,7 +306,7 @@ source binding, the selection and reaffirmation rule battery, and the
 replay-derived standing section, derived state with incremental/full-build
 equivalence, checkpoints, the crash-safe writer with idempotent
 compare-and-append, and portable receipts with the offline `bellbook
-validate` CLI, the `candidate`/`eval`/`select`/`lineage` recording
+validate` CLI, the `candidate`/`eval`/`select`/`retract`/`lineage` recording
 commands, and `rules init` / `export` to generate a starter rule set and
 bundle a log into a receipt - fully tested (every rejection reason code has a
 triggering test), clippy-clean, no `unsafe`, no panics in library code.

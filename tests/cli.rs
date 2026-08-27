@@ -756,3 +756,267 @@ fn validate_is_feature_independent() {
         .unwrap();
     assert_eq!(out.status.code(), Some(66));
 }
+
+// --- retract: the v0.5.0 gate (the broken-benchmark story, CLI alone) ------
+
+/// Rules for the retraction story: two providers plus a human admin who may
+/// retract across authors (`admin_retraction_actors`).
+fn story_env() -> Env {
+    let dir = tempfile::tempdir().unwrap();
+    let log = dir.path().join("log");
+    let rules_path = dir.path().join("rules.json");
+    let rules = VerifierRules::new(SPACE, 200)
+        .with_author_role("agent", AuthorType::Provider)
+        .with_author_role("evaluator", AuthorType::Provider)
+        .with_author_role("human", AuthorType::User)
+        .with_admin_retraction_actor("human");
+    std::fs::write(&rules_path, serde_json::to_string_pretty(&rules).unwrap()).unwrap();
+    Env {
+        _dir: dir,
+        log,
+        rules: rules_path,
+    }
+}
+
+fn eval_passed(env: &Env, author: &str, candidate: &str, criterion: &str) -> String {
+    let out = run(
+        env,
+        &[
+            "eval",
+            "add",
+            "--author",
+            author,
+            "--candidate",
+            candidate,
+            "--criterion",
+            criterion,
+            "--passed",
+            "--json",
+        ],
+    );
+    committed_id(&out)
+}
+
+fn validate_receipt(env: &Env, name: &str) -> Output {
+    let receipt = env._dir.path().join(name);
+    let out = run(env, &["export", "--out", receipt.to_str().unwrap()]);
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    bellbook().arg("validate").arg(&receipt).output().unwrap()
+}
+
+#[test]
+fn retract_reaffirm_story_runs_from_the_cli_alone() {
+    // The v0.5.0 gate, CLI half: build a line, retract the evaluation it
+    // rests on, watch standing collapse, reaffirm, watch it restore - with
+    // the receipt Tainted permanently from the retraction on.
+    let env = story_env();
+
+    let c0 = add_root(&env, TREE_A);
+    let bench = eval_passed(&env, "evaluator", &c0, "benchmark");
+    let out = run(
+        &env,
+        &[
+            "select",
+            "--author",
+            "agent",
+            "--objective",
+            "ship",
+            "--consider",
+            &c0,
+            "--choose",
+            &c0,
+            "--uses-eval",
+            &bench,
+            "--json",
+        ],
+    );
+    let s0 = committed_id(&out);
+    // A continuation resting on the selection: the descendant the compromise
+    // must reach.
+    let out = run(
+        &env,
+        &[
+            "candidate",
+            "add",
+            "--author",
+            "agent",
+            "--git-tree",
+            TREE_B,
+            "--continues",
+            &s0,
+            "--parent",
+            &c0,
+            "--json",
+        ],
+    );
+    let c1 = committed_id(&out);
+
+    // Phase 1: clean.
+    let out = validate_receipt(&env, "phase1.json");
+    assert_eq!(out.status.code(), Some(0));
+    assert!(String::from_utf8_lossy(&out.stdout).contains("CLEAN"));
+
+    // Phase 2: the benchmark was broken; its author retracts it.
+    let out = run(
+        &env,
+        &[
+            "retract",
+            "--author",
+            "evaluator",
+            "--target",
+            &bench,
+            "--reason",
+            "benchmark harness measured the wrong thing",
+            "--json",
+        ],
+    );
+    let _retraction = committed_id(&out);
+
+    let out = validate_receipt(&env, "phase2.json");
+    assert_eq!(out.status.code(), Some(2), "tainted receipts exit 2");
+    let text = String::from_utf8_lossy(&out.stdout).to_string();
+    assert!(text.contains("TAINTED"));
+    assert!(text.contains(&bench), "retracted id is reported");
+    assert!(text.contains(&s0), "the selection that Used it is unsound");
+    assert!(
+        text.contains("standing-compromised") && text.contains(&c1),
+        "the continuation descendant is compromised:\n{text}"
+    );
+
+    // Phase 3: reaffirm on fresh evidence; standing restores, Clean does not.
+    let review = eval_passed(&env, "evaluator", &c0, "manual-review");
+    let out = run(
+        &env,
+        &[
+            "select",
+            "--author",
+            "agent",
+            "--objective",
+            "ship",
+            "--consider",
+            &c0,
+            "--choose",
+            &c0,
+            "--uses-eval",
+            &review,
+            "--replaces",
+            &s0,
+            "--json",
+        ],
+    );
+    let s1 = committed_id(&out);
+
+    let out = validate_receipt(&env, "phase3.json");
+    assert_eq!(
+        out.status.code(),
+        Some(2),
+        "restored standing stays Tainted"
+    );
+    let text = String::from_utf8_lossy(&out.stdout).to_string();
+    assert!(text.contains("TAINTED"));
+    assert!(
+        text.contains("restorations") && text.contains(&s1),
+        "the restoration is on the record:\n{text}"
+    );
+    assert!(
+        !text.contains("standing-compromised"),
+        "restored line is no longer compromised:\n{text}"
+    );
+}
+
+#[test]
+fn retract_ownership_battery() {
+    // Cross-author rejected; admin accepted; a Retraction and a missing
+    // target rejected; a second retraction of the same target accepted.
+    let env = story_env();
+    let c0 = add_root(&env, TREE_A);
+    let bench = eval_passed(&env, "evaluator", &c0, "benchmark");
+
+    // Cross-author: the agent may not retract the evaluator's record.
+    let out = run(
+        &env,
+        &[
+            "retract", "--author", "agent", "--target", &bench, "--reason", "not mine",
+        ],
+    );
+    assert_eq!(out.status.code(), Some(65));
+    assert!(String::from_utf8_lossy(&out.stderr).contains("AuthorRoleInvalid"));
+
+    // Admin override: the human is in admin_retraction_actors.
+    let out = run(
+        &env,
+        &[
+            "retract",
+            "--author",
+            "human",
+            "--target",
+            &bench,
+            "--reason",
+            "admin override",
+            "--json",
+        ],
+    );
+    let retraction = committed_id(&out);
+
+    // A retraction cannot be retracted.
+    let out = run(
+        &env,
+        &[
+            "retract",
+            "--author",
+            "human",
+            "--target",
+            &retraction,
+            "--reason",
+            "undo",
+        ],
+    );
+    assert_eq!(out.status.code(), Some(65));
+
+    // A target that resolves nowhere.
+    let ghost = "f".repeat(64);
+    let out = run(
+        &env,
+        &[
+            "retract", "--author", "human", "--target", &ghost, "--reason", "ghost",
+        ],
+    );
+    assert_eq!(out.status.code(), Some(65));
+
+    // Redundant re-retraction of the same target is valid, not contradictory.
+    let out = run(
+        &env,
+        &[
+            "retract",
+            "--author",
+            "evaluator",
+            "--target",
+            &bench,
+            "--reason",
+            "again",
+            "--json",
+        ],
+    );
+    let _ = committed_id(&out);
+}
+
+#[test]
+fn retract_requires_target_and_reason() {
+    let env = story_env();
+    let c0 = add_root(&env, TREE_A);
+
+    let out = run(&env, &["retract", "--author", "agent", "--target", &c0]);
+    assert_eq!(out.status.code(), Some(65));
+    assert!(String::from_utf8_lossy(&out.stderr).contains("--reason"));
+
+    let out = run(
+        &env,
+        &["retract", "--author", "agent", "--reason", "no target"],
+    );
+    assert_eq!(out.status.code(), Some(65));
+    assert!(String::from_utf8_lossy(&out.stderr).contains("--target"));
+}
