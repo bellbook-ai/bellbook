@@ -5,7 +5,19 @@ All notable changes to Bellbook are documented in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and releases follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.6.0] - 2026-08-27
+
+The read side. RFC-0002 names the seven questions a Bellbook log can
+answer about lineage, evidence, and standing, and this release implements
+the closed set - `descent`, `descendants`, `siblings`, `frontier`,
+`standing`, `evidence`, `selected` - in the Rust core, on the CLI (over a
+log or a receipt), in the conformance corpus, and in the independent
+Python validator. No new record kinds and no spec change - the epoch
+stays 0.3 - and no ranking anywhere: queries report annotated facts and
+the caller decides. The PyPI package gains the same query methods
+immediately after the core publish (the bindings track the published
+crate, which gains the queries module at this release). Existing 0.3/0.4/0.5
+receipts and rules validate identically.
 
 ### Added
 
@@ -19,8 +31,7 @@ and releases follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   carries its standing, taint, and retraction annotations so nothing is
   silently filtered. A closed set with fixed semantics: `selected`
   matches its objective exactly, and the general query engine remains
-  gated on RFC-0001 section 15. Library-only in this change; the CLI,
-  Python, and corpus surfaces follow in the same milestone.
+  gated on RFC-0001 section 15.
 - **Conformance corpus query vectors and an independent query
   implementation** (#91). The corpus gains
   `spec/conformance/v0.3/query-cases.json`: cases pairing a portable

@@ -239,6 +239,8 @@ bellbook select        --log <dir> --rules <file> --author <id> --objective <s> 
 bellbook retract       --log <dir> --rules <file> --author <id> \
          --target <record-id> --reason <text>   # receipt reports Tainted from then on
 bellbook lineage       --log <dir> --rules <file> <id> [--json]
+bellbook query <name> [<id>|<objective>]   # descent|descendants|siblings|frontier
+         (--log <dir> --rules <file> | --receipt <file>)   # |standing|evidence|selected
 bellbook export        --log <dir> --rules <file> [--out <file>]   # log -> receipt
 ```
 
@@ -288,7 +290,7 @@ evolution kinds to a log and exports a receipt. See
 
 ## Status
 
-**The published release is 0.5.0, implementing spec v0.3 (evolution
+**The published release is 0.6.0, implementing spec v0.3 (evolution
 semantics: Candidate, Evaluation, and Selection records with replay-derived
 lineage standing).** SPEC.md is the authority for what v0.3 means (design
 notes in [`spec/v0.3-delta.md`](spec/v0.3-delta.md)). The previous epoch,
@@ -307,18 +309,21 @@ replay-derived standing section, derived state with incremental/full-build
 equivalence, checkpoints, the crash-safe writer with idempotent
 compare-and-append, and portable receipts with the offline `bellbook
 validate` CLI, the `candidate`/`eval`/`select`/`retract`/`lineage` recording
-commands, and `rules init` / `export` to generate a starter rule set and
+commands, the read-side `query` command (the RFC-0002 named set: descent,
+descendants, siblings, frontier, standing, evidence, selected - over a log
+or a receipt), and `rules init` / `export` to generate a starter rule set and
 bundle a log into a receipt - fully tested (every rejection reason code has a
 triggering test), clippy-clean, no `unsafe`, no panics in library code.
 
 The repository also carries a language-neutral **conformance corpus**
-(`spec/conformance/v0.3/`: record, malformed, receipt-replay, and standing
-cases, run by `tests/conformance.rs`; the frozen `spec/conformance/v0.2/`
-corpus stays valid under v0.2 rules) and an **independent Python
-implementation** of the verifier (`conformance/python/`) that shares no
+(`spec/conformance/v0.3/`: record, malformed, receipt-replay, standing,
+and named-query cases, run by `tests/conformance.rs`; the frozen
+`spec/conformance/v0.2/` corpus stays valid under v0.2 rules) and an
+**independent Python implementation** of the verifier and the named query
+set (`conformance/python/`) that shares no
 code with this crate, recomputes every record id, and re-derives every
-verdict and standing section across the corpus, agreeing with this
-reference on every case - including the deliberately malformed and forged
+verdict, standing section, and query answer across the corpus, agreeing
+with this reference on every case - including the deliberately malformed and forged
 inputs it must reject.
 
 Open work, **not implemented**:

@@ -1090,6 +1090,32 @@ reason codes (`Refused`, `InvalidCheckpoint`, `RefCrossSpace`) that the
 single-space, checkpoint-free receipt format cannot express and that the
 reference implementation's own test suite exercises instead.
 
+### 12.4 Read-side queries (the named set)
+
+Implementations may expose the **named query set** of
+[RFC-0002](docs/rfcs/0002-read-side-queries.md): seven deterministic,
+read-only queries over canonical record relationships - `descent`,
+`descendants`, `siblings`, `frontier`, `standing`, `evidence`,
+`selected` - answerable identically over a verified log or a receipt.
+The set is closed and its semantics are fixed. Queries derive from what
+replay already computes (never stored, never ranked), answer only over
+verified state (an input that does not verify is an error, not answers),
+address only accepted records (a rejected record made no claim), and
+annotate every reported record with its standing, taint, and retraction
+status rather than filtering anything silently. `selected` matches its
+objective exactly; there are no patterns, predicates, or composition
+(RFC-0002 section 7).
+
+The queries are surface, not wire format: they change no record, schema,
+or receipt byte, and carry no spec-version implications. Their authority
+chain is RFC-0002 (semantics and edge cases), this section (existence
+and boundaries), and the corpus's `query-cases.json` (executable
+answers: each vector pairs a receipt and a query with the exact surface
+JSON the query must return, and every name appears at least once). An
+implementation claiming the read-side surface re-derives each stored
+answer from the stored receipt, as the independent validator in
+`conformance/python/` does.
+
 ## 13. Known limitations
 
 - **Integrity, not confidentiality.** Records and receipts carry full

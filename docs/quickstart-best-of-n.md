@@ -171,6 +171,51 @@ whole episode - the break, the taint, and the repair - on the record. That
 is not a limitation; it is the point. A record that could quietly return to
 Clean after a retraction would be a record you could not trust.
 
+## Tie-breaks: when two candidates pass, record why one won
+
+Rewind to the selection at the start: suppose `c0` and `c1` had both
+*passed* the only criterion and you chose `c1`. If the reason lives only
+in the selection's free-text `rationale`, the record shows a valid
+choice whose stated evidence does not distinguish the winner - a
+verifier sees two green candidates and a coin flip. The discriminating
+fact deserves to be evidence, not prose: record it as its own
+Evaluation under its own criterion, and make the selection use it.
+
+```python
+# both c0 and c1 passed "unit-tests"; c1 also covers the edge cases
+e_tb = w.evaluate(author="evaluator", candidate=cands[1],
+                  criterion="completeness", passed=True)
+s = w.select(author="agent", objective="best-of-n",
+             consider=cands, choose=[cands[1]],
+             uses_eval=[evals[1], e_tb.id],
+             rationale="both green; c1 also covers the edge cases")
+```
+
+```sh
+etb=$(bellbook eval add --log $LOG --rules $RULES --author evaluator \
+        --candidate $c1 --criterion completeness --passed --json | jq -r .id)
+bellbook select --log $LOG --rules $RULES --author agent --objective best-of-n \
+  --consider $c0 $c1 --choose $c1 --uses-eval $e1 $etb
+```
+
+Now the tie-break is queryable evidence. Ask the record why the winner
+won, or what any descendant of the winner rests on, and the
+`completeness` evaluation is in the answer:
+
+```sh
+bellbook query selected best-of-n --log $LOG --rules $RULES
+bellbook query evidence $c1 --log $LOG --rules $RULES
+```
+
+`rationale` stays what it is - a recorded statement, useful to humans,
+verified by no one. Bellbook records consequences, not scoring logic, so
+there is no first-class ranking field and no rule forcing chosen
+candidates to be evidence-distinguishable from rejected ones; the
+pattern above is the supported way to make a tie-break hold up under
+verification. `bellbook query NAME [ID|OBJECTIVE] (--log DIR --rules
+FILE | --receipt FILE)` runs any of the seven named read-side queries
+(RFC-0002) the same way over a live log or an exported receipt.
+
 ## What Clean means (and does not)
 
 A **Clean** receipt means the recorded history is internally consistent under
