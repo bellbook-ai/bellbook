@@ -1,11 +1,10 @@
 # RFC-0002: Read-side queries over lineage and evidence
 
-**Status:** Draft (revision 1). This document proposes the design for the
-v0.6.0 milestone (tracking: #91, #90). It proposes **no spec change**: no
-new record kinds, no wire-format change, and no spec-version bump; the spec
-epoch stays 0.3. Implementation begins only once this RFC is Accepted.
-Where this design and SPEC.md differ about the present, SPEC.md is
-authoritative.
+**Status:** Accepted (revision 2, 2026-08-27). This document specifies the
+design for the v0.6.0 milestone (tracking: #91, #90). It makes **no spec
+change**: no new record kinds, no wire-format change, and no spec-version
+bump; the spec epoch stays 0.3. Where this design and SPEC.md differ about
+the present, SPEC.md is authoritative.
 
 **Scope anchor:** the read side of the current layer. RFC-0001 §7 already
 *defines* lineage as derived queries over canonical record relationships,
@@ -165,18 +164,25 @@ v0.6.0.
 further read-side work, and the engine stage remains untouched either way -
 it opens only on RFC-0001 §15's own terms.
 
-## 9. Open questions (to resolve in review, before acceptance)
+## 9. Resolved design decisions (at acceptance, 2026-08-27)
 
-1. **Frontier scope:** per thread, per space, or whole log? (The writer is
-   single-thread today; the answer should not bake that in.)
-2. **Evidence transitivity depth:** q6 on a candidate walks the full
-   descent by default; is a depth bound needed for very long lines, and if
-   so is it an argument or a limit?
-3. **Where the semantics live:** this RFC plus a short SPEC section
-   documenting the named set (recommended, since two implementations must
-   agree and the corpus pins the answers), or RFC plus docs only.
-4. **#90 (tie-break evidence)** resolves inside this design: the
-   recommended answer is the documentation pattern - record the
-   discriminating fact as an Evaluation under its own criterion, so q6/q7
-   surface it - with no payload change. To be confirmed or refuted in
-   review.
+1. **Frontier scope: the whole log (or receipt).** q4 takes no scoping
+   argument in v1. The definition is over canonical relationships only, so
+   it does not bake in the writer's current single-thread behavior; a
+   scoped variant would be a new named query, not a parameter.
+2. **Evidence transitivity: unbounded, documented.** q6 on a candidate
+   walks the full descent. Lines are bounded in practice by
+   `max_context_records` and receipt limits; no depth argument in v1 (an
+   argument would be the first step toward parameterized queries, which
+   are engine territory). The docs state the full-descent behavior
+   plainly.
+3. **Semantics live in this RFC plus a short SPEC section plus corpus
+   vectors.** Two implementations must agree byte-for-decision, so the
+   named set's shapes are pinned the same way verdicts are: SPEC documents
+   the set briefly and points here; the corpus carries the answers.
+4. **#90 (tie-break evidence) resolves as the documentation pattern.**
+   The discriminating fact between two passing candidates is recorded as
+   an Evaluation under its own criterion (e.g. `completeness`), so the
+   selection's `uses_eval` genuinely discriminates and q6/q7 surface it.
+   No payload change. #90 closes when the pattern lands in the docs
+   during v0.6.0 implementation.
