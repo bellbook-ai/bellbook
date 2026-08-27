@@ -1166,7 +1166,8 @@ implements.
   by the spec version, which portable artifacts (receipts, head
   attestations) carry explicitly. Hosts embedding raw logs pin the crate
   version, whose CHANGELOG names the spec version it implements.
-- Spec 0.3 (in development) is the second compatibility epoch: fifteen
+- Spec 0.3 is the second and current compatibility epoch, first released
+  in crate 0.3.0 and implemented by every release since: fifteen
   kinds, signing domain `bellbook.record-signature.v0.3`. A v0.3 validator
   rejects a v0.2 receipt as `Invalid` with a clear unsupported-version
   report; v0.2 artifacts remain valid under v0.2 rules, whose validator is

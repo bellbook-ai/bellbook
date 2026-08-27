@@ -132,6 +132,21 @@ The long-term shape, if every gate is passed: one substrate where autonomous
 software is versioned, evaluated, run, observed, and continuously evolved,
 with the same state identity throughout its lifecycle.
 
+### Build-ahead note (recorded 2026-08-27)
+
+The maintainer may advance the *design* of a later stage ahead of its
+adoption gate - RFCs and first-party field tests - when first-party
+evidence justifies it; conviction is a legitimate reason to design.
+Implementing a gated stage still requires either the gate's pre-registered
+signal or an explicit, recorded decision in the accepting RFC that names
+the gate being set aside and why; wire-format changes never build ahead of
+their gates. This note exists so that practice and this document cannot
+quietly diverge: any build-ahead is visible here and in the RFC that
+carries it. First application: RFC-0002 (read-side queries) was drafted
+from first-party field evidence while RFC-0001 §15's evaluation window was
+still open; it completes the traversal set RFC-0001 §7 already defines,
+and the general query engine remains gated on §15's read-side signal.
+
 ## Design rules
 
 Every proposed Bellbook feature must pass:
