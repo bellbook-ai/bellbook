@@ -9,6 +9,24 @@ and releases follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **Python `Writer.retract(author, target, reason)`** (#82). Commits a
+  `Retraction` record (payload `{target_id, reason}` with the exactly-one
+  `Cause` ref the verifier checks) and returns a `Commit` like the other
+  verbs. Ownership is enforced by replay: the retractor must be the
+  target's author or an admin retraction actor, an Executor may never
+  author one, and a Verdict or Retraction cannot be retracted. On
+  acceptance the receipt reports Tainted permanently; a reaffirming
+  selection restores standing, never Clean. With this, the broken-benchmark
+  story (retract -> taint -> reaffirm -> restore) runs end to end from
+  Python alone.
+- **The repair pattern documented for Python** (#85). A Derivation
+  candidate's `derives_from` members may be candidates or evaluations, so a
+  repair *motivated by* an evaluation names it there
+  (`derives_from=[sound_parent, failing_eval]`); `Cause` carries intent,
+  not taint, so retracting that evaluation later does not compromise the
+  repair. Verified against the verifier and pinned by a binding test; the
+  set-valued `Writer` parameters are now documented as lists.
+
 - **Retraction-story rules knobs on both surfaces** (#84). `bellbook rules
   init` gains repeatable `--admin <id>` (populates `admin_retraction_actors`:
   actors allowed to retract records they did not author) and
