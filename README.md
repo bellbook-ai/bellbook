@@ -288,7 +288,7 @@ evolution kinds to a log and exports a receipt. See
 
 ## Status
 
-**The published release is 0.4.0, implementing spec v0.3 (evolution
+**The published release is 0.5.0, implementing spec v0.3 (evolution
 semantics: Candidate, Evaluation, and Selection records with replay-derived
 lineage standing).** SPEC.md is the authority for what v0.3 means (design
 notes in [`spec/v0.3-delta.md`](spec/v0.3-delta.md)). The previous epoch,

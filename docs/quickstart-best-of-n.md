@@ -57,8 +57,8 @@ for git_tree, score in [("a1b2...", 40), ("c3d4...", 90), ("e5f6...", 65)]:
 
 # your harness picks the winner; Bellbook records the choice and its evidence
 winner = cands[1]
-w.select(author="agent", objective="best-of-n",
-         consider=cands, choose=[winner], uses_eval=evals)
+s = w.select(author="agent", objective="best-of-n",
+             consider=cands, choose=[winner], uses_eval=evals)
 
 # export a receipt and verify it, all in one process
 report = bellbook.validate(w.receipt())
@@ -92,8 +92,8 @@ e1=$(bellbook eval add --log $LOG --rules $RULES --author evaluator \
        --candidate $c1 --criterion fitness --score 90 --scale 0 --json | jq -r .id)
 
 # choose the winner; name the evaluations the choice rests on
-bellbook select --log $LOG --rules $RULES --author agent --objective best-of-n \
-  --consider $c0 $c1 --choose $c1 --uses-eval $e0 $e1
+s0=$(bellbook select --log $LOG --rules $RULES --author agent --objective best-of-n \
+       --consider $c0 $c1 --choose $c1 --uses-eval $e0 $e1 --json | jq -r .id)
 
 # inspect a candidate's descent, siblings, taint, and standing
 bellbook lineage --log $LOG --rules $RULES $c1
@@ -106,6 +106,70 @@ record -> receipt -> validate loop stays in the CLI, no binding required:
 bellbook export --log $LOG --rules $RULES --out receipt.json
 bellbook validate receipt.json          # -> CLEAN
 ```
+
+## Phase 2: the benchmark was broken
+
+A Clean receipt is where most tools stop. Bellbook's value begins after
+that: suppose you discover the fitness harness was measuring the wrong
+thing. The evaluation your winning selection rests on is wrong, and the
+record has to absorb that honestly. Its author retracts it:
+
+```python
+r = w.retract(author="evaluator", target=evals[1],
+              reason="fitness harness measured the wrong thing")
+assert r.accepted
+
+report = bellbook.validate(w.receipt())
+print(report.status)                 # "tainted"
+print(report.retracted)              # the retracted evaluation
+print(report.standing["unsound"])    # the selection that rested on it
+```
+
+Or from the CLI:
+
+```sh
+bellbook retract --log $LOG --rules $RULES --author evaluator \
+  --target $e1 --reason "fitness harness measured the wrong thing"
+
+bellbook export --log $LOG --rules $RULES --out receipt.json
+bellbook validate receipt.json          # -> TAINTED, exit 2
+```
+
+Retraction is ownership-bound: `evaluator` may retract its own evaluation.
+Retracting someone else's record requires an admin retraction actor
+(`rules init --admin <id>`, or `default_rules(..., admins=[...])`).
+
+Recovery is one selection. Re-evaluate on something you still trust, then
+reaffirm the choice, naming the selection it replaces:
+
+```python
+e_new = w.evaluate(author="evaluator", candidate=winner,
+                   criterion="manual-review", passed=True)
+s_new = w.select(author="agent", objective="best-of-n",
+                 consider=cands, choose=[winner], uses_eval=[e_new.id],
+                 replaces=s.id)
+
+report = bellbook.validate(w.receipt())
+print(report.status)                     # still "tainted" - permanently
+print(report.standing["restorations"])   # {unsound id: [reaffirming id]}
+```
+
+```sh
+e2=$(bellbook eval add --log $LOG --rules $RULES --author evaluator \
+       --candidate $c1 --criterion manual-review --passed --json | jq -r .id)
+bellbook select --log $LOG --rules $RULES --author agent --objective best-of-n \
+  --consider $c0 $c1 --choose $c1 --uses-eval $e2 --replaces $s0
+
+bellbook export --log $LOG --rules $RULES --out receipt.json
+bellbook validate receipt.json   # still TAINTED; the report shows the restoration
+```
+
+**Restoration restores standing, not Clean.** The receipt stays Tainted
+(exit code 2) permanently, because the retraction is part of history. What
+changes is the standing section: the line is recorded as restored, with the
+whole episode - the break, the taint, and the repair - on the record. That
+is not a limitation; it is the point. A record that could quietly return to
+Clean after a retraction would be a record you could not trust.
 
 ## What Clean means (and does not)
 
