@@ -7,6 +7,21 @@ and releases follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- **The named query set q1-q7 in the core** (`bellbook::queries`,
+  RFC-0002; #91). Seven deterministic, read-only queries over canonical
+  record relationships - `descent`, `descendants`, `siblings`, `frontier`,
+  `standing`, `evidence`, `selected` - derived from what replay already
+  computes: never stored, never ranked, answered only over verified state
+  (an unverifiable log returns `LogInvalid`, not answers). Rejected
+  records are not addressable (they made no claim); every reported node
+  carries its standing, taint, and retraction annotations so nothing is
+  silently filtered. A closed set with fixed semantics: `selected`
+  matches its objective exactly, and the general query engine remains
+  gated on RFC-0001 section 15. Library-only in this change; the CLI,
+  Python, and corpus surfaces follow in the same milestone.
+
 ## [0.5.0] - 2026-08-27
 
 Retraction and standing on every surface. No new record kinds and no spec

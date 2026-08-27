@@ -77,6 +77,7 @@ pub mod manifest;
 /// The untrusted [`Proposer`] interface - emits proposals, holds no append
 /// authority.
 pub mod propose;
+pub mod queries;
 /// Portable receipts: export a log as a self-contained bundle and
 /// validate it offline.
 pub mod receipt;
@@ -131,6 +132,11 @@ pub use receipt::{
     validate, validate_with_limits, Receipt, Report, ValidationLimits, ValidationStatus,
 };
 
+pub use queries::{
+    DescendantsReport, DescentReport, DescentStep, EvidenceEntry, EvidenceReport, FrontierEntry,
+    FrontierReport, Node, Queries, QueryError, SelectedEntry, SelectedReport, SelectionEvidence,
+    SiblingsReport, StandingReport,
+};
 pub use verify::rules::VerifierRules;
 pub use verify::standing::{derive_standing, StandingSection};
 pub use verify::verifier::{verify_log, verify_record, LogVerdict};
