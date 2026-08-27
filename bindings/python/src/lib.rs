@@ -23,9 +23,9 @@ use bellbook_core::{
     schema_id, validate as core_validate, verify_and_build_state, Author, AuthorType, BindingMode,
     CandidateBasis, CandidateData, EvaluationData, EvaluationOutcome, GitSource, Kind, LogWriter,
     Proposal, Receipt as CoreReceipt, Record as CoreRecord, RecordId, Ref, RefType,
-    Report as CoreReport, ScoredValue, SelectionData, SelectionOutcome, SourceAlgo, SourceBinding,
-    State, ValidationStatus, VerdictResult, VerifierRules, SCHEMA_CANDIDATE, SCHEMA_EVALUATION,
-    SCHEMA_SELECTION,
+    Report as CoreReport, RetractionData, ScoredValue, SelectionData, SelectionOutcome, SourceAlgo,
+    SourceBinding, State, ValidationStatus, VerdictResult, VerifierRules, SCHEMA_CANDIDATE,
+    SCHEMA_EVALUATION, SCHEMA_RETRACTION, SCHEMA_SELECTION,
 };
 use pyo3::exceptions::{PyRuntimeError, PyValueError};
 use pyo3::prelude::*;
@@ -827,6 +827,41 @@ impl Writer {
             author,
             Kind::Selection,
             schema_id(SCHEMA_SELECTION),
+            data,
+            refs,
+        )
+    }
+
+    /// Retract a committed record: assert its content is wrong. The target
+    /// stays in the log; on acceptance its id enters the retracted set and
+    /// its epistemic dependents become tainted, so the receipt reports
+    /// Tainted from then on - permanently. `reason` is a free-form statement
+    /// of why the content is wrong; it is recorded, not interpreted.
+    ///
+    /// Ownership is enforced by replay (SPEC section 2): the retraction is
+    /// accepted only when `author` is the target's author or is listed in the
+    /// rules' `admin_retraction_actors` (see `default_rules(admins=...)`).
+    /// An Executor may never author a Retraction. A Verdict or a Retraction
+    /// cannot be retracted. As with the other verbs, a rejected retraction
+    /// is still durably committed, with `accepted=False` and the reason.
+    #[pyo3(signature = (author, target, reason))]
+    fn retract(&mut self, author: &str, target: &str, reason: &str) -> PyResult<Commit> {
+        let author = self.resolve_author(author)?;
+        let target = parse_id(target)?;
+
+        // The verifier requires exactly one Cause ref naming the target.
+        let refs = vec![Ref {
+            type_: RefType::Cause,
+            target,
+        }];
+        let data = checked_encode(&RetractionData {
+            target_id: target,
+            reason: reason.to_string(),
+        })?;
+        self.do_commit(
+            author,
+            Kind::Retraction,
+            schema_id(SCHEMA_RETRACTION),
             data,
             refs,
         )
