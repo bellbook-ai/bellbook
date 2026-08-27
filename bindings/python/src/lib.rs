@@ -13,6 +13,11 @@
 //!   same exclusive lock and runs the same replay-on-commit the Rust
 //!   `LogWriter` does. Export the log with `writer.receipt()` and feed it
 //!   straight back to `validate`.
+//! - The RFC-0002 named query set - `descent`, `descendants`, `siblings`,
+//!   `frontier`, `standing`, `evidence`, `selected` - is available as
+//!   methods on both `Receipt` and `Writer`, returning the shared surface
+//!   JSON shapes as plain dicts/lists. Queries run only over verified
+//!   state: an input that does not verify raises `ValueError`, not answers.
 
 // `#[pyfunction]` generates a result conversion that clippy reads as a
 // useless `PyErr -> PyErr` conversion for any `PyResult`-returning function.
@@ -23,7 +28,7 @@ use bellbook_core::{
     decode, default_space, encode, hex_decode, hex_encode, manifest_from_dir, manifest_hash,
     schema_id, validate as core_validate, verify_and_build_state, Author, AuthorType, BindingMode,
     CandidateBasis, CandidateData, EvaluationData, EvaluationOutcome, GitSource, Kind, LogWriter,
-    Proposal, Receipt as CoreReceipt, Record as CoreRecord, RecordId, Ref, RefType,
+    Proposal, Queries, Receipt as CoreReceipt, Record as CoreRecord, RecordId, Ref, RefType,
     Report as CoreReport, RetractionData, ScoredValue, SelectionData, SelectionOutcome, SourceAlgo,
     SourceBinding, State, ValidationStatus, VerdictResult, VerifierRules, SCHEMA_CANDIDATE,
     SCHEMA_EVALUATION, SCHEMA_RETRACTION, SCHEMA_SELECTION,
@@ -167,9 +172,49 @@ fn validate(data: &[u8]) -> Report {
     }
 }
 
+// --- read-side queries (RFC-0002, the named set) ---------------------------
+
+/// Convert a query report (surface JSON) into Python dicts/lists via the
+/// stdlib `json` module, so every surface hands out the identical shape.
+fn json_to_py(py: Python<'_>, value: &serde_json::Value) -> PyResult<Py<PyAny>> {
+    let s = serde_json::to_string(value).map_err(|e| PyRuntimeError::new_err(format!("{e}")))?;
+    Ok(py.import("json")?.call_method1("loads", (s,))?.unbind())
+}
+
+/// Flatten a query result into the surface JSON value, mapping both a query
+/// error and the (unreachable in practice) serialization error to a message.
+fn to_value<T: serde::Serialize>(
+    result: Result<T, bellbook_core::QueryError>,
+) -> Result<serde_json::Value, String> {
+    let report = result.map_err(|e| e.to_string())?;
+    serde_json::to_value(report).map_err(|e| e.to_string())
+}
+
+/// Build the verified query context and run one named query. Queries never
+/// answer over unverified history: a log or receipt that does not verify
+/// raises `ValueError`, as do a missing or rejected id and a kind mismatch.
+fn run_query<F>(
+    py: Python<'_>,
+    records: &[CoreRecord],
+    rules: &VerifierRules,
+    f: F,
+) -> PyResult<Py<PyAny>>
+where
+    F: FnOnce(&Queries<'_>) -> Result<serde_json::Value, String>,
+{
+    let q = Queries::new(records, rules).map_err(|e| PyValueError::new_err(format!("{e}")))?;
+    let value = f(&q).map_err(PyValueError::new_err)?;
+    json_to_py(py, &value)
+}
+
 /// A parsed receipt, for inspection. Reading does not verify: call
 /// [`validate`] for the Clean / Tainted / Invalid decision. A record's fields
 /// are as recorded; only replay confirms they are consistent.
+///
+/// The receipt also answers the RFC-0002 named query set (`descent`,
+/// `descendants`, `siblings`, `frontier`, `standing`, `evidence`,
+/// `selected`); those methods replay the receipt first and raise
+/// `ValueError` if it does not verify.
 #[pyclass(frozen, name = "Receipt", module = "bellbook")]
 struct Receipt {
     inner: CoreReceipt,
@@ -197,6 +242,70 @@ impl Receipt {
     /// Number of records (subjects and verdicts).
     fn __len__(&self) -> usize {
         self.inner.records.len()
+    }
+
+    /// q1 `descent(id)`: the line of descent from a candidate back to its
+    /// roots (RFC-0002). Returns the shared surface JSON as dicts/lists.
+    fn descent(&self, py: Python<'_>, id: &str) -> PyResult<Py<PyAny>> {
+        let id = parse_id(id)?;
+        run_query(py, &self.inner.records, &self.inner.rules, |q| {
+            to_value(q.descent(id))
+        })
+    }
+
+    /// q2 `descendants(id)`: every candidate whose descent passes through
+    /// the record, in log order.
+    fn descendants(&self, py: Python<'_>, id: &str) -> PyResult<Py<PyAny>> {
+        let id = parse_id(id)?;
+        run_query(py, &self.inner.records, &self.inner.rules, |q| {
+            to_value(q.descendants(id))
+        })
+    }
+
+    /// q3 `siblings(id)`: the candidate's generation (same anchor Selection,
+    /// or same exact derivation cause set), excluding itself.
+    fn siblings(&self, py: Python<'_>, id: &str) -> PyResult<Py<PyAny>> {
+        let id = parse_id(id)?;
+        run_query(py, &self.inner.records, &self.inner.rules, |q| {
+            to_value(q.siblings(id))
+        })
+    }
+
+    /// q4 `frontier()`: candidates no accepted Selection considered, and
+    /// chosen candidates with no continuation yet. Nothing is silently
+    /// filtered; every node carries its annotations.
+    fn frontier(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
+        run_query(py, &self.inner.records, &self.inner.rules, |q| {
+            to_value(Ok(q.frontier()))
+        })
+    }
+
+    /// q5 `standing(id)`: the record's standing, taint, and retraction
+    /// status, plus any restoring Selection ids.
+    fn standing(&self, py: Python<'_>, id: &str) -> PyResult<Py<PyAny>> {
+        let id = parse_id(id)?;
+        run_query(py, &self.inner.records, &self.inner.rules, |q| {
+            to_value(q.standing(id))
+        })
+    }
+
+    /// q6 `evidence(id)`: what the record rests on. For a Selection, its own
+    /// evidence; for a Candidate, the evidence of every anchor Selection
+    /// along its full descent (unbounded by design).
+    fn evidence(&self, py: Python<'_>, id: &str) -> PyResult<Py<PyAny>> {
+        let id = parse_id(id)?;
+        run_query(py, &self.inner.records, &self.inner.rules, |q| {
+            to_value(q.evidence(id))
+        })
+    }
+
+    /// q7 `selected(objective)`: the accepted Selected selections whose
+    /// objective equals the string exactly (no patterns), with chosen
+    /// candidates and evidence.
+    fn selected(&self, py: Python<'_>, objective: &str) -> PyResult<Py<PyAny>> {
+        run_query(py, &self.inner.records, &self.inner.rules, |q| {
+            to_value(Ok(q.selected(objective)))
+        })
     }
 
     fn __repr__(&self) -> String {
@@ -897,6 +1006,71 @@ impl Writer {
             .to_bytes()
             .map_err(|e| PyRuntimeError::new_err(format!("cannot serialize receipt: {e}")))?;
         Ok(PyBytes::new(py, &bytes))
+    }
+
+    /// q1 `descent(id)`: the line of descent from a candidate back to its
+    /// roots (RFC-0002). Returns the shared surface JSON as dicts/lists -
+    /// byte-for-byte the shapes `Receipt` and the CLI emit.
+    fn descent(&self, py: Python<'_>, id: &str) -> PyResult<Py<PyAny>> {
+        let id = parse_id(id)?;
+        run_query(py, self.inner.records(), &self.rules, |q| {
+            to_value(q.descent(id))
+        })
+    }
+
+    /// q2 `descendants(id)`: every candidate whose descent passes through
+    /// the record, in log order.
+    fn descendants(&self, py: Python<'_>, id: &str) -> PyResult<Py<PyAny>> {
+        let id = parse_id(id)?;
+        run_query(py, self.inner.records(), &self.rules, |q| {
+            to_value(q.descendants(id))
+        })
+    }
+
+    /// q3 `siblings(id)`: the candidate's generation (same anchor Selection,
+    /// or same exact derivation cause set), excluding itself.
+    fn siblings(&self, py: Python<'_>, id: &str) -> PyResult<Py<PyAny>> {
+        let id = parse_id(id)?;
+        run_query(py, self.inner.records(), &self.rules, |q| {
+            to_value(q.siblings(id))
+        })
+    }
+
+    /// q4 `frontier()`: candidates no accepted Selection considered, and
+    /// chosen candidates with no continuation yet. Nothing is silently
+    /// filtered; every node carries its annotations.
+    fn frontier(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
+        run_query(py, self.inner.records(), &self.rules, |q| {
+            to_value(Ok(q.frontier()))
+        })
+    }
+
+    /// q5 `standing(id)`: the record's standing, taint, and retraction
+    /// status, plus any restoring Selection ids.
+    fn standing(&self, py: Python<'_>, id: &str) -> PyResult<Py<PyAny>> {
+        let id = parse_id(id)?;
+        run_query(py, self.inner.records(), &self.rules, |q| {
+            to_value(q.standing(id))
+        })
+    }
+
+    /// q6 `evidence(id)`: what the record rests on. For a Selection, its own
+    /// evidence; for a Candidate, the evidence of every anchor Selection
+    /// along its full descent (unbounded by design).
+    fn evidence(&self, py: Python<'_>, id: &str) -> PyResult<Py<PyAny>> {
+        let id = parse_id(id)?;
+        run_query(py, self.inner.records(), &self.rules, |q| {
+            to_value(q.evidence(id))
+        })
+    }
+
+    /// q7 `selected(objective)`: the accepted Selected selections whose
+    /// objective equals the string exactly (no patterns), with chosen
+    /// candidates and evidence.
+    fn selected(&self, py: Python<'_>, objective: &str) -> PyResult<Py<PyAny>> {
+        run_query(py, self.inner.records(), &self.rules, |q| {
+            to_value(Ok(q.selected(objective)))
+        })
     }
 
     fn __repr__(&self) -> String {
