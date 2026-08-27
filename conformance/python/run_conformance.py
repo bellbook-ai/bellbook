@@ -27,6 +27,7 @@ import sys
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 import bellbook_conformance as bb  # noqa: E402
+import bellbook_queries as bq  # noqa: E402
 import bellbook_verdict as bv  # noqa: E402
 
 ROOT = pathlib.Path(__file__).resolve().parents[2]
@@ -324,12 +325,46 @@ def run_malformed_cases() -> tuple[int, list[str]]:
 # ---------------------------------------------------------------------------
 
 
+def run_query_cases() -> tuple[int, list[str]]:
+    """RFC-0002 named query set: re-derive every stored query answer from the
+    stored receipt with the from-scratch implementation in
+    `bellbook_queries.py` and require deep JSON equality with the reference's
+    surface shapes."""
+    cases = load(CORPUS / "query-cases.json")["cases"]
+    check(len(cases) > 0, "query-cases.json is empty")
+    assertions = 0
+    per_query: dict[str, int] = {}
+    for c in cases:
+        rc = c["receipt"]
+        try:
+            ctx = bq.QueryContext(rc["records"], rc["rules"])
+        except ValueError as e:
+            raise Failed(f"query case `{c['name']}`: receipt must verify: {e}") from e
+        for v in c["queries"]:
+            got = bq.run_query(ctx, v["query"], v["args"])
+            check(
+                got == v["expect"],
+                f"query case `{c['name']}`: {v['query']} {v['args']} differs:\n"
+                f"  got:    {json.dumps(got, sort_keys=True)[:400]}\n"
+                f"  expect: {json.dumps(v['expect'], sort_keys=True)[:400]}",
+            )
+            assertions += 1
+            per_query[v["query"]] = per_query.get(v["query"], 0) + 1
+    # Coverage: every named query has at least one vector.
+    named = {"descent", "descendants", "siblings", "frontier", "standing", "evidence", "selected"}
+    missing = named - set(per_query)
+    check(not missing, f"query corpus covers no vector for: {sorted(missing)}")
+    notes = ["queries covered: " + ", ".join(f"{k}={per_query[k]}" for k in sorted(per_query))]
+    return assertions, notes
+
+
 def main() -> int:
     sections = [
         ("test vectors", run_test_vectors),
         ("record cases (ids)", run_record_cases),
         ("receipt cases (structure + hashes)", run_receipt_cases),
         ("malformed cases (rejection)", run_malformed_cases),
+        ("query cases (RFC-0002 named set)", run_query_cases),
     ]
     total = 0
     all_notes: list[tuple[str, list[str]]] = []
@@ -349,7 +384,8 @@ def main() -> int:
     print("Independent implementation agrees with the Rust reference on")
     print("canonicalization, record ids, head/rules hashes, strict decoding,")
     print("structural log integrity, and the full verdict rule battery")
-    print("(per-record verdicts, retraction, and taint) across the vectors")
+    print("(per-record verdicts, retraction, and taint), and the RFC-0002")
+    print("named query set, across the vectors")
     print("and the entire conformance corpus.")
     return 0
 

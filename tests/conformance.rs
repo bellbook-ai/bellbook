@@ -3576,11 +3576,18 @@ fn conformance_corpus() {
         cases: corpus.malformed_cases.clone(),
     };
 
+    let query_file = QueryFile {
+        spec_version: corpus.spec_version.clone(),
+        description: "Read-side query cases (RFC-0002): the named set q1-q7 answered over a receipt; expect is the exact surface JSON every implementation must emit.".into(),
+        cases: build_query_cases(),
+    };
+
     if std::env::var("UPDATE_CONFORMANCE").is_ok() {
         std::fs::create_dir_all(&dir).unwrap();
         write_json(&dir.join("record-cases.json"), &record_file);
         write_json(&dir.join("receipt-cases.json"), &receipt_file);
         write_json(&dir.join("malformed-cases.json"), &malformed_file);
+        write_json(&dir.join("query-cases.json"), &query_file);
         return;
     }
 
@@ -3599,6 +3606,11 @@ fn conformance_corpus() {
     assert_eq!(
         malformed_file, stored_malformed,
         "malformed corpus drifted; regenerate with UPDATE_CONFORMANCE=1"
+    );
+    let stored_queries: QueryFile = read_json(&dir.join("query-cases.json"));
+    assert_eq!(
+        query_file, stored_queries,
+        "query corpus drifted; regenerate with UPDATE_CONFORMANCE=1"
     );
 
     // Correctness: re-derive every outcome from the STORED inputs (the contract
@@ -3640,6 +3652,19 @@ fn conformance_corpus() {
                 c.name,
                 report.problem,
                 sub
+            );
+        }
+    }
+
+    for c in &stored_queries.cases {
+        let q = Queries::new(&c.receipt.records, &c.receipt.rules)
+            .unwrap_or_else(|e| panic!("query case `{}`: receipt must verify: {e}", c.name));
+        for v in &c.queries {
+            let got = run_named_query(&q, &v.query, &v.args);
+            assert_eq!(
+                got, v.expect,
+                "query case `{}`: {} {} answer differs",
+                c.name, v.query, v.args
             );
         }
     }
@@ -3703,4 +3728,352 @@ fn wire_expressible_reasons() -> Vec<ReasonCode> {
         ReasonCode::SelectionInvalid,
         ReasonCode::ReaffirmationInvalid,
     ]
+}
+
+// ---------------------------------------------------------------------------
+// Query cases (RFC-0002): the named set q1-q7 as cross-implementation
+// vectors. Each case pairs a receipt with a battery of (query, args) calls
+// and the exact surface JSON the reference answers - the same shapes the
+// CLI and the Python binding emit, so an independent implementation is held
+// to the full read-side contract, not just verdicts.
+// ---------------------------------------------------------------------------
+
+#[derive(serde::Serialize, serde::Deserialize, PartialEq, Debug, Clone)]
+struct QueryFile {
+    spec_version: String,
+    description: String,
+    cases: Vec<QueryCase>,
+}
+
+#[derive(serde::Serialize, serde::Deserialize, PartialEq, Debug, Clone)]
+struct QueryCase {
+    name: String,
+    description: String,
+    receipt: Receipt,
+    queries: Vec<QueryVector>,
+}
+
+#[derive(serde::Serialize, serde::Deserialize, PartialEq, Debug, Clone)]
+struct QueryVector {
+    /// One of `descent | descendants | siblings | frontier | standing |
+    /// evidence | selected`.
+    query: String,
+    /// `{ "id": "<hex>" }` for record-addressed queries, `{ "objective":
+    /// "<exact string>" }` for `selected`, `{}` for `frontier`.
+    args: serde_json::Value,
+    /// The exact report JSON (the shared surface shape).
+    expect: serde_json::Value,
+}
+
+fn hex_to_id(hex: &str) -> RecordId {
+    let bytes = hex_decode(hex).expect("query vector id must be valid hex");
+    let mut id = [0u8; 32];
+    id.copy_from_slice(&bytes);
+    id
+}
+
+/// Dispatch one named query against a verified context. Shared by the
+/// generator and the stored-corpus checker so both sides run the same code.
+fn run_named_query(q: &Queries<'_>, name: &str, args: &serde_json::Value) -> serde_json::Value {
+    let id = || hex_to_id(args["id"].as_str().expect("args.id"));
+    match name {
+        "descent" => serde_json::to_value(q.descent(id()).unwrap()).unwrap(),
+        "descendants" => serde_json::to_value(q.descendants(id()).unwrap()).unwrap(),
+        "siblings" => serde_json::to_value(q.siblings(id()).unwrap()).unwrap(),
+        "frontier" => serde_json::to_value(q.frontier()).unwrap(),
+        "standing" => serde_json::to_value(q.standing(id()).unwrap()).unwrap(),
+        "evidence" => serde_json::to_value(q.evidence(id()).unwrap()).unwrap(),
+        "selected" => {
+            let objective = args["objective"].as_str().expect("args.objective");
+            serde_json::to_value(q.selected(objective)).unwrap()
+        }
+        other => panic!("unknown query {other:?}"),
+    }
+}
+
+/// The broken-benchmark shape (RFC-0001 section 10) plus a derivation
+/// sibling: root, benchmark evaluation, pivotal selection, a continuation,
+/// derivations at depth, a motivated-by repair, the retraction, post-break
+/// work, and a restoring reaffirmation. One log exercises every annotation
+/// a query can emit.
+fn build_query_cases() -> Vec<QueryCase> {
+    let dir = tempfile::tempdir().unwrap();
+    let space = SPACE;
+    let rules = VerifierRules::new(space, 200)
+        .with_author_role("agent", AuthorType::Provider)
+        .with_author_role("benchmark", AuthorType::Provider)
+        .with_author_role("reviewer", AuthorType::Provider);
+    let mut w = LogWriter::open(dir.path(), &rules).unwrap();
+    let mut st = State::default();
+
+    let commit = |w: &mut LogWriter,
+                  st: &mut State,
+                  author: &str,
+                  kind: Kind,
+                  schema: &str,
+                  data: Vec<u8>,
+                  refs: Vec<Ref>|
+     -> RecordId {
+        let (id, verdict) = w
+            .commit(
+                Proposal {
+                    space,
+                    thread: space,
+                    author: Author {
+                        id: author.into(),
+                        type_: AuthorType::Provider,
+                        signature: None,
+                    },
+                    kind,
+                    schema: schema_id(schema),
+                    data,
+                    refs,
+                },
+                &rules,
+                st,
+            )
+            .unwrap();
+        assert_eq!(verdict.result, VerdictResult::Accept, "{kind:?} rejected");
+        id
+    };
+    let cause = |t: RecordId| Ref {
+        type_: RefType::Cause,
+        target: t,
+    };
+    let use_r = |t: RecordId| Ref {
+        type_: RefType::Use,
+        target: t,
+    };
+    let require = |t: RecordId| Ref {
+        type_: RefType::Require,
+        target: t,
+    };
+    let replace = |t: RecordId| Ref {
+        type_: RefType::Replace,
+        target: t,
+    };
+    let src = |tree: &str| SourceBinding {
+        git: GitSource {
+            algo: SourceAlgo::Sha1,
+            tree: tree.into(),
+            commit: None,
+        },
+        manifest_hash: None,
+        binding: BindingMode::Reported,
+    };
+    let cand = |tree: &str, basis: CandidateBasis, parent: Option<RecordId>| {
+        encode(&CandidateData {
+            source: src(tree),
+            basis,
+            parent,
+            note: None,
+        })
+        .unwrap()
+    };
+
+    let c0 = commit(
+        &mut w,
+        &mut st,
+        "agent",
+        Kind::Candidate,
+        SCHEMA_CANDIDATE,
+        cand(
+            "4b825dc642cb6eb9a060e54bf8d69288fbee4904",
+            CandidateBasis::Root,
+            None,
+        ),
+        vec![],
+    );
+    let bench0 = commit(
+        &mut w,
+        &mut st,
+        "benchmark",
+        Kind::Evaluation,
+        SCHEMA_EVALUATION,
+        encode(&EvaluationData {
+            candidate: c0,
+            criterion: "bench-suite".into(),
+            procedure: None,
+            outcome: EvaluationOutcome::Passed,
+        })
+        .unwrap(),
+        vec![use_r(c0)],
+    );
+    let s0 = commit(
+        &mut w,
+        &mut st,
+        "agent",
+        Kind::Selection,
+        SCHEMA_SELECTION,
+        encode(&SelectionData {
+            objective: "adopt-baseline".into(),
+            considered: vec![c0],
+            outcome: SelectionOutcome::Selected {
+                candidates: vec![c0],
+            },
+            rationale: None,
+        })
+        .unwrap(),
+        vec![require(c0), use_r(bench0)],
+    );
+    let c1 = commit(
+        &mut w,
+        &mut st,
+        "agent",
+        Kind::Candidate,
+        SCHEMA_CANDIDATE,
+        cand(
+            "1111111111111111111111111111111111111111",
+            CandidateBasis::Continuation,
+            Some(c0),
+        ),
+        vec![cause(s0)],
+    );
+    let c2 = commit(
+        &mut w,
+        &mut st,
+        "agent",
+        Kind::Candidate,
+        SCHEMA_CANDIDATE,
+        cand(
+            "2222222222222222222222222222222222222222",
+            CandidateBasis::Derivation,
+            None,
+        ),
+        vec![cause(c1)],
+    );
+    let _c2b = commit(
+        &mut w,
+        &mut st,
+        "agent",
+        Kind::Candidate,
+        SCHEMA_CANDIDATE,
+        cand(
+            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            CandidateBasis::Derivation,
+            None,
+        ),
+        vec![cause(c1)],
+    );
+    let c3 = commit(
+        &mut w,
+        &mut st,
+        "agent",
+        Kind::Candidate,
+        SCHEMA_CANDIDATE,
+        cand(
+            "3333333333333333333333333333333333333333",
+            CandidateBasis::Derivation,
+            None,
+        ),
+        vec![cause(c2)],
+    );
+    let c4 = commit(
+        &mut w,
+        &mut st,
+        "agent",
+        Kind::Candidate,
+        SCHEMA_CANDIDATE,
+        cand(
+            "4444444444444444444444444444444444444444",
+            CandidateBasis::Derivation,
+            None,
+        ),
+        vec![cause(c0), cause(bench0)],
+    );
+    commit(
+        &mut w,
+        &mut st,
+        "benchmark",
+        Kind::Retraction,
+        SCHEMA_RETRACTION,
+        encode(&RetractionData {
+            target_id: bench0,
+            reason: "harness measured the wrong thing".into(),
+        })
+        .unwrap(),
+        vec![cause(bench0)],
+    );
+    let _c5 = commit(
+        &mut w,
+        &mut st,
+        "agent",
+        Kind::Candidate,
+        SCHEMA_CANDIDATE,
+        cand(
+            "5555555555555555555555555555555555555555",
+            CandidateBasis::Derivation,
+            None,
+        ),
+        vec![cause(c3)],
+    );
+    let review0 = commit(
+        &mut w,
+        &mut st,
+        "reviewer",
+        Kind::Evaluation,
+        SCHEMA_EVALUATION,
+        encode(&EvaluationData {
+            candidate: c0,
+            criterion: "manual-review".into(),
+            procedure: None,
+            outcome: EvaluationOutcome::Passed,
+        })
+        .unwrap(),
+        vec![use_r(c0)],
+    );
+    let _s1 = commit(
+        &mut w,
+        &mut st,
+        "agent",
+        Kind::Selection,
+        SCHEMA_SELECTION,
+        encode(&SelectionData {
+            objective: "adopt-baseline".into(),
+            considered: vec![c0],
+            outcome: SelectionOutcome::Selected {
+                candidates: vec![c0],
+            },
+            rationale: None,
+        })
+        .unwrap(),
+        vec![require(c0), use_r(review0), replace(s0)],
+    );
+
+    let receipt = Receipt::new(w.records(), &rules);
+    let q = Queries::new(w.records(), &rules).unwrap();
+    let hx = hex_encode;
+    let id_args = |id: &RecordId| serde_json::json!({ "id": hx(id) });
+    let battery: Vec<(&str, serde_json::Value)> = vec![
+        ("descent", id_args(&_c5)),
+        ("descent", id_args(&c4)),
+        ("descendants", id_args(&s0)),
+        ("descendants", id_args(&c0)),
+        ("siblings", id_args(&c2)),
+        ("frontier", serde_json::json!({})),
+        ("standing", id_args(&s0)),
+        ("standing", id_args(&bench0)),
+        ("evidence", id_args(&c3)),
+        ("evidence", id_args(&_s1)),
+        (
+            "selected",
+            serde_json::json!({ "objective": "adopt-baseline" }),
+        ),
+        ("selected", serde_json::json!({ "objective": "adopt" })),
+    ];
+    let queries = battery
+        .into_iter()
+        .map(|(name, args)| QueryVector {
+            expect: run_named_query(&q, name, &args),
+            query: name.to_string(),
+            args,
+        })
+        .collect();
+
+    vec![QueryCase {
+        name: "broken-benchmark-line".into(),
+        description: "The RFC-0001 section 10 flagship shape plus a derivation sibling: every query answered over a line that was built, compromised at depth by a retraction (with a motivated-by repair staying sound), and restored by a reaffirmation.".into(),
+        receipt,
+        queries,
+    }]
 }
