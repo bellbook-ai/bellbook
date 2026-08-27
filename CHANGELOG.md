@@ -21,6 +21,15 @@ and releases follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   matches its objective exactly, and the general query engine remains
   gated on RFC-0001 section 15. Library-only in this change; the CLI,
   Python, and corpus surfaces follow in the same milestone.
+- **Conformance corpus query vectors and an independent query
+  implementation** (#91). The corpus gains
+  `spec/conformance/v0.3/query-cases.json`: cases pairing a portable
+  receipt with vectors for all seven named queries, generated from and
+  drift-checked against the reference by the `conformance` test, with a
+  coverage assertion that every query name appears. The Python validator
+  gains `bellbook_queries.py`, a from-scratch implementation of the named
+  set that re-derives every vector from the stored receipt and matches
+  the reference's surface JSON byte for byte.
 
 ## [0.5.0] - 2026-08-27
 

@@ -77,6 +77,34 @@ non-string signature `key_id`), an unsupported spec version, non-JSON and
 truncated input, and validation-limit rejections (`max_bytes`, `max_records`).
 Structural failures surface in `Report.problem`, not `Report.reason`.
 
+### `query-cases.json`
+
+Read-side query vectors for the RFC-0002 named set. Each case:
+
+```
+{ name, description, receipt: Receipt, queries: [{ query, args, expect }] }
+```
+
+The runner validates `receipt`, builds the query context over its records and
+rules, runs each named query with `args`, and asserts the result equals
+`expect` as exact JSON. Unlike the record/receipt/malformed files, the
+comparison surface here is the crate's **surface JSON** (record ids as
+lowercase hex strings, not byte arrays), because query reports are what a
+caller sees, not what travels on the wire.
+
+- `query` is one of the seven names: `descent`, `descendants`, `siblings`,
+  `frontier`, `standing`, `evidence`, `selected`.
+- `args` is `{ "id": "HEX" }` for id-taking queries, `{ "objective": "..." }`
+  for `selected`, and `{}` for `frontier`.
+- `expect` is the full report the query must return, byte for byte after
+  canonical JSON comparison.
+
+The corpus test asserts every one of the seven names appears at least once, so
+a query added to the named set without vectors fails the build. Error behavior
+(`LogInvalid`, `NotFound`, `NotAccepted`, `KindMismatch`) is pinned by the
+crate's unit tests; the vectors cover success paths, which is the shared
+surface an independent implementation must reproduce.
+
 ## Reason-code coverage
 
 The corpus triggers 23 of the 26 `ReasonCode` variants as verdicts. The other
