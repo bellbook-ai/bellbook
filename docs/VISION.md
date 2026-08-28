@@ -145,7 +145,9 @@ quietly diverge: any build-ahead is visible here and in the RFC that
 carries it. First application: RFC-0002 (read-side queries) was drafted
 from first-party field evidence while RFC-0001 §15's evaluation window was
 still open; it completes the traversal set RFC-0001 §7 already defines,
-and the general query engine remains gated on §15's read-side signal.
+and the general query engine remains gated on §15's read-side signal. The
+first-party field evidence itself is recorded under
+[`field-tests/`](field-tests/).
 
 ## Design rules
 

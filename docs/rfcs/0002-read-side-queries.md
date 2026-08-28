@@ -164,6 +164,21 @@ v0.6.0.
 further read-side work, and the engine stage remains untouched either way -
 it opens only on RFC-0001 §15's own terms.
 
+### 8.1 Evaluation log
+
+- **2026-08-28 - validation criterion 1 met.** The canary best-of-N field
+  test was re-run against the published 0.6.0 artifacts (the CLI over an
+  exported receipt and the Python query methods over the live writer), with
+  the retraction story and the tie-break pattern included. Every field-test
+  question mapped to a named query; hand-walks of `records()`: zero. Answers
+  were byte-identical across the two surfaces. Recorded in
+  [`docs/field-tests/ft2-read-side.md`](../field-tests/ft2-read-side.md). Two
+  frictions surfaced (foreign-receipt entry-point enumeration; unused
+  evaluations not being query-reachable); neither justified new
+  implementation - the first waits on external demand under criterion 3, the
+  second is documented as a boundary in SPEC §12.4. Criteria 2 and 3
+  (external signals) remain open for the window.
+
 ## 9. Resolved design decisions (at acceptance, 2026-08-27)
 
 1. **Frontier scope: the whole log (or receipt).** q4 takes no scoping

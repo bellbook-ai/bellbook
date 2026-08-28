@@ -1104,7 +1104,11 @@ address only accepted records (a rejected record made no claim), and
 annotate every reported record with its standing, taint, and retraction
 status rather than filtering anything silently. `selected` matches its
 objective exactly; there are no patterns, predicates, or composition
-(RFC-0002 section 7).
+(RFC-0002 section 7). The set reaches records through the relationships a
+decision creates: an accepted Evaluation that no Selection ever `Use`d
+grounded no decision, so it is not part of any line's evidence and the
+named set does not surface it - such a record is reachable only by
+enumerating the log directly.
 
 The queries are surface, not wire format: they change no record, schema,
 or receipt byte, and carry no spec-version implications. Their authority
