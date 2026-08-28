@@ -13,7 +13,8 @@ to cross-check the specification.)
 
 ## Status
 
-Validation, reading, and writing (issue #13).
+Validation, reading, writing, and the read-side query set (issue #13,
+RFC-0002).
 
 ## Validate
 
@@ -154,6 +155,35 @@ The writer is deliberately single-writer (SPEC 5.1): it holds an exclusive lock
 for the log directory, so a second `Writer` on the same directory raises. Other
 useful members: `w.head` (current head, hex), `w.records` (the committed
 records, as `Record`s), `len(w)`, and `w.receipt()` (portable receipt bytes).
+
+## Query
+
+The RFC-0002 named query set - seven deterministic, read-only questions over
+lineage, evidence, and standing - is available as methods on both `Writer`
+(over the live log) and the `Receipt` returned by `read` (over an exported
+receipt). Both return plain dicts/lists in the exact surface JSON shapes the
+Rust core and the `bellbook query` CLI emit, so answers are diffable across
+surfaces.
+
+```python
+w.selected("best-of-n")   # selections under that exact objective, with
+                          # chosen candidates and their evidence
+w.descent(c.id)           # the line of descent back to its roots
+w.descendants(c.id)       # everything downstream, in log order
+w.siblings(c.id)          # the candidate's generation
+w.frontier()              # unconsidered candidates + winners not continued
+w.standing(s.id)          # standing, taint, retraction, restorations
+w.evidence(c.id)          # what a selection or a whole line rests on
+
+r = bellbook.read(w.receipt())
+assert r.frontier() == w.frontier()   # same answers over the receipt
+```
+
+Queries answer only over verified state: a log or receipt that does not
+verify raises `ValueError` instead of answering, as do a missing or rejected
+id and a kind mismatch. Nothing is ranked and nothing is silently filtered -
+every reported node carries its standing, taint, and retraction annotations,
+and the reader decides.
 
 ## Build from source
 
