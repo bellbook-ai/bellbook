@@ -96,6 +96,16 @@ pub struct State {
     /// committed before it.
     #[serde(with = "map_as_pairs")]
     pub epistemic_dependents: BTreeMap<RecordId, BTreeSet<RecordId>>,
+    /// Request id → keys of its accepted, unretracted Requirements (spec
+    /// 0.4). A Requirement whose key is already here rejects with
+    /// `RequirementInvalid`; retracting a Requirement releases its key so a
+    /// corrected one can carry the same handle.
+    #[serde(default, with = "map_as_pairs")]
+    pub requirement_keys: BTreeMap<RecordId, BTreeSet<String>>,
+    /// Requirement record id → (request id, key). Reverse index for
+    /// retraction-time key release.
+    #[serde(default, with = "map_as_pairs")]
+    pub requirement_index: BTreeMap<RecordId, (RecordId, String)>,
     /// Logical time of the last record (subject or verdict) folded into this
     /// state; 0 for an empty log.
     pub applied_up_to: Time,

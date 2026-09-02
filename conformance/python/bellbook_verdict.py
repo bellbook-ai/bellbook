@@ -58,6 +58,8 @@ SCHEMA_RETRACTION = "bellbook.retraction.v1"
 SCHEMA_CANDIDATE = "bellbook.candidate.v1"
 SCHEMA_EVALUATION = "bellbook.evaluation.v1"
 SCHEMA_SELECTION = "bellbook.selection.v1"
+# Spec 0.4.
+SCHEMA_REQUIREMENT = "bellbook.requirement.v1"
 
 ALL_SCHEMAS = [
     SCHEMA_REQUEST,
@@ -77,6 +79,7 @@ ALL_SCHEMAS = [
     SCHEMA_CANDIDATE,
     SCHEMA_EVALUATION,
     SCHEMA_SELECTION,
+    SCHEMA_REQUIREMENT,
 ]
 
 
@@ -84,7 +87,12 @@ ALL_SCHEMAS = [
 # exactly these known, so a schema a later epoch introduces rejects as
 # UnknownSchema under 0.3 even if the embedded rules map it. Mirrors the
 # reference's `SCHEMAS_V03` / `schemas_for_epoch`.
-SCHEMAS_V03 = list(ALL_SCHEMAS)
+SCHEMAS_V03 = [
+    SCHEMA_REQUEST, SCHEMA_ACTION, SCHEMA_RESPONSE, SCHEMA_RESULT, SCHEMA_RESULT_EXTERNAL,
+    SCHEMA_RESULT_EFFECT_CONFIRMATION, SCHEMA_CAPABILITY, SCHEMA_APPROVAL, SCHEMA_SUMMARY,
+    SCHEMA_REFUSAL, SCHEMA_USAGE, SCHEMA_VERDICT, SCHEMA_PLAN, SCHEMA_RETRACTION,
+    SCHEMA_CANDIDATE, SCHEMA_EVALUATION, SCHEMA_SELECTION,
+]
 EPOCH_SCHEMAS = {"0.3": SCHEMAS_V03, "0.4": ALL_SCHEMAS}
 
 
@@ -112,7 +120,7 @@ REASON_CODE = frozenset({
     "Refused", "InvalidPayload", "InvalidCheckpoint", "AuthorRoleInvalid",
     "AuthorityRefMissing", "SourceBindingInvalid", "LineageInvalid",
     "PayloadRefUnresolved", "EvaluationInvalid", "SelectionInvalid",
-    "ReaffirmationInvalid", "ArtifactRefInvalid",
+    "ReaffirmationInvalid", "ArtifactRefInvalid", "RequirementInvalid",
 })
 PLAN_STATUS = frozenset({"running", "completed", "abandoned"})
 TASK_STATUS = frozenset({"pending", "running", "done", "failed", "skipped"})
@@ -126,6 +134,7 @@ FAILURE_POLICY = frozenset({"continue", "ask_user", "abort"})
 SOURCE_ALGO = frozenset({"sha1", "sha256"})
 BINDING_MODE = frozenset({"reported", "manifest"})
 CANDIDATE_BASIS = frozenset({"root", "continuation", "derivation"})
+PROVENANCE = frozenset({"user_authored", "derived"})
 
 # Envelope enums (validated structurally, as serde does when it decodes a
 # Record; an unknown value here is a decode rejection, not a rule violation).
@@ -133,7 +142,7 @@ KINDS = frozenset(
     {
         "Request", "Action", "Response", "Result", "Summary", "Approval",
         "Capability", "Usage", "Refusal", "Verdict", "Plan", "Retraction",
-        "Candidate", "Evaluation", "Selection",
+        "Candidate", "Evaluation", "Selection", "Requirement",
     }
 )
 AUTHOR_TYPES = frozenset({"User", "Provider", "System", "Executor", "Verifier"})
@@ -269,6 +278,13 @@ _PAYLOAD_SPECS = {
         "outcome": ("tagged", frozenset({"none"}), {"selected": "SelectedCandidates"}),
         "rationale": ("opt", "str"),
     },
+    SCHEMA_REQUIREMENT: {
+        "key": "str",
+        "description": "str",
+        "required": "bool",
+        "expected_evidence": ("opt", "str"),
+        "provenance": ("enum", PROVENANCE),
+    },
 }
 # The three Result schemas share the ResultData shape.
 _PAYLOAD_SPECS[SCHEMA_RESULT_EXTERNAL] = _PAYLOAD_SPECS[SCHEMA_RESULT]
@@ -308,6 +324,7 @@ BASE_EVIDENCE = {
     SCHEMA_SUMMARY: "Inferred",
     SCHEMA_PLAN: "Inferred",
     SCHEMA_SELECTION: "Inferred",
+    SCHEMA_REQUIREMENT: "Reported",
 }
 
 ALLOWED_AUTHOR_TYPES = {
@@ -326,6 +343,7 @@ ALLOWED_AUTHOR_TYPES = {
     "Candidate": frozenset({"User", "Provider", "Executor", "System"}),
     "Evaluation": frozenset({"User", "Provider", "Executor", "System"}),
     "Selection": frozenset({"User", "Provider", "System"}),
+    "Requirement": frozenset({"User", "Provider", "System"}),
 }
 
 # Every kind except Verdict must have its author registered in author_roles.
@@ -509,6 +527,10 @@ class State:
         self.retracted: set[str] = set()
         self.tainted: set[str] = set()
         self.epistemic_dependents: dict[str, set[str]] = {}
+        # Spec 0.4: request -> keys of accepted, unretracted Requirements, and
+        # the reverse index used to release a key on retraction.
+        self.requirement_keys: dict[str, set[str]] = {}
+        self.requirement_index: dict[str, tuple[str, str]] = {}
 
     def ref_evidence(self, ref: dict, target: dict) -> Optional[str]:
         """Evidence a ref contributes to weakest-link derivation, or None if it
@@ -625,10 +647,26 @@ def apply_accepted(state: State, record: dict) -> None:
         state.active_plans[req] = rid
         if data["status"] in ("completed", "abandoned"):
             state.active_plans.pop(req, None)
+    elif k == "Requirement":
+        data = payload(record)
+        causes = refs_of(record, "Cause")
+        if causes:
+            req = h(causes[0]["target"])
+            state.requirement_keys.setdefault(req, set()).add(data["key"])
+            state.requirement_index[rid] = (req, data["key"])
     elif k == "Retraction":
         data = payload(record)
         target = h(data["target_id"])
         state.retracted.add(target)
+        # A retracted Requirement releases its key (spec 0.4).
+        held = state.requirement_index.get(target)
+        if held is not None:
+            req, key = held
+            keys = state.requirement_keys.get(req)
+            if keys is not None:
+                keys.discard(key)
+                if not keys:
+                    state.requirement_keys.pop(req, None)
         for dep in list(state.epistemic_dependents.get(target, set())):
             _mark_tainted(state, dep)
         # Deactivate retracted authority, only if the active slot still points
@@ -995,6 +1033,7 @@ def _check_kind_specific(record: dict, prior: Prior, rules: Rules, state: State)
         "Candidate": _check_candidate,
         "Evaluation": _check_evaluation,
         "Selection": _check_selection,
+        "Requirement": _check_requirement,
     }
     fn = dispatch.get(record["kind"])
     return fn(record, prior, rules, state) if fn else None
@@ -1484,6 +1523,35 @@ def _check_candidate(record, prior, rules, state):
                 return "LineageInvalid"
             if c["kind"] not in ("Candidate", "Evaluation"):
                 return "LineageInvalid"
+    return None
+
+
+def _check_requirement(record, prior, rules, state):
+    """Spec 0.4 (src/verify/verifier/evolution.rs check_requirement)."""
+    data = payload(record)
+    if not data["key"] or not data["description"]:
+        return "RequirementInvalid"
+    author_type = record["author"]["type"]
+    if data["provenance"] == "user_authored":
+        if author_type != "User":
+            return "AuthorRoleInvalid"
+    elif author_type not in ("Provider", "System"):
+        return "AuthorRoleInvalid"
+    causes = refs_of(record, "Cause")
+    if len(causes) != 1:
+        return "RequirementInvalid"
+    req_id = h(causes[0]["target"])
+    request = prior.find(req_id)
+    if (
+        request is None
+        or request["kind"] != "Request"
+        or req_id not in state.accepted
+        or h(request["thread"]) != h(record["thread"])
+        or h(request["space"]) != h(record["space"])
+    ):
+        return "RequirementInvalid"
+    if data["key"] in state.requirement_keys.get(req_id, set()):
+        return "RequirementInvalid"
     return None
 
 

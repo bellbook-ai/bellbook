@@ -278,6 +278,46 @@ fn selection_proposal(
     }
 }
 
+// --- Requirement builders (spec 0.4). ---
+
+/// A Requirement for `request_id` with the given key, provenance, author,
+/// and refs (normally the single Cause to the request).
+fn requirement_proposal(
+    key: &str,
+    provenance: Provenance,
+    author_: Author,
+    refs: Vec<Ref>,
+) -> Proposal {
+    let data = encode(&RequirementData {
+        key: key.into(),
+        description: if key.is_empty() {
+            "an unlabeled requirement".into()
+        } else {
+            format!("requirement {key}")
+        },
+        required: true,
+        expected_evidence: None,
+        provenance,
+    })
+    .unwrap();
+    Proposal {
+        space: SPACE,
+        thread: THREAD,
+        author: author_,
+        kind: Kind::Requirement,
+        schema: schema_id(SCHEMA_REQUIREMENT),
+        data,
+        refs,
+    }
+}
+
+/// Commit a Request and return its id.
+fn setup_request(w: &mut LogWriter, rules: &VerifierRules, st: &mut State) -> RecordId {
+    let (rid, v) = w.commit(request_proposal(), rules, st).unwrap();
+    assert_eq!(v.result, VerdictResult::Accept);
+    rid
+}
+
 // --- Artifact identity builders (spec 0.4). ---
 
 fn artifact(scheme: &str, digest: &str, name: Option<&str>) -> ArtifactRef {
@@ -1262,6 +1302,203 @@ fn build_record_cases() -> Vec<RecordCase> {
         base_rules(),
         |_w, _r, _s| cand(candidate_proposal(provider_author())),
     ));
+    // --- Requirement (spec 0.4): binding, key uniqueness, provenance. ---
+    cases.push(record_case(
+        "accept-requirement-user-authored",
+        "The human principal states a requirement for an accepted Request: one Cause to the request, provenance user_authored from a User author.",
+        base_rules(),
+        |w, r, s| {
+            let rid = setup_request(w, r, s);
+            cand(requirement_proposal(
+                "tests-pass",
+                Provenance::UserAuthored,
+                human_author(),
+                vec![cause_ref(rid)],
+            ))
+        },
+    ));
+    cases.push(record_case(
+        "accept-requirement-derived",
+        "The agent derives a requirement from the request: provenance derived from a Provider author.",
+        base_rules(),
+        |w, r, s| {
+            let rid = setup_request(w, r, s);
+            cand(requirement_proposal(
+                "lint-clean",
+                Provenance::Derived,
+                provider_author(),
+                vec![cause_ref(rid)],
+            ))
+        },
+    ));
+    cases.push(record_case(
+        "reject-requirement-provenance-not-a-user",
+        "Provenance is bound to authorship: a Provider claiming user_authored rejects with AuthorRoleInvalid.",
+        base_rules(),
+        |w, r, s| {
+            let rid = setup_request(w, r, s);
+            cand(requirement_proposal(
+                "tests-pass",
+                Provenance::UserAuthored,
+                provider_author(),
+                vec![cause_ref(rid)],
+            ))
+        },
+    ));
+    cases.push(record_case(
+        "reject-requirement-derived-by-user",
+        "The other direction of the binding: a User writing a derived requirement rejects with AuthorRoleInvalid.",
+        base_rules(),
+        |w, r, s| {
+            let rid = setup_request(w, r, s);
+            cand(requirement_proposal(
+                "tests-pass",
+                Provenance::Derived,
+                human_author(),
+                vec![cause_ref(rid)],
+            ))
+        },
+    ));
+    cases.push(record_case(
+        "reject-requirement-executor-author",
+        "The role that performs work never states what the work must satisfy: an Executor-authored Requirement rejects with AuthorRoleInvalid.",
+        base_rules(),
+        |w, r, s| {
+            let rid = setup_request(w, r, s);
+            cand(requirement_proposal(
+                "tests-pass",
+                Provenance::Derived,
+                executor_author(),
+                vec![cause_ref(rid)],
+            ))
+        },
+    ));
+    cases.push(record_case(
+        "reject-requirement-duplicate-key",
+        "A second Requirement with a key already held under the same request rejects with RequirementInvalid.",
+        base_rules(),
+        |w, r, s| {
+            let rid = setup_request(w, r, s);
+            let (_, v) = w
+                .commit(
+                    requirement_proposal(
+                        "tests-pass",
+                        Provenance::UserAuthored,
+                        human_author(),
+                        vec![cause_ref(rid)],
+                    ),
+                    r,
+                    s,
+                )
+                .unwrap();
+            assert_eq!(v.result, VerdictResult::Accept);
+            cand(requirement_proposal(
+                "tests-pass",
+                Provenance::Derived,
+                provider_author(),
+                vec![cause_ref(rid)],
+            ))
+        },
+    ));
+    cases.push(record_case(
+        "accept-requirement-key-reused-after-retraction",
+        "Amendment is retract-and-record: after the principal retracts a requirement, a corrected one may carry the same key.",
+        base_rules(),
+        |w, r, s| {
+            let rid = setup_request(w, r, s);
+            let (req1, v) = w
+                .commit(
+                    requirement_proposal(
+                        "tests-pass",
+                        Provenance::UserAuthored,
+                        human_author(),
+                        vec![cause_ref(rid)],
+                    ),
+                    r,
+                    s,
+                )
+                .unwrap();
+            assert_eq!(v.result, VerdictResult::Accept);
+            let (_, v) = w.commit(retraction_proposal(req1), r, s).unwrap();
+            assert_eq!(v.result, VerdictResult::Accept, "{:?}", v.reason);
+            cand(requirement_proposal(
+                "tests-pass",
+                Provenance::UserAuthored,
+                human_author(),
+                vec![cause_ref(rid)],
+            ))
+        },
+    ));
+    cases.push(record_case(
+        "reject-requirement-empty-key",
+        "A Requirement needs a handle: an empty key rejects with RequirementInvalid.",
+        base_rules(),
+        |w, r, s| {
+            let rid = setup_request(w, r, s);
+            cand(requirement_proposal(
+                "",
+                Provenance::UserAuthored,
+                human_author(),
+                vec![cause_ref(rid)],
+            ))
+        },
+    ));
+    cases.push(record_case(
+        "reject-requirement-no-cause",
+        "A Requirement belongs to a request: with no Cause ref it rejects with RequirementInvalid.",
+        base_rules(),
+        |w, r, s| {
+            let _rid = setup_request(w, r, s);
+            cand(requirement_proposal(
+                "tests-pass",
+                Provenance::UserAuthored,
+                human_author(),
+                vec![],
+            ))
+        },
+    ));
+    cases.push(record_case(
+        "reject-requirement-cause-not-a-request",
+        "The single Cause must target an accepted Request: a Cause to a Capability rejects with RequirementInvalid.",
+        base_rules(),
+        |w, r, s| {
+            let (_rid, cid) = setup_request_cap(w, r, s, "tool", CapabilityMode::Auto);
+            cand(requirement_proposal(
+                "tests-pass",
+                Provenance::UserAuthored,
+                human_author(),
+                vec![cause_ref(cid)],
+            ))
+        },
+    ));
+    cases.push(record_case(
+        "reject-requirement-replace",
+        "Requirements are never replaced (amendment is retract-and-record): a Replace ref rejects with ReplacementInvalid.",
+        base_rules(),
+        |w, r, s| {
+            let rid = setup_request(w, r, s);
+            let (req1, v) = w
+                .commit(
+                    requirement_proposal(
+                        "tests-pass",
+                        Provenance::UserAuthored,
+                        human_author(),
+                        vec![cause_ref(rid)],
+                    ),
+                    r,
+                    s,
+                )
+                .unwrap();
+            assert_eq!(v.result, VerdictResult::Accept);
+            cand(requirement_proposal(
+                "tests-pass-v2",
+                Provenance::UserAuthored,
+                human_author(),
+                vec![cause_ref(rid), replace_ref(req1)],
+            ))
+        },
+    ));
+
     // --- Artifact identity (spec 0.4): the additive `artifacts` list. ---
     cases.push(record_case(
         "accept-candidate-with-artifacts",
@@ -3883,6 +4120,7 @@ fn wire_expressible_reasons() -> Vec<ReasonCode> {
         ReasonCode::SelectionInvalid,
         ReasonCode::ReaffirmationInvalid,
         ReasonCode::ArtifactRefInvalid,
+        ReasonCode::RequirementInvalid,
     ]
 }
 

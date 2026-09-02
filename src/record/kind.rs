@@ -58,6 +58,12 @@ pub enum Kind {
     /// survivors of best-of-N, a population generation, or a
     /// single-candidate accept.
     Selection,
+    /// An addressable statement of what a Request requires (spec 0.4), so
+    /// evidence and evaluator decisions can bind to it by id. `Cause`s its
+    /// Request; keyed uniquely among accepted Requirements under that
+    /// request; its `provenance` is bound to who wrote it. Amended only by
+    /// retract-and-record, never replaced.
+    Requirement,
 }
 
 /// Typed edge from a record to a prior record in the same space.
@@ -145,6 +151,11 @@ pub fn allowed_author_types(kind: Kind) -> &'static [AuthorType] {
             AuthorType::System,
         ],
         Kind::Selection => &[AuthorType::User, AuthorType::Provider, AuthorType::System],
+        // A requirement is stated by the principal or derived by the agent
+        // or host; the role that performs work never states what the work
+        // must satisfy. Which of these wrote it is what `provenance` is
+        // bound to (spec 0.4).
+        Kind::Requirement => &[AuthorType::User, AuthorType::Provider, AuthorType::System],
     }
 }
 
@@ -172,7 +183,8 @@ pub fn requires_registered_author(kind: Kind) -> bool {
         | Kind::Retraction
         | Kind::Candidate
         | Kind::Evaluation
-        | Kind::Selection => true,
+        | Kind::Selection
+        | Kind::Requirement => true,
         Kind::Verdict => false,
     }
 }
@@ -290,6 +302,13 @@ pub enum ReasonCode {
     /// unregistered scheme), or a list that is not strictly sorted and
     /// deduplicated by `(scheme, digest, name)`.
     ArtifactRefInvalid,
+    /// A `Requirement` (spec 0.4) violates its structural rules: an empty
+    /// `key` or `description`, a `key` already held by an accepted,
+    /// unretracted Requirement under the same Request, or a `Cause` shape
+    /// other than exactly one ref to an accepted Request in the same
+    /// thread and space. (The provenance-to-author binding rejects with
+    /// `AuthorRoleInvalid`.)
+    RequirementInvalid,
 }
 
 /// How a capability gates actions of its (actor, action_class, scope).

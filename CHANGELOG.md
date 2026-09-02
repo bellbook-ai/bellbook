@@ -12,6 +12,25 @@ spec change since 0.3: spec version 0.4.
 
 ### Added
 
+- **The `Requirement` record kind** (`bellbook.requirement.v1`, base
+  evidence `Reported`; RFC-0003 section 4.1, SPEC section 2; #107). An
+  addressable statement of what a Request requires, so evidence and
+  evaluator decisions can bind to it by id: `{key, description, required,
+  expected_evidence, provenance: user_authored | derived}`. Exactly one
+  `Cause` to an accepted Request in the same thread and space; `key`
+  unique among accepted, unretracted Requirements under that request
+  (new reason code `RequirementInvalid`, also for an empty key or
+  description or a wrong Cause shape). Provenance is bound to
+  authorship: `user_authored` needs a `User` author, `derived` a
+  `Provider` or `System`, else `AuthorRoleInvalid`; an `Executor` never
+  authors one. Never replaced: amendment is retract-and-record, and a
+  retracted Requirement releases its key. State gains the per-request key
+  index (and its reverse index), so checkpoint state hashes of logs
+  differ from 0.7.0's for the same records; checkpoints are host-side
+  and never travel in receipts. The default `kind_schema_map` (and
+  `rules init`) now carries the schema; rules from earlier versions stay
+  valid and reject a Requirement as `UnknownSchema` until the schema is
+  added.
 - **First-class artifact identity: `ArtifactRef`** (RFC-0003 section
   4.2, SPEC section 2; #108). `{scheme, digest, name}`: a scheme token, a
   lowercase-hex content digest of the length the scheme dictates

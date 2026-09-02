@@ -331,6 +331,71 @@ pub(super) fn check_selection(
     None
 }
 
+/// `Requirement` rules (spec 0.4, RFC-0003 section 4.1): non-empty key and
+/// description, exactly one `Cause` to an accepted Request in the same
+/// thread and space, a key not already held under that request, and
+/// provenance bound to the author's role. The generic checks have already
+/// applied the author-role table (no Executor) and rejected any `Replace`
+/// (a Requirement is never replaceable: amendment is retract-and-record).
+pub(super) fn check_requirement(
+    record: &Record,
+    prior: &Prior<'_>,
+    state: &State,
+) -> Option<ReasonCode> {
+    let data: RequirementData = dec!(&record.data, RequirementData);
+
+    if data.key.is_empty() || data.description.is_empty() {
+        return Some(ReasonCode::RequirementInvalid);
+    }
+
+    // Provenance is bound to authorship: "confirmed by a person" is a fact
+    // about who wrote the record, never a flag (RFC-0003 decision 1).
+    let provenance_ok = match data.provenance {
+        Provenance::UserAuthored => record.author.type_ == AuthorType::User,
+        Provenance::Derived => matches!(
+            record.author.type_,
+            AuthorType::Provider | AuthorType::System
+        ),
+    };
+    if !provenance_ok {
+        return Some(ReasonCode::AuthorRoleInvalid);
+    }
+
+    // Exactly one Cause, to an accepted Request in the same thread and space.
+    let causes: Vec<&Ref> = record
+        .refs
+        .iter()
+        .filter(|r| r.type_ == RefType::Cause)
+        .collect();
+    if causes.len() != 1 {
+        return Some(ReasonCode::RequirementInvalid);
+    }
+    let request_id = causes[0].target;
+    let Some(request) = prior.find(request_id) else {
+        return Some(ReasonCode::RequirementInvalid);
+    };
+    if request.kind != Kind::Request
+        || !state.accepted_records.contains(&request_id)
+        || request.thread != record.thread
+        || request.space != record.space
+    {
+        return Some(ReasonCode::RequirementInvalid);
+    }
+
+    // The key is unique among accepted, unretracted Requirements under the
+    // request (a retraction releases its key, so retract-and-record can
+    // reuse it).
+    if state
+        .requirement_keys
+        .get(&request_id)
+        .is_some_and(|keys| keys.contains(&data.key))
+    {
+        return Some(ReasonCode::RequirementInvalid);
+    }
+
+    None
+}
+
 /// Resolve the approval a Selection is required to carry (delta D5). Returns
 /// `Ok(None)` when the rules do not require Selection approvals, `Ok(Some(id))`
 /// with the approving record's id when a valid approval is `Require`-referenced,

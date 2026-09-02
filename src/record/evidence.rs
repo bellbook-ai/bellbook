@@ -57,6 +57,8 @@ pub fn base_evidence(schema: &Hash256) -> Evidence {
         // selections at most Inferred (SPEC §7).
         Some(SCHEMA_CANDIDATE) => Evidence::Reported,
         Some(SCHEMA_EVALUATION) => Evidence::Reported,
+        // A requirement is asserted by its author (spec 0.4, RFC-0003 4.7).
+        Some(SCHEMA_REQUIREMENT) => Evidence::Reported,
         Some(SCHEMA_SUMMARY) => Evidence::Inferred,
         Some(SCHEMA_PLAN) => Evidence::Inferred,
         Some(SCHEMA_SELECTION) => Evidence::Inferred,
@@ -119,7 +121,7 @@ mod tests {
         // base_evidence classifies each frozen schema with an explicit match
         // arm. If this count changes, a schema was added or removed: update
         // the match in base_evidence (and this pin) in the same change.
-        assert_eq!(ALL_SCHEMAS.len(), 17);
+        assert_eq!(ALL_SCHEMAS.len(), 18);
         for name in ALL_SCHEMAS {
             // No frozen schema may fall through to the unknown-schema floor
             // by accident; Assumed as a base class must be a deliberate
