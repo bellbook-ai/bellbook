@@ -4627,7 +4627,8 @@ fn build_query_cases() -> Vec<QueryCase> {
     let rules = VerifierRules::new(space, 200)
         .with_author_role("agent", AuthorType::Provider)
         .with_author_role("benchmark", AuthorType::Provider)
-        .with_author_role("reviewer", AuthorType::Provider);
+        .with_author_role("reviewer", AuthorType::Provider)
+        .with_author_role("human", AuthorType::User);
     let mut w = LogWriter::open(dir.path(), &rules).unwrap();
     let mut st = State::default();
 
@@ -4646,7 +4647,7 @@ fn build_query_cases() -> Vec<QueryCase> {
                     thread: space,
                     author: Author {
                         id: author.into(),
-                        type_: AuthorType::Provider,
+                        type_: rules.author_roles[author],
                         signature: None,
                     },
                     kind,
@@ -4866,6 +4867,105 @@ fn build_query_cases() -> Vec<QueryCase> {
         vec![require(c0), use_r(review0), replace(s0)],
     );
 
+    // Spec 0.4 bindings: a request with a user-authored requirement, a
+    // candidate binding an artifact, an extended evaluation that judged
+    // that artifact against the requirement, and a selection resting on it.
+    // The nodes these reach carry `artifacts` and `requirements`
+    // annotations; every other node stays 0.3-shaped.
+    let req = commit(
+        &mut w,
+        &mut st,
+        "human",
+        Kind::Request,
+        SCHEMA_REQUEST,
+        encode(&RequestData {
+            objective: "ship the bound build".into(),
+            scope: space,
+            attachments: vec![],
+            parent_request_id: None,
+        })
+        .unwrap(),
+        vec![],
+    );
+    let r1 = commit(
+        &mut w,
+        &mut st,
+        "human",
+        Kind::Requirement,
+        SCHEMA_REQUIREMENT,
+        encode(&RequirementData {
+            key: "R1".into(),
+            description: "unit tests pass on the bound tree".into(),
+            required: true,
+            expected_evidence: None,
+            provenance: Provenance::UserAuthored,
+        })
+        .unwrap(),
+        vec![cause(req)],
+    );
+    let bound_tree = ArtifactRef {
+        scheme: "git-tree-sha1".into(),
+        digest: "6666666666666666666666666666666666666666".into(),
+        name: Some("src".into()),
+    };
+    let c6 = commit(
+        &mut w,
+        &mut st,
+        "agent",
+        Kind::Candidate,
+        SCHEMA_CANDIDATE,
+        encode(&CandidateData {
+            artifacts: Some(vec![bound_tree.clone()]),
+            source: src("6666666666666666666666666666666666666666"),
+            basis: CandidateBasis::Root,
+            parent: None,
+            note: None,
+        })
+        .unwrap(),
+        vec![],
+    );
+    let bound0 = commit(
+        &mut w,
+        &mut st,
+        "benchmark",
+        Kind::Evaluation,
+        SCHEMA_EVALUATION_V2,
+        encode(&EvaluationDataV2 {
+            candidate: c6,
+            criterion: "unit-tests".into(),
+            procedure: None,
+            outcome: EvaluationOutcomeV2::Passed,
+            evaluator: DeciderBinding {
+                id: "bench-harness".into(),
+                version: Some("2.1".into()),
+                procedure_hash: None,
+                input_hash: None,
+            },
+            basis: Basis::Recomputed,
+            evidence: vec![bound_tree],
+            requirements: vec![r1],
+        })
+        .unwrap(),
+        vec![use_r(c6), use_r(r1)],
+    );
+    let _s2 = commit(
+        &mut w,
+        &mut st,
+        "agent",
+        Kind::Selection,
+        SCHEMA_SELECTION,
+        encode(&SelectionData {
+            objective: "ship-bound".into(),
+            considered: vec![c6],
+            outcome: SelectionOutcome::Selected {
+                candidates: vec![c6],
+            },
+            rationale: None,
+        })
+        .unwrap(),
+        vec![require(c6), use_r(bound0)],
+    );
+
     let receipt = Receipt::new(w.records(), &rules);
     let q = Queries::new(w.records(), &rules).unwrap();
     let hx = hex_encode;
@@ -4886,6 +4986,11 @@ fn build_query_cases() -> Vec<QueryCase> {
             serde_json::json!({ "objective": "adopt-baseline" }),
         ),
         ("selected", serde_json::json!({ "objective": "adopt" })),
+        // Spec 0.4 annotations: the bound candidate's evidence carries the
+        // evaluation's artifacts and requirements, and the chosen node its
+        // artifacts.
+        ("evidence", id_args(&c6)),
+        ("selected", serde_json::json!({ "objective": "ship-bound" })),
     ];
     let queries = battery
         .into_iter()

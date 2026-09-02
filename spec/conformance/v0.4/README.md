@@ -108,7 +108,9 @@ caller sees, not what travels on the wire.
 - `args` is `{ "id": "HEX" }` for id-taking queries, `{ "objective": "..." }`
   for `selected`, and `{}` for `frontier`.
 - `expect` is the full report the query must return, byte for byte after
-  canonical JSON comparison.
+  canonical JSON comparison. A reported node carries `artifacts` and
+  `requirements` only where the record binds them (spec 0.4): the bound line
+  in the query log exercises both, and every other node stays 0.3-shaped.
 
 The corpus test asserts every one of the seven names appears at least once, so
 a query added to the named set without vectors fails the build. Error behavior

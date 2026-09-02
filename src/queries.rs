@@ -23,7 +23,8 @@ use serde::{Deserialize, Serialize};
 use crate::base::hash::hex_encode;
 use crate::record::kind::{Kind, ReasonCode, RefType, VerdictResult};
 use crate::record::payloads::{
-    evaluation_summary, CandidateBasis, CandidateData, SelectionData, SelectionOutcome,
+    evaluation_summary, ArtifactRef, CandidateBasis, CandidateData, EvaluationDataV2, ResultData,
+    SelectionData, SelectionOutcome,
 };
 use crate::record::record::{decode, Record};
 use crate::record::refs::RecordId;
@@ -87,6 +88,15 @@ pub struct Node {
     pub tainted: bool,
     /// Target of an accepted Retraction.
     pub retracted: bool,
+    /// Artifact identities the record binds (spec 0.4): a Candidate's or
+    /// Result's `artifacts`, or an extended Evaluation's `evidence`. Omitted
+    /// when the record binds none, so 0.3-shaped answers are unchanged.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub artifacts: Vec<ArtifactRef>,
+    /// Requirement ids (lowercase hex) an extended Evaluation speaks to,
+    /// in payload order. Omitted when there are none.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub requirements: Vec<String>,
 }
 
 /// One step of a line of descent: the ancestor and the edge that reached it.
@@ -289,12 +299,43 @@ impl<'a> Queries<'a> {
             }
             _ => "n/a",
         };
+        // Bindings the record carries (spec 0.4), reported as recorded so a
+        // reader sees what a candidate or a judgment was bound to without a
+        // second lookup. A 0.3 payload has none and the fields stay absent.
+        let (artifacts, requirements) = match rec.kind {
+            Kind::Candidate => (
+                decode::<CandidateData>(&rec.data)
+                    .ok()
+                    .and_then(|c| c.artifacts)
+                    .unwrap_or_default(),
+                Vec::new(),
+            ),
+            Kind::Result => (
+                decode::<ResultData>(&rec.data)
+                    .ok()
+                    .and_then(|r| r.artifacts)
+                    .unwrap_or_default(),
+                Vec::new(),
+            ),
+            Kind::Evaluation => decode::<EvaluationDataV2>(&rec.data)
+                .ok()
+                .map(|e| {
+                    (
+                        e.evidence,
+                        e.requirements.iter().map(hex_encode).collect::<Vec<_>>(),
+                    )
+                })
+                .unwrap_or_default(),
+            _ => (Vec::new(), Vec::new()),
+        };
         Node {
             id: hex_encode(&rec.id),
             kind: format!("{:?}", rec.kind),
             standing: standing.to_string(),
             tainted: self.verdict.tainted_records.contains(&rec.id),
             retracted: self.verdict.retracted_records.contains(&rec.id),
+            artifacts,
+            requirements,
         }
     }
 

@@ -1704,3 +1704,527 @@ fn export_refuses_a_profile_it_cannot_declare() {
     assert_eq!(out.status.code(), Some(65));
     assert!(String::from_utf8_lossy(&out.stderr).contains("more than once"));
 }
+
+// --- spec 0.4 surfaces: request, requirement, --artifact, extended eval ---
+
+const DIGEST64: &str = "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08";
+
+/// Rules with a human (user role) beside the agent and evaluator, so the
+/// story can start from a Request; baseline thresholds so the exported
+/// receipt can declare the baseline profile.
+fn setup_with_human() -> Env {
+    let dir = tempfile::tempdir().unwrap();
+    let log = dir.path().join("log");
+    let rules = dir.path().join("rules.json");
+    let r = VerifierRules::new(SPACE, 200)
+        .with_author_role("human", AuthorType::User)
+        .with_author_role("agent", AuthorType::Provider)
+        .with_author_role("evaluator", AuthorType::Provider)
+        .with_baseline_thresholds();
+    std::fs::write(&rules, serde_json::to_string_pretty(&r).unwrap()).unwrap();
+    Env {
+        _dir: dir,
+        log,
+        rules,
+    }
+}
+
+fn rejected(out: &Output) -> String {
+    assert_eq!(
+        out.status.code(),
+        Some(65),
+        "expected a rejected record: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let v: Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(v["result"], "reject");
+    v["reason"].as_str().unwrap().to_string()
+}
+
+fn refused(out: &Output, needle: &str) {
+    assert_eq!(out.status.code(), Some(65));
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(stderr.contains(needle), "stderr: {stderr}");
+    // A refusal is pre-commit: nothing was written.
+    assert!(out.stdout.is_empty(), "refusal printed an id");
+}
+
+#[test]
+fn requirement_binding_story_from_the_cli_alone() {
+    // Request -> requirements -> candidate bound to artifacts -> extended
+    // evaluations bound to the requirements -> selection -> receipt that
+    // declares the baseline -> validated Clean and Conformant; then the
+    // query surface shows the bindings on the nodes it reports.
+    let env = setup_with_human();
+    let req = committed_id(&run(
+        &env,
+        &[
+            "request",
+            "add",
+            "--author",
+            "human",
+            "--objective",
+            "ship the bound build",
+            "--json",
+        ],
+    ));
+    let r1 = committed_id(&run(
+        &env,
+        &[
+            "requirement",
+            "add",
+            "--author",
+            "human",
+            "--request",
+            &req,
+            "--key",
+            "R1",
+            "--description",
+            "unit tests pass on the bound tree",
+            "--json",
+        ],
+    ));
+    // A provider-authored requirement defaults to derived provenance and
+    // can be informational (--optional) with stated expected evidence.
+    let r2 = committed_id(&run(
+        &env,
+        &[
+            "requirement",
+            "add",
+            "--author",
+            "agent",
+            "--request",
+            &req,
+            "--key",
+            "R2",
+            "--description",
+            "lint is clean",
+            "--expected-evidence",
+            "lint log",
+            "--optional",
+            "--json",
+        ],
+    ));
+
+    let c0 = committed_id(&run(
+        &env,
+        &[
+            "candidate",
+            "add",
+            "--author",
+            "agent",
+            "--git-tree",
+            TREE_A,
+            "--artifact",
+            &format!("sha256-bytes:{DIGEST64}:dist.tar"),
+            &format!("git-tree-sha1:{TREE_A}:src"),
+            "--json",
+        ],
+    ));
+    let e0 = committed_id(&run(
+        &env,
+        &[
+            "eval",
+            "add",
+            "--author",
+            "evaluator",
+            "--candidate",
+            &c0,
+            "--criterion",
+            "unit-tests",
+            "--passed",
+            "--evaluator",
+            "test-harness",
+            "--evaluator-version",
+            "1.4.0",
+            "--basis",
+            "recomputed",
+            "--procedure-hash",
+            DIGEST64,
+            "--requirement",
+            &r1,
+            "--artifact",
+            &format!("git-tree-sha1:{TREE_A}"),
+            "--json",
+        ],
+    ));
+    // A fail-closed outcome is recorded as exactly what it is.
+    let e1 = committed_id(&run(
+        &env,
+        &[
+            "eval",
+            "add",
+            "--author",
+            "evaluator",
+            "--candidate",
+            &c0,
+            "--criterion",
+            "lint",
+            "--not-run",
+            "--evaluator",
+            "linter",
+            "--basis",
+            "declared",
+            "--requirement",
+            &r2,
+            "--json",
+        ],
+    ));
+    let s0 = committed_id(&run(
+        &env,
+        &[
+            "select",
+            "--author",
+            "agent",
+            "--objective",
+            "ship",
+            "--consider",
+            &c0,
+            "--choose",
+            &c0,
+            "--uses-eval",
+            &e0,
+            &e1,
+            "--json",
+        ],
+    ));
+
+    let receipt = env._dir.path().join("r.json");
+    let out = run(
+        &env,
+        &[
+            "export",
+            "--profile",
+            "bellbook-core-v1",
+            "--out",
+            receipt.to_str().unwrap(),
+        ],
+    );
+    assert!(out.status.success());
+    let out = bellbook()
+        .args(["validate", "--json"])
+        .arg(&receipt)
+        .output()
+        .unwrap();
+    assert_eq!(
+        out.status.code(),
+        Some(0),
+        "{}",
+        String::from_utf8_lossy(&out.stdout)
+    );
+    let v: Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(v["status"], "Clean");
+    assert_eq!(v["profiles"][0]["status"], "Conformant");
+    assert_eq!(v["record_count"], 14, "7 subjects and their verdicts");
+
+    // The query surface reports the bindings on the nodes it reaches, over
+    // the receipt exactly as over the log.
+    for input in [
+        vec!["--receipt", receipt.to_str().unwrap()],
+        vec![
+            "--log",
+            env.log.to_str().unwrap(),
+            "--rules",
+            env.rules.to_str().unwrap(),
+        ],
+    ] {
+        let out = bellbook()
+            .args(["query", "selected", "ship", "--json"])
+            .args(&input)
+            .output()
+            .unwrap();
+        assert!(
+            out.status.success(),
+            "{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        let v: Value = serde_json::from_slice(&out.stdout).unwrap();
+        let sel = &v["selections"][0];
+        assert_eq!(sel["selection"]["id"], s0);
+        let target = &sel["chosen"][0];
+        assert_eq!(target["id"], c0);
+        assert_eq!(target["artifacts"].as_array().unwrap().len(), 2);
+        assert_eq!(target["artifacts"][0]["scheme"], "git-tree-sha1");
+        assert_eq!(target["artifacts"][0]["name"], "src");
+        assert_eq!(target["artifacts"][1]["scheme"], "sha256-bytes");
+        assert!(target.get("requirements").is_none());
+        let evidence = sel["evidence"].as_array().unwrap();
+        assert_eq!(evidence.len(), 2);
+        assert_eq!(evidence[0]["node"]["id"], e0);
+        assert_eq!(evidence[0]["outcome"], "passed");
+        assert_eq!(evidence[0]["node"]["requirements"], serde_json::json!([r1]));
+        assert_eq!(evidence[0]["node"]["artifacts"][0]["digest"], TREE_A);
+        assert_eq!(evidence[1]["outcome"], "not_run");
+        assert_eq!(evidence[1]["node"]["requirements"], serde_json::json!([r2]));
+        assert!(evidence[1]["node"].get("artifacts").is_none());
+    }
+    let out = bellbook()
+        .args(["query", "selected", "ship", "--receipt"])
+        .arg(&receipt)
+        .output()
+        .unwrap();
+    let text = String::from_utf8_lossy(&out.stdout).to_string();
+    assert!(
+        text.contains(&format!("artifacts git-tree-sha1:{TREE_A}")),
+        "{text}"
+    );
+    assert!(text.contains(&format!("requirements {r1}")), "{text}");
+
+    // Retracting the requirement taints the evaluation that judged against
+    // it and the selection that rested on that evaluation: the receipt
+    // reports Tainted from then on, and the baseline still conforms.
+    let out = run(
+        &env,
+        &[
+            "retract",
+            "--author",
+            "human",
+            "--target",
+            &r1,
+            "--reason",
+            "the requirement was misstated",
+            "--json",
+        ],
+    );
+    committed_id(&out);
+    let out = run(&env, &["export", "--out", receipt.to_str().unwrap()]);
+    assert!(out.status.success());
+    let out = bellbook()
+        .args(["validate", "--json"])
+        .arg(&receipt)
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(2));
+    let v: Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(v["status"], "Tainted");
+    // Ids travel as byte arrays in the report; compare in that form.
+    let id_bytes = |hex: &str| serde_json::to_value(hex_decode(hex).unwrap().to_vec()).unwrap();
+    let tainted = v["tainted_records"].as_array().unwrap();
+    assert!(tainted.contains(&id_bytes(&e0)), "{tainted:?}");
+    assert!(tainted.contains(&id_bytes(&s0)), "{tainted:?}");
+    assert!(!tainted.contains(&id_bytes(&e1)), "{tainted:?}");
+}
+
+#[test]
+fn requirement_add_refuses_or_rejects_what_the_verifier_would() {
+    let env = setup_with_human();
+    let req = committed_id(&run(
+        &env,
+        &[
+            "request",
+            "add",
+            "--author",
+            "human",
+            "--objective",
+            "ship",
+            "--json",
+        ],
+    ));
+    let base = |author: &str, key: &str| -> Vec<String> {
+        [
+            "requirement",
+            "add",
+            "--author",
+            author,
+            "--request",
+            &req,
+            "--key",
+            key,
+            "--description",
+            "something",
+            "--json",
+        ]
+        .iter()
+        .map(|s| s.to_string())
+        .collect()
+    };
+    fn args(v: &[String]) -> Vec<&str> {
+        v.iter().map(String::as_str).collect()
+    }
+
+    // Provenance is bound to the role: a provider cannot claim user-authored,
+    // and the CLI refuses before the write.
+    let mut a = base("agent", "R1");
+    a.extend(["--provenance".to_string(), "user-authored".to_string()]);
+    refused(&run(&env, &args(&a)), "bound to the author's role");
+    // A request id that is not a Request is refused pre-commit too.
+    let mut a = base("human", "R1");
+    let pos = a.iter().position(|s| s == &req).unwrap();
+    a[pos] = committed_id(&run(
+        &env,
+        &[
+            "candidate",
+            "add",
+            "--author",
+            "agent",
+            "--git-tree",
+            TREE_A,
+            "--json",
+        ],
+    ));
+    refused(&run(&env, &args(&a)), "not an accepted Request");
+    // An executor role never authors a Requirement; the verifier's role
+    // table is the CLI's too.
+    assert!(!run(&env, &args(&base("nobody", "R1"))).status.success());
+
+    // A duplicate key is a verifier rule, so it commits as a durable
+    // rejected record with the verifier's reason.
+    committed_id(&run(&env, &args(&base("human", "R1"))));
+    assert_eq!(
+        rejected(&run(&env, &args(&base("agent", "R1")))),
+        "RequirementInvalid"
+    );
+    // Retract-and-record releases the key.
+    let r1 = {
+        let out = run(&env, &args(&base("human", "R3")));
+        committed_id(&out)
+    };
+    committed_id(&run(
+        &env,
+        &[
+            "retract", "--author", "human", "--target", &r1, "--reason", "wrong", "--json",
+        ],
+    ));
+    committed_id(&run(&env, &args(&base("agent", "R3"))));
+}
+
+#[test]
+fn artifact_and_extended_eval_flags_are_checked_before_the_write() {
+    let env = setup_with_human();
+    let c0 = add_root(&env, TREE_A);
+
+    // Malformed artifact references never reach the log.
+    for bad in [
+        "git-tree-sha1:abc",
+        "NoCaps:9f86d081884c7d659a2feaa0c55ad015a3bf4f1b",
+        "sha256-bytes",
+        &format!("sha256-bytes:{TREE_A}"),
+    ] {
+        refused(
+            &run(
+                &env,
+                &[
+                    "candidate",
+                    "add",
+                    "--author",
+                    "agent",
+                    "--git-tree",
+                    TREE_B,
+                    "--artifact",
+                    bad,
+                ],
+            ),
+            "invalid --artifact",
+        );
+    }
+    // Duplicates collapse and the list is canonically ordered, so the same
+    // content always yields the same record.
+    let out = run(
+        &env,
+        &[
+            "candidate",
+            "add",
+            "--author",
+            "agent",
+            "--git-tree",
+            TREE_B,
+            "--artifact",
+            &format!("sha256-bytes:{DIGEST64}"),
+            &format!("git-tree-sha1:{TREE_B}"),
+            &format!("sha256-bytes:{DIGEST64}"),
+            "--json",
+        ],
+    );
+    let c1 = committed_id(&out);
+    let out = run(&env, &["query", "frontier", "--json"]);
+    let v: Value = serde_json::from_slice(&out.stdout).unwrap();
+    let node = v["frontier"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|e| e["node"]["id"] == c1)
+        .unwrap();
+    let arts = node["node"]["artifacts"].as_array().unwrap();
+    assert_eq!(arts.len(), 2);
+    assert_eq!(arts[0]["scheme"], "git-tree-sha1");
+
+    // Extended fields need the decider binding: basis is declared, never
+    // inferred, so the CLI does not guess one.
+    let eval = |extra: &[&str]| -> Output {
+        let mut a = vec![
+            "eval",
+            "add",
+            "--author",
+            "evaluator",
+            "--candidate",
+            &c0,
+            "--criterion",
+            "c",
+        ];
+        a.extend_from_slice(extra);
+        run(&env, &a)
+    };
+    refused(&eval(&["--blocked"]), "requires both --evaluator");
+    refused(
+        &eval(&["--passed", "--evaluator", "h"]),
+        "requires both --evaluator",
+    );
+    refused(
+        &eval(&["--passed", "--evaluator", "h", "--basis", "guessed"]),
+        "invalid --basis",
+    );
+    refused(&eval(&["--passed", "--stale"]), "exactly one outcome");
+    refused(&eval(&[]), "exactly one outcome");
+    refused(
+        &eval(&[
+            "--passed",
+            "--evaluator",
+            "h",
+            "--basis",
+            "declared",
+            "--input-hash",
+            "zz",
+        ]),
+        "invalid --input-hash",
+    );
+    // A requirement must be an accepted Requirement, not any record.
+    refused(
+        &eval(&[
+            "--passed",
+            "--evaluator",
+            "h",
+            "--basis",
+            "declared",
+            "--requirement",
+            &c0,
+        ]),
+        "not an accepted Requirement",
+    );
+    // Without any extended flag the v1 shape is written, and the record's
+    // outcome label is the v1 one.
+    let e = committed_id(&eval(&["--score", "7", "--scale", "1", "--json"]));
+    let s = committed_id(&run(
+        &env,
+        &[
+            "select",
+            "--author",
+            "agent",
+            "--objective",
+            "o",
+            "--consider",
+            &c0,
+            "--choose",
+            &c0,
+            "--uses-eval",
+            &e,
+            "--json",
+        ],
+    ));
+    let out = run(&env, &["query", "selected", "o", "--json"]);
+    let v: Value = serde_json::from_slice(&out.stdout).unwrap();
+    let sel = &v["selections"][0];
+    assert_eq!(sel["selection"]["id"], s);
+    assert_eq!(sel["evidence"][0]["outcome"], "scored 7e-1");
+    assert!(sel["evidence"][0]["node"].get("requirements").is_none());
+    assert!(sel["evidence"][0]["node"].get("artifacts").is_none());
+}
