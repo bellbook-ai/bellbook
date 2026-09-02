@@ -66,6 +66,27 @@ spec change since 0.3: spec version 0.4.
   bytes and id. Vectors pin the new canonical forms; the corpus carries
   accepting and rejecting cases for both kinds; the independent Python
   validator implements the rule from scratch.
+- **Receipt profile declarations** (RFC-0003 section 4.5, SPEC section
+  12; #10). The receipt envelope gains `profiles: [ProfileRef {id,
+  version, hash}]`, the profiles the producer claims, omitted from the
+  wire form when empty so an undeclared receipt is byte-identical to
+  before. A declaration is never trusted: every validator evaluates each
+  declared profile itself, unasked, and each `ProfileResult` now reports
+  `declared` and `declaration_matches` (whether the declared version and
+  hash name the clause table that was evaluated; `None` for an undeclared
+  or unknown profile). `validate_with_profiles` evaluates declared
+  profiles first, then the required ids the receipt did not declare;
+  `ProfileResult::met` is Conformant plus a matching declaration when
+  declared. `Receipt::with_declared_profiles` and `bellbook export
+  --profile ID` declare; `bellbook validate` exits 3 when any declared or
+  required profile is not met, including a declaration whose hash or
+  version is not the profile the binary evaluated. Structural rules: a
+  receipt of an epoch before 0.4 carrying a declaration, an empty id, or a
+  repeated id is Invalid before replay (malformed corpus cases). The
+  profile vectors now pin every reported profile per case, with
+  declaration cases for a matching, stale-hash, wrong-version, unknown,
+  and false claim; the Python validator mirrors the decoding rule and
+  evaluates declarations from scratch.
 
 ### Changed
 

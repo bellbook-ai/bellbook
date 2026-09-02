@@ -4052,6 +4052,89 @@ fn build_malformed_cases() -> Vec<MalformedCase> {
         ));
     }
 
+    // Profile declarations (spec 0.4, SPEC §12) are structural: an earlier
+    // epoch's receipt cannot carry one, ids are non-empty and unique, and
+    // the declaration object decodes strictly. The version and hash inside
+    // a declaration are claims, compared during evaluation, never rejected
+    // here - so none of these cases is about a wrong hash.
+    {
+        let declared = Receipt::new(&records, &rules)
+            .with_declared_profiles(&[BELLBOOK_CORE_V1])
+            .unwrap();
+        let declared_json = String::from_utf8(declared.to_bytes().unwrap()).unwrap();
+        assert_eq!(
+            validate(declared_json.as_bytes()).status,
+            ValidationStatus::Clean
+        );
+        let base = || -> serde_json::Value { serde_json::from_str(&declared_json).unwrap() };
+
+        let mut v = base();
+        v["spec_version"] = serde_json::json!("0.3");
+        let input = serde_json::to_string(&v).unwrap();
+        let report = validate(input.as_bytes());
+        cases.push(malformed(
+            "profile-declaration-on-earlier-epoch",
+            "A receipt declaring spec 0.3 that carries a profile declaration; declarations exist from spec 0.4, so the receipt is structurally Invalid before replay.",
+            input,
+            None,
+            &report,
+            "profile declarations require spec 0.4",
+        ));
+
+        let mut v = base();
+        let first = v["profiles"][0].clone();
+        v["profiles"].as_array_mut().unwrap().push(first);
+        let input = serde_json::to_string(&v).unwrap();
+        let report = validate(input.as_bytes());
+        cases.push(malformed(
+            "profile-declared-twice",
+            "The same profile id declared twice; a declaration list is a set of claims and a repeat is structurally Invalid.",
+            input,
+            None,
+            &report,
+            "declared more than once",
+        ));
+
+        let mut v = base();
+        v["profiles"][0]["id"] = serde_json::json!("");
+        let input = serde_json::to_string(&v).unwrap();
+        let report = validate(input.as_bytes());
+        cases.push(malformed(
+            "profile-declaration-empty-id",
+            "A profile declaration with an empty id.",
+            input,
+            None,
+            &report,
+            "has an empty id",
+        ));
+
+        let mut v = base();
+        v["profiles"][0]["extra"] = serde_json::json!(true);
+        let input = serde_json::to_string(&v).unwrap();
+        let report = validate(input.as_bytes());
+        cases.push(malformed(
+            "profile-declaration-unknown-field",
+            "A profile declaration carrying an unknown field; the declaration object decodes as strictly as every other wire object.",
+            input,
+            None,
+            &report,
+            "unparseable receipt: unknown field `extra`",
+        ));
+
+        let mut v = base();
+        v["profiles"][0]["hash"] = serde_json::json!([1, 2, 3]);
+        let input = serde_json::to_string(&v).unwrap();
+        let report = validate(input.as_bytes());
+        cases.push(malformed(
+            "profile-declaration-short-hash",
+            "A profile declaration whose hash is not 32 bytes.",
+            input,
+            None,
+            &report,
+            "unparseable receipt",
+        ));
+    }
+
     // Not JSON at all.
     {
         let input = "this is not a receipt".to_string();

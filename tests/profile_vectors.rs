@@ -167,10 +167,23 @@ struct ClauseExpect {
     passed: bool,
 }
 
+/// One profile result as the vectors pin it: the surface an independent
+/// implementation must reproduce (details are free text and not pinned).
 #[derive(serde::Serialize, serde::Deserialize, PartialEq, Debug, Clone)]
 struct ProfileExpect {
+    id: String,
     status: ProfileStatus,
+    declared: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    declaration_matches: Option<bool>,
     clauses: Vec<ClauseExpect>,
+}
+
+/// Every profile result validation reports for the case: the receipt's
+/// declarations in order, then `bellbook-core-v1` required if not declared.
+#[derive(serde::Serialize, serde::Deserialize, PartialEq, Debug, Clone)]
+struct CaseExpect {
+    profiles: Vec<ProfileExpect>,
 }
 
 #[derive(serde::Serialize, serde::Deserialize, PartialEq, Debug, Clone)]
@@ -178,7 +191,7 @@ struct ProfileCase {
     name: String,
     description: String,
     receipt: Receipt,
-    expect: ProfileExpect,
+    expect: CaseExpect,
 }
 
 #[derive(serde::Serialize, serde::Deserialize, PartialEq, Debug, Clone)]
@@ -189,12 +202,12 @@ struct CasesFile {
     cases: Vec<ProfileCase>,
 }
 
-fn expect_for(receipt: &Receipt) -> ProfileExpect {
-    let bytes = receipt.to_bytes().unwrap();
-    let report = validate_with_profiles(&bytes, &ValidationLimits::default(), &[BELLBOOK_CORE_V1]);
-    let p = &report.profiles[0];
+fn surface(p: &ProfileResult) -> ProfileExpect {
     ProfileExpect {
+        id: p.id.clone(),
         status: p.status,
+        declared: p.declared,
+        declaration_matches: p.declaration_matches,
         clauses: p
             .clauses
             .iter()
@@ -204,6 +217,23 @@ fn expect_for(receipt: &Receipt) -> ProfileExpect {
             })
             .collect(),
     }
+}
+
+fn expect_for(receipt: &Receipt) -> CaseExpect {
+    let bytes = receipt.to_bytes().unwrap();
+    let report = validate_with_profiles(&bytes, &ValidationLimits::default(), &[BELLBOOK_CORE_V1]);
+    CaseExpect {
+        profiles: report.profiles.iter().map(surface).collect(),
+    }
+}
+
+fn declaring(receipt: Receipt) -> Receipt {
+    receipt.with_declared_profiles(&[BELLBOOK_CORE_V1]).unwrap()
+}
+
+fn declaring_ref(mut receipt: Receipt, decl: ProfileRef) -> Receipt {
+    receipt.profiles = vec![decl];
+    receipt
 }
 
 fn build_cases() -> Vec<ProfileCase> {
@@ -266,6 +296,56 @@ fn build_cases() -> Vec<ProfileCase> {
         corrupt(&Receipt::new(&line(&baseline, false), &baseline)),
     );
 
+    // Declarations (spec 0.4, SPEC 12): the receipt claims the profile; the
+    // validator evaluates the claim and reports whether the declaration
+    // names the table it applied. Never trusted.
+    push(
+        "declared-conformant",
+        "The receipt declares bellbook-core-v1 with the published version and hash, under baseline rules: evaluated without any request, Conformant, declaration matches.",
+        declaring(Receipt::new(&line(&baseline, false), &baseline)),
+    );
+    push(
+        "declared-but-nonconformant",
+        "A false claim: rules without thresholds declare the baseline. The declaration names the right table, the evaluation says NonConformant, and the verdict stays Clean.",
+        declaring(Receipt::new(&line(&no_thresholds, false), &no_thresholds)),
+    );
+    push(
+        "declared-stale-hash",
+        "The declaration carries a hash that is not the published clause table's: the profile is evaluated against this validator's table (Conformant) and the declaration is reported as not matching. Not met.",
+        declaring_ref(
+            Receipt::new(&line(&baseline, false), &baseline),
+            ProfileRef {
+                id: BELLBOOK_CORE_V1.into(),
+                version: 1,
+                hash: [0xAB; 32],
+            },
+        ),
+    );
+    push(
+        "declared-wrong-version",
+        "The right hash under a version the profile does not have: a declaration must name both, so it does not match.",
+        declaring_ref(
+            Receipt::new(&line(&baseline, false), &baseline),
+            ProfileRef {
+                id: BELLBOOK_CORE_V1.into(),
+                version: 2,
+                hash: profile_hash(&core_v1_table()),
+            },
+        ),
+    );
+    push(
+        "declared-unknown-profile",
+        "The receipt declares a profile id no validator knows: reported Unknown with nothing to compare, never an error; the required baseline follows it as an undeclared evaluation.",
+        declaring_ref(
+            Receipt::new(&line(&baseline, false), &baseline),
+            ProfileRef {
+                id: "made-up-v1".into(),
+                version: 1,
+                hash: [0u8; 32],
+            },
+        ),
+    );
+
     cases
 }
 
@@ -324,30 +404,57 @@ fn profile_vectors() {
     assert_eq!(stored.hash, profile_hash(&stored_table));
     let mut outcomes = std::collections::BTreeSet::new();
     let mut failing = std::collections::BTreeSet::new();
+    let mut declarations = std::collections::BTreeSet::new();
     for c in &stored.cases {
         let bytes = c.receipt.to_bytes().unwrap();
         let report =
             validate_with_profiles(&bytes, &ValidationLimits::default(), &[BELLBOOK_CORE_V1]);
-        let p = &report.profiles[0];
-        assert_eq!(p.hash, stored.hash, "case {}", c.name);
-        assert_eq!(p.status, c.expect.status, "case {}", c.name);
-        let flags: Vec<ClauseExpect> = p
-            .clauses
-            .iter()
-            .map(|k| ClauseExpect {
-                id: k.id.clone(),
-                passed: k.passed,
-            })
-            .collect();
-        assert_eq!(flags, c.expect.clauses, "case {}", c.name);
-        outcomes.insert(p.status);
-        failing.extend(p.clauses.iter().filter(|k| !k.passed).map(|k| k.id.clone()));
+        let got: Vec<ProfileExpect> = report.profiles.iter().map(surface).collect();
+        assert_eq!(got, c.expect.profiles, "case {}", c.name);
+        for p in &report.profiles {
+            if p.status == ProfileStatus::Unknown {
+                assert_eq!(p.hash, [0u8; 32], "case {}", c.name);
+            } else {
+                assert_eq!(p.hash, stored.hash, "case {}", c.name);
+            }
+            outcomes.insert(p.status);
+            failing.extend(p.clauses.iter().filter(|k| !k.passed).map(|k| k.id.clone()));
+            declarations.insert((p.declared, p.declaration_matches));
+        }
+        // The declared profiles come first, in declaration order, and the
+        // required baseline appears exactly once.
+        let declared_ids: Vec<&str> = c.receipt.profiles.iter().map(|d| d.id.as_str()).collect();
+        let reported_ids: Vec<&str> = report.profiles.iter().map(|p| p.id.as_str()).collect();
+        assert!(reported_ids.starts_with(&declared_ids), "case {}", c.name);
+        assert_eq!(
+            reported_ids
+                .iter()
+                .filter(|id| **id == BELLBOOK_CORE_V1)
+                .count(),
+            1,
+            "case {}",
+            c.name
+        );
     }
-    // Coverage: both outcomes, and a rejecting vector for every failable
-    // clause (B5 and B6 are reporting clauses and always hold).
+    // Coverage: every outcome, a rejecting vector for every failable clause
+    // (B5 and B6 are reporting clauses and always hold), and every
+    // declaration situation: required, declared and matching, declared with
+    // a mismatch, and declared but unknown.
     assert!(outcomes.contains(&ProfileStatus::Conformant));
     assert!(outcomes.contains(&ProfileStatus::NonConformant));
+    assert!(outcomes.contains(&ProfileStatus::Unknown));
     for id in ["B1", "B2", "B3", "B4"] {
         assert!(failing.contains(id), "no rejecting vector for {id}");
+    }
+    for situation in [
+        (false, None),
+        (true, Some(true)),
+        (true, Some(false)),
+        (true, None),
+    ] {
+        assert!(
+            declarations.contains(&situation),
+            "no vector for declaration situation {situation:?}"
+        );
     }
 }

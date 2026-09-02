@@ -23,6 +23,7 @@ use crate::base::canonical::{canonical_json, strict_set};
 use crate::base::hash::{hex_encode, sha256_canonical, sha256_concat_ids, Hash256};
 use crate::base::schema::{schema_id, schemas_for_epoch, SPEC_VERSION, SUPPORTED_SPEC_VERSIONS};
 use crate::base::time::Time;
+use crate::profiles::{evaluate_profiles, profile_ref, ProfileRef, ProfileResult};
 use crate::record::kind::{ReasonCode, VerdictResult};
 use crate::record::record::Record;
 use crate::record::refs::RecordId;
@@ -36,8 +37,16 @@ use std::collections::BTreeSet;
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Receipt {
-    /// Spec version the records and rules conform to (e.g. `"0.3"`).
+    /// Spec version the records and rules conform to (e.g. `"0.4"`).
     pub spec_version: String,
+    /// Profiles the producer claims this receipt conforms to (spec 0.4,
+    /// SPEC §12). Declarations, never trusted: validation evaluates every
+    /// declared profile and reports each alongside the verdict. Omitted from
+    /// the wire form when empty; a receipt of an epoch before
+    /// [`PROFILE_DECLARATIONS_SINCE`] that carries one is a structural
+    /// failure, as are duplicate or empty ids.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub profiles: Vec<ProfileRef>,
     /// The verifier rules the log was committed under. Validation
     /// re-derives every verdict against these; auditors compare
     /// `Report::rules_hash` against an out-of-band value.
@@ -46,14 +55,36 @@ pub struct Receipt {
     pub records: Vec<Record>,
 }
 
+/// The first spec epoch whose receipts may declare profiles.
+pub const PROFILE_DECLARATIONS_SINCE: &str = "0.4";
+
 impl Receipt {
-    /// Bundle a log into a receipt under the current spec version.
+    /// Bundle a log into a receipt under the current spec version, declaring
+    /// no profiles.
     pub fn new(records: &[Record], rules: &VerifierRules) -> Self {
         Self {
             spec_version: SPEC_VERSION.to_string(),
+            profiles: Vec::new(),
             rules: rules.clone(),
             records: records.to_vec(),
         }
+    }
+
+    /// Declare the named profiles, in order, with the version and hash this
+    /// implementation knows for each. Declaring is a claim about the receipt
+    /// that every validator re-checks; this does not evaluate the profiles,
+    /// so a producer can still export a receipt that turns out
+    /// `NonConformant`. Fails on an id this implementation does not know or
+    /// a repeated id.
+    pub fn with_declared_profiles(mut self, ids: &[&str]) -> Result<Self, String> {
+        for id in ids {
+            if self.profiles.iter().any(|p| p.id == *id) {
+                return Err(format!("profile {id:?} declared more than once"));
+            }
+            let decl = profile_ref(id).ok_or_else(|| format!("unknown profile {id:?}"))?;
+            self.profiles.push(decl);
+        }
+        Ok(self)
     }
 
     /// Serialize to canonical (JCS) JSON bytes - the portable wire form.
@@ -123,11 +154,14 @@ pub struct Report {
     /// is embedded in the receipt.
     #[serde(default)]
     pub standing: crate::verify::standing::StandingSection,
-    /// Profile evaluations requested by the caller (RFC-0003, SPEC §12.2),
-    /// in request order. Empty unless [`validate_with_profiles`] was used.
-    /// A report alongside the verdict: never changes `status` or `reason`.
+    /// Profile evaluations (RFC-0003, SPEC §12.2): every profile the receipt
+    /// declares, in declaration order, then every profile the caller
+    /// required through [`validate_with_profiles`] that the receipt did not
+    /// declare, in request order. Empty when the receipt declares nothing
+    /// and nothing was required, and for a structural failure. A report
+    /// alongside the verdict: never changes `status` or `reason`.
     #[serde(default)]
-    pub profiles: Vec<crate::profiles::ProfileResult>,
+    pub profiles: Vec<ProfileResult>,
 }
 
 impl Report {
@@ -163,6 +197,34 @@ fn rules_for_epoch(rules: &VerifierRules, schemas: &[&str]) -> VerifierRules {
         .kind_schema_map
         .retain(|schema, _| known.contains(schema));
     epoch_rules
+}
+
+/// Structural rules for the declaration list (SPEC §12): only an epoch from
+/// [`PROFILE_DECLARATIONS_SINCE`] on may carry one, and ids are non-empty
+/// and unique. The version and hash inside a declaration are claims, not
+/// structure: they are compared during evaluation and reported, never
+/// rejected here. `spec_version` must already be a supported epoch.
+fn check_declarations(receipt: &Receipt) -> Result<(), String> {
+    if receipt.profiles.is_empty() {
+        return Ok(());
+    }
+    let position = |v: &str| SUPPORTED_SPEC_VERSIONS.iter().position(|s| *s == v);
+    if position(&receipt.spec_version) < position(PROFILE_DECLARATIONS_SINCE) {
+        return Err(format!(
+            "profile declarations require spec {PROFILE_DECLARATIONS_SINCE} or later (receipt declares {:?})",
+            receipt.spec_version
+        ));
+    }
+    let mut seen = BTreeSet::new();
+    for (idx, decl) in receipt.profiles.iter().enumerate() {
+        if decl.id.is_empty() {
+            return Err(format!("profile declaration {idx} has an empty id"));
+        }
+        if !seen.insert(decl.id.as_str()) {
+            return Err(format!("profile {:?} is declared more than once", decl.id));
+        }
+    }
+    Ok(())
 }
 
 /// Resource bounds applied to untrusted receipts before verification.
@@ -279,6 +341,9 @@ pub fn validate_with_limits(bytes: &[u8], limits: &ValidationLimits) -> Report {
         );
     };
     let rules = rules_for_epoch(&receipt.rules, epoch_schemas);
+    if let Err(problem) = check_declarations(&receipt) {
+        return Report::structural_failure(problem, receipt.spec_version);
+    }
 
     // The reported rules hash is over the rules as embedded, so auditors
     // compare what the producer committed under, not the epoch view of it.
@@ -310,11 +375,11 @@ pub fn validate_with_limits(bytes: &[u8], limits: &ValidationLimits) -> Report {
         }
     };
 
-    Report {
+    let mut report = Report {
         status,
         reason: verdict.reason,
         problem: None,
-        spec_version: receipt.spec_version,
+        spec_version: receipt.spec_version.clone(),
         record_count: receipt.records.len() as u64,
         checked_records: verdict.checked_records,
         last_time: verdict.last_time,
@@ -324,11 +389,18 @@ pub fn validate_with_limits(bytes: &[u8], limits: &ValidationLimits) -> Report {
         tainted_records: verdict.tainted_records,
         standing: verdict.standing,
         profiles: Vec::new(),
-    }
+    };
+    // A declaration is a claim the producer made; every validator checks it
+    // (SPEC §12.2). Evaluated last, over the finished verdict, and reported
+    // beside it without touching it.
+    report.profiles = evaluate_profiles(&receipt, &report, &[]);
+    report
 }
 
-/// As [`validate_with_limits`], then evaluate each named profile over the
-/// receipt and attach the results to `Report::profiles` in request order.
+/// As [`validate_with_limits`], then evaluate each `profiles` id the receipt
+/// did not already declare and append the results to `Report::profiles` in
+/// request order (declared profiles come first, in declaration order, and a
+/// required id the receipt declares is evaluated once, as declared).
 /// Profiles are evaluated only when the receipt parsed and reached replay
 /// (`problem` is `None`): a structurally broken receipt has nothing to
 /// evaluate against. An unknown profile id yields a `Unknown` result, never
@@ -349,10 +421,7 @@ pub fn validate_with_profiles(
     let Ok(receipt) = Receipt::from_bytes(bytes) else {
         return report;
     };
-    report.profiles = profiles
-        .iter()
-        .map(|id| crate::profiles::evaluate_profile(id, &receipt, &report))
-        .collect();
+    report.profiles = evaluate_profiles(&receipt, &report, profiles);
     report
 }
 
@@ -418,7 +487,13 @@ impl std::fmt::Display for Report {
                 crate::profiles::ProfileStatus::NonConformant => "NON-CONFORMANT",
                 crate::profiles::ProfileStatus::Unknown => "UNKNOWN",
             };
-            writeln!(f, "profile {}: {status}", p.id)?;
+            let origin = match (p.declared, p.declaration_matches) {
+                (false, _) => "required",
+                (true, Some(true)) => "declared, declaration matches",
+                (true, Some(false)) => "declared, DECLARATION MISMATCH",
+                (true, None) => "declared",
+            };
+            writeln!(f, "profile {}: {status} ({origin})", p.id)?;
             if p.status != crate::profiles::ProfileStatus::Unknown {
                 writeln!(f, "  hash:          {}", hex_encode(&p.hash))?;
                 for c in &p.clauses {

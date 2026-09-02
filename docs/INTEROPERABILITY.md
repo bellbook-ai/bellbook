@@ -61,20 +61,24 @@ the engine's internals.
 ## Profiles carry the guarantees
 
 Base Bellbook stays usable without any policy engine. Stronger claims
-come from separately versioned profiles (planned):
+come from separately versioned profiles:
 
-- `bellbook-core-v1`: the minimum trustworthy portable receipt (required
-  signatures, pinned keys, registered roles), so "Clean" becomes
-  comparable across organizations.
-- `bellbook-policy-enforced-v1`: proves runtime policy decisions were
-  captured and respected (every external action carries exactly one
-  accepted, key-pinned, single-use decision; deny/error/indeterminate
-  closes through a Refusal; decisions and results are independently
-  authored).
+- `bellbook-core-v1` (shipped): the content-addressed baseline - a fixed
+  rule shape (registered roles, evidence thresholds no weaker than the
+  schema base classes, a bounded context) under which Clean, Tainted, and
+  Invalid mean the same thing to two organizations. It requires no
+  signatures; the signed tier is a separate profile,
+  `bellbook-core-signed-v1` (planned).
+- `bellbook-policy-enforced-v1` (planned): proves runtime policy
+  decisions were captured and respected (every external action carries
+  exactly one accepted, key-pinned, single-use decision;
+  deny/error/indeterminate closes through a Refusal; decisions and
+  results are independently authored).
 
-Receipts will eventually declare the profiles they claim, and the
-validator will report conformance per profile rather than trusting the
-declaration.
+From spec 0.4 a receipt declares the profiles it claims, and every
+validator evaluates each declaration itself and reports the result beside
+the verdict - a declaration is a claim to check, never something to
+trust.
 
 ## Standards mapping
 

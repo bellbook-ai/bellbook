@@ -198,18 +198,22 @@ bellbook validate receipt.json          # human-readable report
 bellbook validate receipt.json --json   # same report as JSON
 bellbook validate receipt.json --require-profile bellbook-core-v1
                                         # plus baseline-profile conformance
+bellbook export --log ./log --rules rules.json --profile bellbook-core-v1
+                                        # a receipt that declares the claim;
+                                        # every validator re-checks it, unasked
 ```
 
 Exit codes: `0` clean, `1` invalid, `2` valid-but-tainted, `3` validates
-but a required profile is not met. See SPEC §12 for the receipt format
-and the normative truth rules. Two honesty notes.
+but a declared or required profile is not met. See SPEC §12 for the
+receipt format and the normative truth rules. Two honesty notes.
 **Clean is relative to the rules embedded in the receipt** (compare the
 reported `rules_hash` against a rule set you trust) - under default rules
 it means "internally consistent", not "meets a shared security
 baseline". The [`bellbook-core-v1`](docs/profiles/bellbook-core-v1.md)
 profile is the shared baseline for that comparison: a content-addressed
-clause table over the rule shape, evaluated on request and reported
-alongside the verdict (never changing it). And a receipt proves the recorded *process*, not source
+clause table over the rule shape, evaluated when the receipt declares it
+or a caller requires it, and reported alongside the verdict (never
+changing it, and never trusting the declaration). And a receipt proves the recorded *process*, not source
 contents: a `Candidate`'s Git OIDs are pointers the repository resolves
 (under `manifest` binding a party holding the tree can recompute the hash
 and bind the receipt to actual contents; under `reported` binding it is a

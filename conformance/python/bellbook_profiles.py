@@ -107,11 +107,64 @@ def evaluate_core_v1(rules_wire: dict, records: list[dict], report: dict, table:
         "hash": profile_hash(table),
         "status": "Conformant" if all(c["passed"] for c in clauses) else "NonConformant",
         "clauses": clauses,
+        "declared": False,
+        "declaration_matches": None,
     }
 
 
 def evaluate(profile_id: str, rules_wire: dict, records: list[dict], report: dict, table: Any) -> dict:
-    """Dispatch by profile id; unknown ids are reported, never errors."""
+    """Dispatch by profile id; unknown ids are reported, never errors. The
+    result is an undeclared (required) evaluation; see `evaluate_declared`."""
     if profile_id == CORE_V1:
         return evaluate_core_v1(rules_wire, records, report, table)
-    return {"id": profile_id, "hash": bytes(32), "status": "Unknown", "clauses": []}
+    return {
+        "id": profile_id,
+        "hash": bytes(32),
+        "status": "Unknown",
+        "clauses": [],
+        "declared": False,
+        "declaration_matches": None,
+    }
+
+
+def evaluate_declared(
+    decl: dict, rules_wire: dict, records: list[dict], report: dict, tables: dict[str, dict]
+) -> dict:
+    """Evaluate a profile the receipt declares (SPEC section 12). The
+    declaration is a claim, not trusted: the profile is evaluated exactly as
+    `evaluate` does, from this implementation's own clause table, and the
+    result records whether the declared version and hash name that table.
+    An unknown id has nothing to compare (`declaration_matches` is None)."""
+    table = tables.get(decl["id"])
+    got = evaluate(decl["id"], rules_wire, records, report, table)
+    got["declared"] = True
+    if table is not None:
+        got["declaration_matches"] = (
+            decl["version"] == table["version"] and bb.bytes32(decl["hash"]) == got["hash"]
+        )
+    return got
+
+
+def evaluate_receipt(
+    receipt: dict, records: list[dict], report: dict, required: list[str], tables: dict[str, dict]
+) -> list[dict]:
+    """Every profile result a validation reports: the receipt's declarations
+    in declaration order, then each `required` id it did not declare, in
+    request order. A required id the receipt declares is evaluated once, as
+    declared."""
+    rules_wire = receipt["rules"]
+    out = [
+        evaluate_declared(d, rules_wire, records, report, tables)
+        for d in bb.decode_declarations(receipt)
+    ]
+    for pid in required:
+        if any(p["id"] == pid for p in out):
+            continue
+        out.append(evaluate(pid, rules_wire, records, report, tables.get(pid)))
+    return out
+
+
+def met(result: dict) -> bool:
+    """Whether a profile counts as met: Conformant, and if declared, a
+    declaration that names the evaluated table."""
+    return result["status"] == "Conformant" and result["declaration_matches"] is not False

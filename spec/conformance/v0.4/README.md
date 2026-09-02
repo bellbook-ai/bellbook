@@ -82,8 +82,11 @@ The runner feeds `input` bytes to `validate` (or `validate_with_limits` when
 `limits` is set) and asserts the resulting `Report`. Covers strict-decoding
 failures (unknown fields, duplicate keys, and mistyped nested fields such as a
 non-string signature `key_id`), an unsupported spec version, non-JSON and
-truncated input, and validation-limit rejections (`max_bytes`, `max_records`).
-Structural failures surface in `Report.problem`, not `Report.reason`.
+truncated input, validation-limit rejections (`max_bytes`, `max_records`), and
+the structural rules on profile declarations (SPEC section 12: a declaration
+on a pre-0.4 receipt, a repeated or empty id, an unknown field or short hash
+in the declaration object). Structural failures surface in `Report.problem`,
+not `Report.reason`.
 
 ### `query-cases.json`
 
