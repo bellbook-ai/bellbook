@@ -1052,19 +1052,40 @@ the log, evidence classes distinguish asserted or inferred content from
 verified content, and retractions mark claims that later proved wrong.
 They do not, by themselves, implement a complete truth-reporting profile.
 
-### 12.2 Profiles (reserved)
+### 12.2 Profiles
 
-Earlier drafts of this section sketched a "task receipt profile"
-promising requirement-to-proof binding, confirmed-vs-derived
-requirements, reviewer verdicts, and artifact identity. The core schema
-cannot yet express those concepts (there is no Requirement record, no
-structured reviewer verdict, and artifact identity would be parsed out of
-an opaque `output` string), so the sketch has been **removed from the
-normative spec** rather than promise what cannot be checked. Profiles -
-including a minimal `bellbook-core-v1` baseline profile fixing author
-roles, required signature kinds, key pinning, and evidence thresholds so
-that "Clean" becomes comparable across organizations - are future,
-separately versioned documents with their own test vectors.
+A **profile** is a separately versioned document with a stable id, a
+canonical hash of its normative clauses, and a predicate over the embedded
+rules, the records, and the validation report. A validator evaluates a
+profile on request and reports **Conformant**, **NonConformant** (naming
+the failing clauses), or **Unknown**; profile conformance is a report
+alongside the verdict and is never a verdict reason. Profile documents
+live under `docs/profiles/` and their vectors under `spec/profiles/`,
+separate from the core conformance corpus so that no profile can
+destabilize it.
+
+Earlier drafts of this section sketched a "task receipt profile" the core
+could not express - there was no Requirement record, no structured
+evaluator decision, and artifact identity would have been parsed out of an
+opaque `output` string - and the sketch was removed rather than promise
+what could not be checked. [RFC-0003](docs/rfcs/0003-requirement-binding.md)
+(accepted 2026-09-02) restores it as checkable design, in this sequence:
+
+- **`bellbook-core-v1`** (crate 0.7.0, this epoch, validator-side only): the
+  content-addressed baseline fixing what Clean, Tainted, and Invalid mean
+  under a declared rule shape, with no signature requirement.
+- **Spec epoch 0.4** (crate 0.8.0): the `Requirement` record, first-class
+  artifact identity (`ArtifactRef`), the extended `Evaluation` with the
+  shared decider-binding vocabulary, the attested evaluation schema, and
+  receipt profile declarations (`profiles: [ProfileRef]`).
+- **`delivery-receipt-v1`** (crate 0.9.0): the grammar of a delivery claim
+  - requirement, evidence, evaluator decision, artifact identity,
+  capability profile - with its own fraud-rejection vectors.
+- **`bellbook-core-signed-v1`** (crate 1.0.0): the signed tier above the
+  baseline.
+
+Nothing in this list is implemented until the release named beside it;
+until then, the validator knows no profiles.
 
 ### 12.3 Conformance
 

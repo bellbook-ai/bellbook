@@ -1,7 +1,7 @@
 # RFC-0003: Requirement binding, artifact identity, and the delivery-receipt profile
 
-**Status:** Draft (2026-08-28). This document specifies the design for the
-v0.7.0, v0.8.0, and v0.9.0 milestones (tracking: #106, #6, #107, #108, #89,
+**Status:** Accepted (revision 2, 2026-09-02; drafted 2026-08-28). This
+document specifies the design for the v0.7.0, v0.8.0, and v0.9.0 milestones (tracking: #106, #6, #107, #108, #89,
 #10, #109, #110, #111, #112, #113). It proposes the **first spec change
 since epoch 0.3**: one new record kind, one new shared type, additive
 fields on three existing payloads, and a receipt-envelope field, landing
@@ -162,9 +162,10 @@ Rules:
   of type `User`; `derived` requires `Provider` or `System`. An `Executor`
   never authors a Requirement. "Confirmed by a person" is thereby a
   replay-verifiable fact about who wrote the record, not a flag anyone can
-  set (draft decision, open question Q1).
+  set (§10, decision 1).
 - Amendment is append-only: a wrong requirement is retracted and a new one
-  recorded; `Replace` is not accepted on Requirements in v1 (Q5).
+  recorded; `Replace` is not accepted on Requirements in v1 (§10,
+  decision 5).
 
 ### 4.2 First-class artifact identity: `ArtifactRef` (spec 0.4, #108)
 
@@ -249,7 +250,10 @@ No new claim kind. A delivery claim is an accepted `Selection` with outcome
 `Selected` whose `Use`d evaluations bind to requirements. The claim's
 request is determined, not declared: it is the single `Request` that every
 requirement referenced by the claim's evaluations belongs to. A claim whose
-evaluations span two requests, or none, is not a delivery claim.
+evaluations span two requests, or none, is not a delivery claim. When
+several accepted Selections qualify for one request, the profile evaluates
+the latest sound one and reports the earlier ones as superseded (§10,
+decision 8).
 
 ### 4.5 Profiles: the mechanism and its tiers (#6, #10, #113)
 
@@ -286,6 +290,8 @@ Tainted, and Invalid mean and under which rule shape:
 - B5: retraction and reaffirmation authority are readable from the rules
   (`admin_retraction_actors`, `reaffirmation_actors`), so a consumer knows
   who could have retracted or restored.
+- B6: the binding mode of every accepted Candidate (`Manifest` or
+  `Reported`) is reported; neither is required (§10, decision 3).
 
 No signature requirement. Not every adopter signs from day one, and a
 baseline nobody can meet compares nothing.
@@ -305,21 +311,28 @@ and switching evaluation schemas; no payload changes shape.
 
 The profile that makes a receipt a delivery receipt. Over a claim (4.4):
 
-- D1 **Coverage.** Every accepted `Requirement` with `required: true` under
-  the claim's request has at least one evaluation among the claim's `Use`d
-  evaluations that references it and has outcome `passed`.
+- D1 **Coverage.** Every accepted, non-retracted `Requirement` with
+  `required: true` under the claim's request, as of the receipt head, has
+  at least one evaluation among the claim's `Use`d evaluations that
+  references it and has outcome `passed`. Coverage is judged at the head,
+  not at claim time: a required requirement recorded after the claim makes
+  the claim NonConformant until it is re-claimed, exactly as a retracted
+  evaluation does (§10, decision 6).
 - D2 **Truthful completion.** No evaluation among the claim's `Use`d
   evaluations that references a required requirement has an outcome other
   than `passed`. A claim over a non-passing evaluation is rejected on
   replay, whatever its hashes say (C3).
 - D3 **Binding equality.** Every evaluation the claim uses judges the
-  claimed candidate (`candidate` equals the chosen candidate), and its
-  `evidence` set is non-empty. Every `Result` the evaluations' evidence
-  references carries the same artifact set. A claim rebound to a different
-  candidate fails here.
+  claimed candidate (`candidate` equals the chosen candidate), its
+  `evidence` set is non-empty, and every evidence reference appears in the
+  claimed candidate's `artifacts` or in the `artifacts` of an accepted
+  `Result` in the same thread - evidence cannot be conjured outside the
+  record (§10, decision 7). A claim rebound to a different candidate fails
+  here.
 - D4 **Separation.** The author of every evaluation the claim uses is a
   different actor from the author of the claimed candidate (producer and
-  evaluator are distinct; Q4 covers the selector).
+  evaluator are distinct). The claim's author is unconstrained in v1 (§10,
+  decision 4).
 - D5 **Decider binding present.** Every evaluation the claim uses carries
   `evaluator.id`, `evaluator.procedure_hash`, and `evaluator.input_hash`,
   and a declared `basis`. The report names the weakest basis in the claim.
@@ -428,21 +441,45 @@ gated stages stay gated.
 | v0.9.0 | 0.4 | `delivery-receipt-v1` with its fraud battery; quickstart; field test 3 (cutover) |
 | v1.0.0 | 0.4 | `bellbook-core-signed-v1`; soak; security review; freeze |
 
-## 10. Open questions (to be resolved at acceptance)
+## 10. Resolved design decisions (at acceptance, 2026-09-02)
 
-- **Q1 - provenance bound to authorship.** Proposed: yes (4.1). It makes
-  "confirmed by a person" a replay-checked fact. The alternative - a free
-  flag - is weaker and easier.
-- **Q2 - fold `PolicyDecision` (#9) into epoch 0.4 to avoid a later epoch?**
-  Proposed: no. It has no adopter; bundling unrequested wire into an
-  epoch is the speculation the gates exist to prevent. The shared
-  `DeciderBinding` keeps the door open at no cost.
-- **Q3 - baseline strictness on candidate binding.** Proposed: the
-  baseline reports the binding mode (`Manifest` vs `Reported`) and
-  requires neither; `delivery-receipt-v1` D3 requires a non-empty artifact
-  set but not a specific scheme.
-- **Q4 - separation scope.** Proposed: producer and evaluator must
-  differ (D4); the selector (claim author) is unconstrained in v1. A
-  three-party rule can be a signed-tier clause later.
-- **Q5 - requirement amendment.** Proposed: retract and re-record; no
-  `Replace` on Requirements in v1.
+1. **Provenance is bound to authorship.** `user_authored` requires a
+   `User` author; `derived` requires `Provider` or `System`. "Confirmed by
+   a person" is a replay-checked fact about who wrote the record, not a
+   flag. A free flag would have been weaker and easier.
+2. **`PolicyDecision` (#9) stays gated; epoch 0.4 carries only what the
+   adopter needs.** Bundling unrequested wire into an epoch to save a
+   future one is the speculation the gates exist to prevent. The shared
+   `DeciderBinding` vocabulary keeps the door open at no cost: #9 lands in
+   its own epoch if and when independent policy-engine demand arrives.
+3. **The baseline reports, it does not require.** `bellbook-core-v1`
+   reports each Candidate's binding mode (B6) and requires neither;
+   `delivery-receipt-v1` D3 requires a non-empty evidence set but no
+   specific scheme.
+4. **Separation is producer versus evaluator.** D4 requires distinct
+   authors for the claimed candidate and every evaluation the claim uses;
+   the claim's own author is unconstrained in v1. A three-party rule is a
+   candidate signed-tier clause, not a v1 requirement.
+5. **Requirements amend by retract-and-record.** No `Replace` on
+   Requirements in v1; append-only, with retraction as the only
+   withdrawal, matches the kernel's model and keeps taint semantics
+   uniform.
+6. **Coverage is judged at the receipt head.** D1 counts accepted,
+   non-retracted required requirements at the head. A requirement recorded
+   after the claim makes the claim NonConformant until re-claimed;
+   fail-closed and consistent with how a retracted evaluation already
+   demotes a selection. Surfaced by the draft's adversarial pass.
+7. **Evidence must be on the record.** D3 requires every evidence
+   reference an evaluation cites to appear in the claimed candidate's
+   `artifacts` or in an accepted `Result`'s `artifacts` in the same thread.
+   Evidence cannot be conjured outside the record. Surfaced by the draft's
+   adversarial pass.
+8. **Latest sound claim wins.** When several accepted Selections qualify
+   as delivery claims for one request, the profile evaluates the latest
+   sound one and reports the earlier ones as superseded (recorded at
+   acceptance; not a draft question).
+
+### 10.1 Evaluation log
+
+(Empty at acceptance. Criterion results are recorded here as they occur,
+as RFC-0002 section 8.1 does.)
