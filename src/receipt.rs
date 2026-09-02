@@ -123,6 +123,11 @@ pub struct Report {
     /// is embedded in the receipt.
     #[serde(default)]
     pub standing: crate::verify::standing::StandingSection,
+    /// Profile evaluations requested by the caller (RFC-0003, SPEC §12.2),
+    /// in request order. Empty unless [`validate_with_profiles`] was used.
+    /// A report alongside the verdict: never changes `status` or `reason`.
+    #[serde(default)]
+    pub profiles: Vec<crate::profiles::ProfileResult>,
 }
 
 impl Report {
@@ -140,6 +145,7 @@ impl Report {
             retracted_records: BTreeSet::new(),
             tainted_records: BTreeSet::new(),
             standing: crate::verify::standing::StandingSection::default(),
+            profiles: Vec::new(),
         }
     }
 }
@@ -294,7 +300,37 @@ pub fn validate_with_limits(bytes: &[u8], limits: &ValidationLimits) -> Report {
         retracted_records: verdict.retracted_records,
         tainted_records: verdict.tainted_records,
         standing: verdict.standing,
+        profiles: Vec::new(),
     }
+}
+
+/// As [`validate_with_limits`], then evaluate each named profile over the
+/// receipt and attach the results to `Report::profiles` in request order.
+/// Profiles are evaluated only when the receipt parsed and reached replay
+/// (`problem` is `None`): a structurally broken receipt has nothing to
+/// evaluate against. An unknown profile id yields a `Unknown` result, never
+/// an error. The verdict fields are exactly what `validate_with_limits`
+/// returns; profile conformance is a report alongside them (SPEC §12.2).
+pub fn validate_with_profiles(
+    bytes: &[u8],
+    limits: &ValidationLimits,
+    profiles: &[&str],
+) -> Report {
+    let mut report = validate_with_limits(bytes, limits);
+    if profiles.is_empty() || report.problem.is_some() {
+        return report;
+    }
+    // The receipt already parsed once above; parsing again keeps the
+    // verdict path untouched at the cost of one more decode, which a
+    // validator invoked with profile requests can afford.
+    let Ok(receipt) = Receipt::from_bytes(bytes) else {
+        return report;
+    };
+    report.profiles = profiles
+        .iter()
+        .map(|id| crate::profiles::evaluate_profile(id, &receipt, &report))
+        .collect();
+    report
 }
 
 impl std::fmt::Display for Report {
@@ -350,6 +386,21 @@ impl std::fmt::Display for Report {
                     for r in replacers {
                         writeln!(f, "    {}", hex_encode(r))?;
                     }
+                }
+            }
+        }
+        for p in &self.profiles {
+            let status = match p.status {
+                crate::profiles::ProfileStatus::Conformant => "CONFORMANT",
+                crate::profiles::ProfileStatus::NonConformant => "NON-CONFORMANT",
+                crate::profiles::ProfileStatus::Unknown => "UNKNOWN",
+            };
+            writeln!(f, "profile {}: {status}", p.id)?;
+            if p.status != crate::profiles::ProfileStatus::Unknown {
+                writeln!(f, "  hash:          {}", hex_encode(&p.hash))?;
+                for c in &p.clauses {
+                    let mark = if c.passed { "ok  " } else { "FAIL" };
+                    writeln!(f, "  {mark} {}: {}", c.id, c.detail)?;
                 }
             }
         }

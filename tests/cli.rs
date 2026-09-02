@@ -1440,3 +1440,111 @@ fn query_human_rendering_reports_annotations() {
         "{text}"
     );
 }
+
+// --- validate --require-profile: bellbook-core-v1 (RFC-0003, SPEC 12.2) ---
+
+#[test]
+fn rules_init_output_is_baseline_conformant() {
+    // A generated rule set carries the baseline thresholds by default, so the
+    // quickstart flow validates Conformant with no extra ceremony.
+    let dir = tempfile::tempdir().unwrap();
+    let rules = dir.path().join("rules.json");
+    let out = bellbook()
+        .args(["rules", "init", "--author", "agent:provider", "--out"])
+        .arg(&rules)
+        .output()
+        .unwrap();
+    assert!(out.status.success());
+    let v: Value = serde_json::from_slice(&std::fs::read(&rules).unwrap()).unwrap();
+    let t = &v["evidence_thresholds"];
+    assert!(t.to_string().contains("Candidate"), "{t}");
+
+    let env = Env {
+        log: dir.path().join("log"),
+        rules,
+        _dir: dir,
+    };
+    let _c0 = add_root(&env, TREE_A);
+    let receipt = env._dir.path().join("r.json");
+    let out = run(&env, &["export", "--out", receipt.to_str().unwrap()]);
+    assert!(out.status.success());
+
+    let out = bellbook()
+        .args(["validate", "--require-profile", "bellbook-core-v1"])
+        .arg(&receipt)
+        .output()
+        .unwrap();
+    assert_eq!(
+        out.status.code(),
+        Some(0),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let text = String::from_utf8_lossy(&out.stdout).to_string();
+    assert!(
+        text.contains("profile bellbook-core-v1: CONFORMANT"),
+        "{text}"
+    );
+    assert!(text.contains("ok   B3:"), "{text}");
+}
+
+#[test]
+fn non_conformant_receipt_exits_3_and_verdict_is_reported() {
+    // Rules hand-written without thresholds validate Clean (exit 0 without a
+    // profile request) but miss the baseline: exit 3, verdict still shown.
+    let env = setup(); // rules_json() has no thresholds
+    let _c0 = add_root(&env, TREE_A);
+    let receipt = env._dir.path().join("r.json");
+    let out = run(&env, &["export", "--out", receipt.to_str().unwrap()]);
+    assert!(out.status.success());
+
+    let out = bellbook().arg("validate").arg(&receipt).output().unwrap();
+    assert_eq!(out.status.code(), Some(0));
+
+    let out = bellbook()
+        .args([
+            "validate",
+            "--require-profile",
+            "bellbook-core-v1",
+            "--json",
+        ])
+        .arg(&receipt)
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(3));
+    let v: Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(v["status"], "Clean");
+    assert_eq!(v["profiles"][0]["id"], "bellbook-core-v1");
+    assert_eq!(v["profiles"][0]["status"], "NonConformant");
+    let b3 = v["profiles"][0]["clauses"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|c| c["id"] == "B3")
+        .unwrap();
+    assert_eq!(b3["passed"], false);
+}
+
+#[test]
+fn unknown_profile_counts_as_not_met() {
+    let env = setup();
+    let _c0 = add_root(&env, TREE_A);
+    let receipt = env._dir.path().join("r.json");
+    let out = run(&env, &["export", "--out", receipt.to_str().unwrap()]);
+    assert!(out.status.success());
+    let out = bellbook()
+        .args(["validate", "--require-profile", "made-up-v1"])
+        .arg(&receipt)
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(3));
+    assert!(String::from_utf8_lossy(&out.stdout).contains("profile made-up-v1: UNKNOWN"));
+
+    // Usage errors stay 64.
+    let out = bellbook()
+        .args(["validate", "--require-profile"])
+        .arg(&receipt)
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(64));
+}

@@ -28,6 +28,7 @@ bellbook - accountability-ledger tools
 
 USAGE:
     bellbook validate <receipt-file> [--json] [--max-size <bytes>]
+                           [--require-profile <id>] ...
     bellbook candidate add --log <dir> --rules <file> --author <id>
                            --git-tree <oid> [--git-commit <oid>] [--algo sha1|sha256]
                            [--manifest <path-to-tree>]
@@ -56,6 +57,9 @@ COMMANDS:
     validate    Verify a receipt offline: ids (RFC 8785 canonical form),
                 gap-free logical time, verdict re-derivation, signatures,
                 evidence derivation, taint, and the standing section.
+                --require-profile evaluates a named profile (currently
+                bellbook-core-v1) and reports it alongside the verdict;
+                a receipt that validates but does not conform exits 3.
     candidate   Record a Candidate (a proposed source state).
     eval        Record an Evaluation of a candidate.
     select      Record a Selection over candidates (or a reaffirmation).
@@ -76,8 +80,8 @@ COMMANDS:
                 `bellbook validate` verifies).
 
 EXIT CODES:
-    0 clean/success   1 invalid   2 tainted   64 usage   65 command failed
-    66 unreadable input   70 internal error\
+    0 clean/success   1 invalid   2 tainted   3 profile not met   64 usage
+    65 command failed   66 unreadable input   70 internal error\
 ";
 
 fn main() -> ExitCode {
@@ -229,7 +233,9 @@ fn cmd_rules(rest: &[String]) -> ExitCode {
         }
     }
 
-    let mut rules = VerifierRules::new(default_space(), max_context);
+    // Baseline evidence thresholds (RFC-0003 clause B3) are on by default so
+    // a generated rule set conforms to bellbook-core-v1 out of the box.
+    let mut rules = VerifierRules::new(default_space(), max_context).with_baseline_thresholds();
     for (id, role) in authors {
         rules = rules.with_author_role(id, role);
     }
@@ -268,10 +274,22 @@ fn cmd_validate(rest: &[String]) -> ExitCode {
     let mut file: Option<&str> = None;
     let mut json = false;
     let mut max_size = DEFAULT_MAX_SIZE;
+    let mut profiles: Vec<&str> = Vec::new();
     let mut it = rest.iter();
     while let Some(arg) = it.next() {
         match arg.as_str() {
             "--json" => json = true,
+            "--require-profile" => {
+                let Some(v) = it.next() else {
+                    eprintln!("--require-profile requires a profile id\n\n{USAGE}");
+                    return ExitCode::from(64);
+                };
+                if v.is_empty() || v.starts_with('-') {
+                    eprintln!("--require-profile requires a profile id (found {v:?})");
+                    return ExitCode::from(64);
+                }
+                profiles.push(v.as_str());
+            }
             "--max-size" => {
                 let Some(v) = it.next() else {
                     eprintln!("--max-size requires a value\n\n{USAGE}");
@@ -324,7 +342,7 @@ fn cmd_validate(rest: &[String]) -> ExitCode {
         max_bytes: usize::try_from(max_size).unwrap_or(usize::MAX),
         ..ValidationLimits::default()
     };
-    let report = validate_with_limits(&bytes, &limits);
+    let report = validate_with_profiles(&bytes, &limits, &profiles);
 
     if json {
         match serde_json::to_string_pretty(&report) {
@@ -338,9 +356,19 @@ fn cmd_validate(rest: &[String]) -> ExitCode {
         print!("{report}");
     }
 
+    // Verdict first: an Invalid receipt is 1 whatever was requested.
+    // A receipt that validates but misses a required profile is 3 - a
+    // distinct answer from "valid" so a caller cannot mistake one for the
+    // other. Unknown profile ids count as not met: the caller asked for a
+    // guarantee this validator cannot evaluate.
+    let profile_missed = report
+        .profiles
+        .iter()
+        .any(|p| p.status != ProfileStatus::Conformant);
     match report.status {
-        ValidationStatus::Clean => ExitCode::SUCCESS,
         ValidationStatus::Invalid => ExitCode::from(1),
+        _ if profile_missed => ExitCode::from(3),
+        ValidationStatus::Clean => ExitCode::SUCCESS,
         ValidationStatus::Tainted => ExitCode::from(2),
     }
 }

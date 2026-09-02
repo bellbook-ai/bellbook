@@ -223,7 +223,10 @@ its embedded rules, and nothing is retracted or tainted. It does **not** mean
 the candidate is good, the benchmark was right, or that every decision was
 recorded - Bellbook proves consistency, not completeness (SPEC.md §13). Compare
 `rules_hash` against a rule set you trust before relying on a receipt from
-someone else.
+someone else, or ask for the shared baseline: `bellbook validate receipt.json
+--require-profile bellbook-core-v1` reports whether the embedded rules have
+the [`bellbook-core-v1`](profiles/bellbook-core-v1.md) shape (the rules
+generated above do), alongside the verdict and without changing it.
 
 ## Next
 

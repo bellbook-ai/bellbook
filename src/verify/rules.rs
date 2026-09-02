@@ -231,6 +231,26 @@ impl VerifierRules {
         self
     }
 
+    /// Set the minimum evidence strength for a kind (see
+    /// `evidence_thresholds`). Returns self for chaining during rules
+    /// construction.
+    pub fn with_evidence_threshold(mut self, kind: Kind, threshold: Evidence) -> Self {
+        self.evidence_thresholds.insert(kind, threshold);
+        self
+    }
+
+    /// Apply the `bellbook-core-v1` baseline thresholds (RFC-0003 section
+    /// 4.5, clause B3): Candidate and Evaluation no weaker than `Reported`,
+    /// Selection no weaker than `Inferred` - each exactly the schema base
+    /// class, so the rules admit nothing weaker than what the kinds already
+    /// derive. `rules init` and `default_rules` apply this by default so
+    /// generated rule sets are baseline-conformant.
+    pub fn with_baseline_thresholds(self) -> Self {
+        self.with_evidence_threshold(Kind::Candidate, Evidence::Reported)
+            .with_evidence_threshold(Kind::Evaluation, Evidence::Reported)
+            .with_evidence_threshold(Kind::Selection, Evidence::Inferred)
+    }
+
     /// Restrict reaffirming Selections to an identity allowlist (see
     /// `reaffirmation_actors`); the first call switches the set from
     /// "anyone with a valid role" to "listed actors only". Returns self for

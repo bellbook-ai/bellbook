@@ -27,6 +27,7 @@ import sys
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 import bellbook_conformance as bb  # noqa: E402
+import bellbook_profiles as bp  # noqa: E402
 import bellbook_queries as bq  # noqa: E402
 import bellbook_verdict as bv  # noqa: E402
 
@@ -358,6 +359,57 @@ def run_query_cases() -> tuple[int, list[str]]:
     return assertions, notes
 
 
+def run_profile_cases() -> tuple[int, list[str]]:
+    """bellbook-core-v1 (RFC-0003 section 4.5): recompute the profile hash
+    from the published clause table, then re-derive every stored profile
+    result - status and per-clause pass flags - from the stored receipt with
+    the from-scratch implementation in `bellbook_profiles.py`."""
+    pdir = ROOT / "spec" / "profiles" / "bellbook-core-v1"
+    table = load(pdir / "profile.json")
+    doc = load(pdir / "cases.json")
+    cases = doc["cases"]
+    check(len(cases) > 0, "profile cases.json is empty")
+    declared = bb.bytes32(doc["hash"])
+    check(
+        bp.profile_hash(table) == declared,
+        "profile hash recomputed from profile.json differs from the declared hash",
+    )
+    assertions = 1
+    statuses: dict[str, int] = {}
+    failing_clauses: set[str] = set()
+    for c in cases:
+        rc = c["receipt"]
+        records = rc["records"]
+        with _quiet_native_stderr():
+            report = bv.validate_receipt(records, rc["rules"])
+        got = bp.evaluate(doc["profile"], rc["rules"], records, report, table)
+        expect = c["expect"]
+        check(
+            got["status"] == expect["status"],
+            f"profile case `{c['name']}`: status {got['status']} differs from {expect['status']}",
+        )
+        check(got["hash"] == declared, f"profile case `{c['name']}`: hash differs")
+        got_flags = [(k["id"], k["passed"]) for k in got["clauses"]]
+        exp_flags = [(k["id"], k["passed"]) for k in expect["clauses"]]
+        check(
+            got_flags == exp_flags,
+            f"profile case `{c['name']}`: clause results differ:\n  got:    {got_flags}\n  expect: {exp_flags}",
+        )
+        assertions += 3
+        statuses[got["status"]] = statuses.get(got["status"], 0) + 1
+        failing_clauses.update(k["id"] for k in got["clauses"] if not k["passed"])
+    # Coverage: both outcomes appear, and every failable clause has a
+    # rejecting vector (B5 and B6 are reporting clauses and always hold).
+    check("Conformant" in statuses and "NonConformant" in statuses, "profile corpus covers one outcome only")
+    missing = {"B1", "B2", "B3", "B4"} - failing_clauses
+    check(not missing, f"profile corpus has no rejecting vector for: {sorted(missing)}")
+    notes = [
+        "outcomes: " + ", ".join(f"{k}={statuses[k]}" for k in sorted(statuses)),
+        "rejecting vectors cover clauses: " + ", ".join(sorted(failing_clauses)),
+    ]
+    return assertions, notes
+
+
 def main() -> int:
     sections = [
         ("test vectors", run_test_vectors),
@@ -365,6 +417,7 @@ def main() -> int:
         ("receipt cases (structure + hashes)", run_receipt_cases),
         ("malformed cases (rejection)", run_malformed_cases),
         ("query cases (RFC-0002 named set)", run_query_cases),
+        ("profile cases (bellbook-core-v1)", run_profile_cases),
     ]
     total = 0
     all_notes: list[tuple[str, list[str]]] = []
@@ -384,9 +437,9 @@ def main() -> int:
     print("Independent implementation agrees with the Rust reference on")
     print("canonicalization, record ids, head/rules hashes, strict decoding,")
     print("structural log integrity, and the full verdict rule battery")
-    print("(per-record verdicts, retraction, and taint), and the RFC-0002")
-    print("named query set, across the vectors")
-    print("and the entire conformance corpus.")
+    print("(per-record verdicts, retraction, and taint), the RFC-0002")
+    print("named query set, and the bellbook-core-v1 profile, across the")
+    print("vectors and the entire conformance corpus.")
     return 0
 
 
