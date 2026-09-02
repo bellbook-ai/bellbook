@@ -29,17 +29,29 @@ bellbook - accountability-ledger tools
 USAGE:
     bellbook validate <receipt-file> [--json] [--max-size <bytes>]
                            [--require-profile <id>] ...
+    bellbook request add   --log <dir> --rules <file> --author <id>
+                           --objective <s> [--json]
+    bellbook requirement add --log <dir> --rules <file> --author <id>
+                           --request <id> --key <s> --description <s>
+                           [--optional] [--expected-evidence <s>]
+                           [--provenance user-authored|derived] [--json]
     bellbook candidate add --log <dir> --rules <file> --author <id>
                            --git-tree <oid> [--git-commit <oid>] [--algo sha1|sha256]
                            [--manifest <path-to-tree>]
+                           [--artifact <scheme>:<digest>[:<name>] ...]
                            [--continues <selection-id> --parent <candidate-id>
                             | --derives-from <id> ...
                             | --upgrades <candidate-id>]
                            [--note <s>] [--json]
     bellbook eval add      --log <dir> --rules <file> --author <id>
                            --candidate <id> --criterion <s>
-                           (--passed | --failed | --score <value> --scale <n>)
+                           (--passed | --failed | --score <value> --scale <n>
+                            | --blocked | --insufficient | --stale | --not-run)
                            [--procedure <s>] [--uses <id> ...] [--json]
+                           [--evaluator <id> --basis recomputed|declared
+                            [--evaluator-version <s>] [--procedure-hash <hex>]
+                            [--input-hash <hex>] [--requirement <id> ...]
+                            [--artifact <scheme>:<digest>[:<name>] ...]]
     bellbook select        --log <dir> --rules <file> --author <id>
                            --objective <s> --consider <id> ...
                            (--choose <id> ... --uses-eval <id> ... | --none)
@@ -65,8 +77,23 @@ COMMANDS:
                 that validates but does not conform to a declared or
                 required profile exits 3, as does a declaration whose
                 version or hash is not the profile this binary evaluated.
-    candidate   Record a Candidate (a proposed source state).
-    eval        Record an Evaluation of a candidate.
+    request     Record a Request (what a person asked for). Author must be
+                a user role; requirements bind to it.
+    requirement Record a Requirement under a request: an addressable
+                statement of what it requires, with a key unique among the
+                request's live requirements. --provenance defaults from the
+                author's role (user -> user-authored, provider or system ->
+                derived); the verifier binds the two.
+    candidate   Record a Candidate (a proposed source state). --artifact
+                binds artifact identities (registered schemes: git-tree-sha1,
+                git-tree-sha256, manifest-v1, git-archive-tar-v1,
+                oci-image-manifest, sha256-bytes).
+    eval        Record an Evaluation of a candidate. With --evaluator and
+                --basis it records the extended shape (bellbook.evaluation.v2):
+                who decided with what procedure over what input, the
+                artifacts judged (--artifact), the requirements it speaks to
+                (--requirement), and the fail-closed outcomes; only --passed
+                passes. Without them it records the v1 shape.
     select      Record a Selection over candidates (or a reaffirmation).
     retract     Assert a committed record's content is wrong. The target
                 stays in the log; the receipt reports Tainted from then on.
@@ -102,9 +129,8 @@ fn main() -> ExitCode {
     match command {
         "validate" => cmd_validate(&rest),
         "rules" => cmd_rules(&rest),
-        "candidate" | "eval" | "select" | "retract" | "lineage" | "export" | "query" => {
-            cmd_evolution(command, &rest)
-        }
+        "request" | "requirement" | "candidate" | "eval" | "select" | "retract" | "lineage"
+        | "export" | "query" => cmd_evolution(command, &rest),
         other => {
             eprintln!("unknown command {other:?}\n\n{USAGE}");
             ExitCode::from(64)
@@ -387,6 +413,8 @@ fn cmd_evolution(command: &str, _rest: &[String]) -> ExitCode {
 #[cfg(feature = "persist")]
 fn cmd_evolution(command: &str, rest: &[String]) -> ExitCode {
     let result = match command {
+        "request" => persist_cmds::request(rest),
+        "requirement" => persist_cmds::requirement(rest),
         "candidate" => persist_cmds::candidate(rest),
         "eval" => persist_cmds::eval(rest),
         "select" => persist_cmds::select(rest),
@@ -525,6 +553,48 @@ mod persist_cmds {
         hex_decode(hex).ok_or_else(|| format!("invalid record id {hex:?}"))
     }
 
+    fn parse_hash(flag: &str, hex: &str) -> Result<Hash256, String> {
+        hex_decode(hex).ok_or_else(|| format!("invalid --{flag} {hex:?} (expected 64 hex chars)"))
+    }
+
+    /// `--artifact <scheme>:<digest>[:<name>]`, repeatable. Each reference
+    /// is checked against the artifact rule before anything is written
+    /// (scheme token, lowercase-hex digest of the scheme's length), and the
+    /// list is sorted and deduplicated into the canonical order the verifier
+    /// requires, so a well-formed command never mints an
+    /// `ArtifactRefInvalid` record. `None` when no flag was given.
+    fn parse_artifacts(p: &Parsed) -> Result<Option<Vec<ArtifactRef>>, String> {
+        let Some(specs) = p.multis.get("artifact") else {
+            return Ok(None);
+        };
+        let mut refs = Vec::with_capacity(specs.len());
+        for spec in specs {
+            let mut parts = spec.splitn(3, ':');
+            let scheme = parts.next().unwrap_or_default().to_string();
+            let digest = parts
+                .next()
+                .ok_or_else(|| {
+                    format!("invalid --artifact {spec:?} (expected <scheme>:<digest>[:<name>])")
+                })?
+                .to_string();
+            let name = parts.next().map(str::to_string);
+            let a = ArtifactRef {
+                scheme,
+                digest,
+                name,
+            };
+            if !artifact_ref_well_formed(&a) {
+                return Err(format!(
+                    "invalid --artifact {spec:?}: scheme must match [a-z0-9][a-z0-9.-]* and the digest must be lowercase hex of the scheme's length"
+                ));
+            }
+            refs.push(a);
+        }
+        refs.sort();
+        refs.dedup();
+        Ok(Some(refs))
+    }
+
     /// Look up an accepted Candidate by id and decode its payload.
     fn find_candidate(records: &[Record], id: RecordId) -> Option<CandidateData> {
         records
@@ -638,6 +708,153 @@ mod persist_cmds {
         Ok(ExitCode::SUCCESS)
     }
 
+    // --- request add -------------------------------------------------------
+
+    /// Record a Request: what a person asked for. Single-thread CLI, so the
+    /// request's scope is the space and it has no parent request. The
+    /// verifier admits only a user-role author.
+    pub fn request(rest: &[String]) -> Result<ExitCode, String> {
+        let (sub, rest) = rest
+            .split_first()
+            .ok_or_else(|| "request needs a subcommand (add)".to_string())?;
+        if sub != "add" {
+            return Err(format!("unknown request subcommand {sub:?} (expected add)"));
+        }
+        let p = parse(
+            rest,
+            &["log", "rules", "author", "objective"],
+            &[],
+            &["json"],
+        )?;
+        let rules = load_rules(&p)?;
+        let (writer, state) = open(&p, &rules)?;
+        let author = author(&rules, &p)?;
+        let objective = require(&p, "objective")?.to_string();
+        let data = checked_encode(&RequestData {
+            objective,
+            scope: rules.space,
+            attachments: Vec::new(),
+            parent_request_id: None,
+        })?;
+        let proposal = Proposal {
+            space: rules.space,
+            thread: rules.space,
+            author,
+            kind: Kind::Request,
+            schema: schema_id(SCHEMA_REQUEST),
+            data,
+            refs: Vec::new(),
+        };
+        commit_and_print(writer, &rules, state, proposal, p.bools.contains("json"))
+    }
+
+    // --- requirement add ---------------------------------------------------
+
+    /// Record a Requirement under a request (spec 0.4). Exactly one `Cause`
+    /// to the request; the key must be unique among the request's accepted,
+    /// unretracted requirements, and provenance is bound to the author's
+    /// role by the verifier - the CLI derives the default from the role and
+    /// refuses a stated provenance the role cannot carry, so a mismatch is a
+    /// clean error rather than a durable rejected record.
+    pub fn requirement(rest: &[String]) -> Result<ExitCode, String> {
+        let (sub, rest) = rest
+            .split_first()
+            .ok_or_else(|| "requirement needs a subcommand (add)".to_string())?;
+        if sub != "add" {
+            return Err(format!(
+                "unknown requirement subcommand {sub:?} (expected add)"
+            ));
+        }
+        let p = parse(
+            rest,
+            &[
+                "log",
+                "rules",
+                "author",
+                "request",
+                "key",
+                "description",
+                "expected-evidence",
+                "provenance",
+            ],
+            &[],
+            &["json", "optional"],
+        )?;
+        let rules = load_rules(&p)?;
+        let (writer, state) = open(&p, &rules)?;
+        let author = author(&rules, &p)?;
+
+        let request = parse_id(require(&p, "request")?)?;
+        if !state.accepted_records.contains(&request)
+            || !writer
+                .records()
+                .iter()
+                .any(|r| r.id == request && r.kind == Kind::Request)
+        {
+            return Err(format!(
+                "--request {} is not an accepted Request in this log",
+                hex_encode(&request)
+            ));
+        }
+        let key = require(&p, "key")?.to_string();
+        let description = require(&p, "description")?.to_string();
+        if key.is_empty() || description.is_empty() {
+            return Err("--key and --description must be non-empty".into());
+        }
+        let role_default = match author.type_ {
+            AuthorType::User => Provenance::UserAuthored,
+            AuthorType::Provider | AuthorType::System => Provenance::Derived,
+            other => {
+                return Err(format!(
+                    "author {:?} has role {other:?}, which cannot author a Requirement",
+                    author.id
+                ))
+            }
+        };
+        let provenance = match p.singles.get("provenance").map(String::as_str) {
+            None => role_default,
+            Some("user-authored") => Provenance::UserAuthored,
+            Some("derived") => Provenance::Derived,
+            Some(other) => {
+                return Err(format!(
+                    "invalid --provenance {other:?} (expected user-authored or derived)"
+                ))
+            }
+        };
+        if provenance != role_default {
+            return Err(format!(
+                "--provenance {} cannot be authored by {:?} (role {:?}): provenance is bound to the author's role",
+                match provenance {
+                    Provenance::UserAuthored => "user-authored",
+                    Provenance::Derived => "derived",
+                },
+                author.id,
+                author.type_
+            ));
+        }
+
+        let data = checked_encode(&RequirementData {
+            key,
+            description,
+            required: !p.bools.contains("optional"),
+            expected_evidence: p.singles.get("expected-evidence").cloned(),
+            provenance,
+        })?;
+        let proposal = Proposal {
+            space: rules.space,
+            thread: rules.space,
+            author,
+            kind: Kind::Requirement,
+            schema: schema_id(SCHEMA_REQUIREMENT),
+            data,
+            refs: vec![Ref {
+                type_: RefType::Cause,
+                target: request,
+            }],
+        };
+        commit_and_print(writer, &rules, state, proposal, p.bools.contains("json"))
+    }
+
     // --- candidate add -----------------------------------------------------
 
     pub fn candidate(rest: &[String]) -> Result<ExitCode, String> {
@@ -664,7 +881,7 @@ mod persist_cmds {
                 "parent",
                 "upgrades",
             ],
-            &["derives-from"],
+            &["derives-from", "artifact"],
             &["json"],
         )?;
         let rules = load_rules(&p)?;
@@ -768,7 +985,7 @@ mod persist_cmds {
         };
 
         let data = checked_encode(&CandidateData {
-            artifacts: None,
+            artifacts: parse_artifacts(&p)?,
             source: SourceBinding {
                 git: GitSource { algo, tree, commit },
                 manifest_hash: manifest_hash_val,
@@ -811,9 +1028,22 @@ mod persist_cmds {
                 "procedure",
                 "score",
                 "scale",
+                "evaluator",
+                "evaluator-version",
+                "procedure-hash",
+                "input-hash",
+                "basis",
             ],
-            &["uses"],
-            &["json", "passed", "failed"],
+            &["uses", "requirement", "artifact"],
+            &[
+                "json",
+                "passed",
+                "failed",
+                "blocked",
+                "insufficient",
+                "stale",
+                "not-run",
+            ],
         )?;
         let rules = load_rules(&p)?;
         let (writer, state) = open(&p, &rules)?;
@@ -823,30 +1053,108 @@ mod persist_cmds {
         let criterion = require(&p, "criterion")?.to_string();
         let procedure = p.singles.get("procedure").cloned();
 
-        let outcome = match (
-            p.bools.contains("passed"),
-            p.bools.contains("failed"),
-            p.singles.get("score"),
-        ) {
-            (true, false, None) => EvaluationOutcome::Passed,
-            (false, true, None) => EvaluationOutcome::Failed,
-            (false, false, Some(score)) => {
+        // Exactly one outcome. The four fail-closed outcomes exist only in
+        // the extended shape (spec 0.4); v1 knows passed, failed, scored.
+        let unit_outcomes: Vec<&str> = [
+            "passed",
+            "failed",
+            "blocked",
+            "insufficient",
+            "stale",
+            "not-run",
+        ]
+        .into_iter()
+        .filter(|f| p.bools.contains(*f))
+        .collect();
+        let scored = match p.singles.get("score") {
+            Some(score) => {
                 let value = score
                     .parse::<i64>()
                     .map_err(|_| "invalid --score".to_string())?;
                 let scale = require(&p, "scale")?
                     .parse::<u8>()
                     .map_err(|_| "invalid --scale".to_string())?;
-                EvaluationOutcome::Scored(ScoredValue { value, scale })
+                Some(ScoredValue { value, scale })
             }
-            _ => return Err("exactly one of --passed, --failed, or --score is required".into()),
+            None => None,
+        };
+        if unit_outcomes.len() + usize::from(scored.is_some()) != 1 {
+            return Err("exactly one outcome is required: --passed, --failed, --score <value> --scale <n>, --blocked, --insufficient, --stale, or --not-run".into());
+        }
+        let outcome_v2 = match (unit_outcomes.first().copied(), scored) {
+            (_, Some(s)) => EvaluationOutcomeV2::Scored(s),
+            (Some("passed"), None) => EvaluationOutcomeV2::Passed,
+            (Some("failed"), None) => EvaluationOutcomeV2::Failed,
+            (Some("blocked"), None) => EvaluationOutcomeV2::Blocked,
+            (Some("insufficient"), None) => EvaluationOutcomeV2::Insufficient,
+            (Some("stale"), None) => EvaluationOutcomeV2::Stale,
+            (Some("not-run"), None) => EvaluationOutcomeV2::NotRun,
+            _ => unreachable!("one outcome flag was checked above"),
         };
 
-        // The evaluation must Use its candidate, plus any extra --uses refs.
+        // The extended shape is chosen by its binding flags: --evaluator and
+        // --basis together, since basis is declared and never inferred. Any
+        // other 0.4-only flag or outcome needs them, and a mismatch is a
+        // clean error rather than a rejected record.
+        let extended_flags: Vec<&str> = [
+            "evaluator",
+            "evaluator-version",
+            "procedure-hash",
+            "input-hash",
+            "basis",
+        ]
+        .into_iter()
+        .filter(|f| p.singles.contains_key(*f))
+        .chain(
+            ["requirement", "artifact"]
+                .into_iter()
+                .filter(|f| p.multis.contains_key(*f)),
+        )
+        .chain(
+            ["blocked", "insufficient", "stale", "not-run"]
+                .into_iter()
+                .filter(|f| p.bools.contains(*f)),
+        )
+        .collect();
+        let extended = !extended_flags.is_empty();
+        if extended && !(p.singles.contains_key("evaluator") && p.singles.contains_key("basis")) {
+            return Err(format!(
+                "the extended evaluation (--{}) requires both --evaluator <id> and --basis recomputed|declared",
+                extended_flags.join(", --")
+            ));
+        }
+
+        // The evaluation must Use its candidate, then each requirement it
+        // speaks to (mirrored in the payload), then any extra --uses refs.
         let mut refs = vec![Ref {
             type_: RefType::Use,
             target: candidate,
         }];
+        let mut requirements: Vec<RecordId> = p
+            .multis
+            .get("requirement")
+            .map(|ids| ids.iter().map(|s| parse_id(s)).collect::<Result<_, _>>())
+            .transpose()?
+            .unwrap_or_default();
+        requirements.sort();
+        requirements.dedup();
+        for rid in &requirements {
+            if !writer
+                .records()
+                .iter()
+                .any(|r| r.id == *rid && r.kind == Kind::Requirement)
+                || !state.accepted_records.contains(rid)
+            {
+                return Err(format!(
+                    "--requirement {} is not an accepted Requirement in this log",
+                    hex_encode(rid)
+                ));
+            }
+            refs.push(Ref {
+                type_: RefType::Use,
+                target: *rid,
+            });
+        }
         if let Some(extra) = p.multis.get("uses") {
             for s in extra {
                 refs.push(Ref {
@@ -856,19 +1164,68 @@ mod persist_cmds {
             }
         }
 
-        let data = checked_encode(&EvaluationData {
-            candidate,
-            criterion,
-            procedure,
-            outcome,
-        })?;
+        let (schema, data) = if extended {
+            let evaluator_id = require(&p, "evaluator")?.to_string();
+            if evaluator_id.is_empty() {
+                return Err("--evaluator must be non-empty".into());
+            }
+            let basis = match require(&p, "basis")? {
+                "recomputed" => Basis::Recomputed,
+                "declared" => Basis::Declared,
+                other => {
+                    return Err(format!(
+                        "invalid --basis {other:?} (expected recomputed or declared)"
+                    ))
+                }
+            };
+            let procedure_hash = p
+                .singles
+                .get("procedure-hash")
+                .map(|h| parse_hash("procedure-hash", h))
+                .transpose()?;
+            let input_hash = p
+                .singles
+                .get("input-hash")
+                .map(|h| parse_hash("input-hash", h))
+                .transpose()?;
+            let data = checked_encode(&EvaluationDataV2 {
+                candidate,
+                criterion,
+                procedure,
+                outcome: outcome_v2,
+                evaluator: DeciderBinding {
+                    id: evaluator_id,
+                    version: p.singles.get("evaluator-version").cloned(),
+                    procedure_hash,
+                    input_hash,
+                },
+                basis,
+                evidence: parse_artifacts(&p)?.unwrap_or_default(),
+                requirements,
+            })?;
+            (SCHEMA_EVALUATION_V2, data)
+        } else {
+            let outcome = match outcome_v2 {
+                EvaluationOutcomeV2::Passed => EvaluationOutcome::Passed,
+                EvaluationOutcomeV2::Failed => EvaluationOutcome::Failed,
+                EvaluationOutcomeV2::Scored(s) => EvaluationOutcome::Scored(s),
+                _ => unreachable!("fail-closed outcomes select the extended shape"),
+            };
+            let data = checked_encode(&EvaluationData {
+                candidate,
+                criterion,
+                procedure,
+                outcome,
+            })?;
+            (SCHEMA_EVALUATION, data)
+        };
 
         let proposal = Proposal {
             space: rules.space,
             thread: rules.space,
             author,
             kind: Kind::Evaluation,
-            schema: schema_id(SCHEMA_EVALUATION),
+            schema: schema_id(schema),
             data,
             refs,
         };
@@ -1045,6 +1402,18 @@ mod persist_cmds {
         }
         if n.retracted {
             s.push_str(", retracted");
+        }
+        // Bindings (spec 0.4), where present: what the record was bound to.
+        if !n.artifacts.is_empty() {
+            let list: Vec<String> = n
+                .artifacts
+                .iter()
+                .map(|a| format!("{}:{}", a.scheme, a.digest))
+                .collect();
+            s.push_str(&format!(", artifacts {}", list.join(" ")));
+        }
+        if !n.requirements.is_empty() {
+            s.push_str(&format!(", requirements {}", n.requirements.join(" ")));
         }
         s.push(']');
         s

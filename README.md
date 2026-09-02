@@ -239,11 +239,18 @@ round-trips, so pipelines can chain ids without scraping text.
 ```
 bellbook rules init    --author <id>:<role>... [--admin <id>]... [--reaffirmer <id>]...
                        [--max-context <n>] [--out <file>]
+bellbook request add   --log <dir> --rules <file> --author <id> --objective <s>
+bellbook requirement add --log <dir> --rules <file> --author <id> --request <id> \
+         --key <s> --description <s> [--optional] [--expected-evidence <s>]
 bellbook candidate add --log <dir> --rules <file> --author <id> \
-         --git-tree <oid> [--continues <sel> --parent <cand>
+         --git-tree <oid> [--artifact <scheme>:<digest>[:<name>]...]
+                          [--continues <sel> --parent <cand>
                            | --derives-from <id>... | --upgrades <cand>]
 bellbook eval add      --log <dir> --rules <file> --author <id> \
-         --candidate <id> --criterion <s> (--passed | --failed | --score <v> --scale <n>)
+         --candidate <id> --criterion <s> (--passed | --failed | --score <v> --scale <n>
+                          | --blocked | --insufficient | --stale | --not-run)
+                          [--evaluator <id> --basis recomputed|declared
+                           [--requirement <id>...] [--artifact <scheme>:<digest>...]]
 bellbook select        --log <dir> --rules <file> --author <id> --objective <s> \
          --consider <id>... (--choose <id>... --uses-eval <id>... | --none) [--replaces <sel>]
 bellbook retract       --log <dir> --rules <file> --author <id> \
@@ -256,8 +263,15 @@ bellbook export        --log <dir> --rules <file> [--out <file>]   # log -> rece
 
 The grammar above shows the load-bearing flags; optional ones
 (`--git-commit`, `--algo`, `--manifest`, `--note`, `--procedure`,
-`--uses`, `--rationale`, and `--json` on every command) are omitted for
-brevity. Run `bellbook` with no arguments for the full usage.
+`--uses`, `--rationale`, `--provenance`, `--evaluator-version`,
+`--procedure-hash`, `--input-hash`, and `--json` on every command) are
+omitted for brevity. Run `bellbook` with no arguments for the full usage.
+`eval add` writes the extended evaluation (`bellbook.evaluation.v2`: who
+decided, with what procedure, over what input, judging which artifacts
+against which requirements, with the fail-closed outcomes) when
+`--evaluator` and `--basis` are given, and the v1 shape otherwise; `query`
+reports a node's artifact identities and requirement bindings where
+present.
 
 **The log is single-writer by design.** `LogWriter` takes an exclusive
 lock on the directory for the life of the process, so exactly one

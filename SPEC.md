@@ -1289,7 +1289,11 @@ replay already computes (never stored, never ranked), answer only over
 verified state (an input that does not verify is an error, not answers),
 address only accepted records (a rejected record made no claim), and
 annotate every reported record with its standing, taint, and retraction
-status rather than filtering anything silently. `selected` matches its
+status rather than filtering anything silently; from spec 0.4 a reported
+record also carries, where present, the artifact identities it binds (a
+Candidate's or Result's `artifacts`, an extended Evaluation's `evidence`)
+and the requirement ids an extended Evaluation speaks to, absent otherwise
+so 0.3-shaped answers are unchanged. `selected` matches its
 objective exactly; there are no patterns, predicates, or composition
 (RFC-0002 section 7). The set reaches records through the relationships a
 decision creates: an accepted Evaluation that no Selection ever `Use`d

@@ -87,6 +87,25 @@ spec change since 0.3: spec version 0.4.
   declaration cases for a matching, stale-hash, wrong-version, unknown,
   and false claim; the Python validator mirrors the decoding rule and
   evaluates declarations from scratch.
+- **CLI surfaces for the 0.4 kinds** (#110). `bellbook request add`
+  (a user-role author's objective; requirements bind to it) and
+  `bellbook requirement add` (`--request`, `--key`, `--description`,
+  `--optional`, `--expected-evidence`, `--provenance` defaulting from the
+  author's role and refused when the role cannot carry it). `candidate
+  add` and `eval add` take `--artifact <scheme>:<digest>[:<name>]`
+  (repeatable), checked against the artifact rule and canonically ordered
+  before the write. `eval add` records the extended evaluation when
+  `--evaluator` and `--basis recomputed|declared` are given, with
+  `--evaluator-version`, `--procedure-hash`, `--input-hash`,
+  `--requirement` (repeatable, each mirrored by a `Use` ref), and the
+  fail-closed outcomes `--blocked`, `--insufficient`, `--stale`,
+  `--not-run`; without them it writes the v1 shape as before. The named
+  query set's `Node` gains `artifacts` and `requirements`, present only
+  where a record binds them, on every surface (the query vectors gain a
+  bound line and the Python validator reproduces the annotations). A CLI
+  story test drives request, requirements, a bound candidate, bound
+  evaluations, a selection, a declaring export, validation, the query
+  surface, and the taint a retracted requirement spreads.
 
 ### Changed
 

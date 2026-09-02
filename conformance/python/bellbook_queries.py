@@ -48,13 +48,26 @@ class QueryContext:
             standing = "unsound" if rid in self.unsound else "sound"
         else:
             standing = "n/a"
-        return {
+        node = {
             "id": rid,
             "kind": kind,
             "standing": standing,
             "tainted": rid in self.tainted,
             "retracted": rid in self.retracted,
         }
+        # Bindings (spec 0.4), reported as recorded and only where present:
+        # a Candidate's or Result's artifacts, an extended Evaluation's
+        # evidence and the requirements it speaks to.
+        data = bv.payload(r)
+        if kind in ("Candidate", "Result"):
+            if data.get("artifacts"):
+                node["artifacts"] = data["artifacts"]
+        elif kind == "Evaluation" and "evaluator" in data:
+            if data["evidence"]:
+                node["artifacts"] = data["evidence"]
+            if data["requirements"]:
+                node["requirements"] = [bv.h(x) for x in data["requirements"]]
+        return node
 
     def _cause_targets(self, r: dict) -> list[str]:
         return [bv.h(ref["target"]) for ref in bv.refs_of(r, "Cause")]
