@@ -234,6 +234,12 @@ fn scripted_log(dir: &std::path::Path) -> Vec<Record> {
             Kind::Result,
             SCHEMA_RESULT,
             encode(&ResultData {
+                artifacts: Some(vec![ArtifactRef {
+                    scheme: "sha256-bytes".into(),
+                    digest: "2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824"
+                        .into(),
+                    name: Some("demo.txt".into()),
+                }]),
                 action_id: action1_id,
                 status: ResultStatus::Success,
                 output: "wrote demo.txt".into(),
@@ -333,6 +339,7 @@ fn scripted_log(dir: &std::path::Path) -> Vec<Record> {
             Kind::Candidate,
             SCHEMA_CANDIDATE,
             encode(&CandidateData {
+                artifacts: None,
                 source: SourceBinding {
                     git: GitSource {
                         algo: SourceAlgo::Sha1,
@@ -415,6 +422,7 @@ fn scripted_log(dir: &std::path::Path) -> Vec<Record> {
             Kind::Candidate,
             SCHEMA_CANDIDATE,
             encode(&CandidateData {
+                artifacts: None,
                 source: SourceBinding {
                     git: GitSource {
                         algo: SourceAlgo::Sha256,
@@ -442,6 +450,19 @@ fn scripted_log(dir: &std::path::Path) -> Vec<Record> {
             Kind::Candidate,
             SCHEMA_CANDIDATE,
             encode(&CandidateData {
+                artifacts: Some(vec![
+                    ArtifactRef {
+                        scheme: "git-archive-tar-v1".into(),
+                        digest: "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+                            .into(),
+                        name: Some("repair.tar".into()),
+                    },
+                    ArtifactRef {
+                        scheme: "x-custom-digest".into(),
+                        digest: "0123456789abcdef0123456789abcdef0123456789abcdef".into(),
+                        name: None,
+                    },
+                ]),
                 source: SourceBinding {
                     git: GitSource {
                         algo: SourceAlgo::Sha1,
@@ -662,7 +683,7 @@ fn build_vector_file(records: &[Record]) -> VectorFile {
     vectors.sort_by_key(|v| v.time);
     VectorFile {
         spec_version: SPEC_VERSION.into(),
-        description: "One unsigned record of each non-evolution kind plus every evolution-kind (Candidate/Evaluation/Selection) subject from a fixed scripted log, so the richer v0.3 canonical forms (manifest binding, scored vs passed, none vs selected, continuation/derivation, Replace) are each pinned; plus a deterministic signed Request and valid alternate-key substitution. id = SHA-256(canonical id form); the domain-separated signing form wraps the record with id and author.signature omitted, while a signed canonical id form omits only id. space/thread/scope ids are SHA-256 of the given UTF-8 names."
+        description: "One unsigned record of each non-evolution kind plus every evolution-kind (Candidate/Evaluation/Selection) subject from a fixed scripted log, so the richer v0.3 canonical forms (manifest binding, scored vs passed, none vs selected, continuation/derivation, Replace) and the spec 0.4 `artifacts` list on a Candidate and a Result are each pinned; plus a deterministic signed Request and valid alternate-key substitution. id = SHA-256(canonical id form); the domain-separated signing form wraps the record with id and author.signature omitted, while a signed canonical id form omits only id. space/thread/scope ids are SHA-256 of the given UTF-8 names."
             .into(),
         space_name: SPACE_NAME.into(),
         thread_name: THREAD_NAME.into(),

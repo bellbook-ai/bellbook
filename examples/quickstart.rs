@@ -126,6 +126,7 @@ fn main() {
                 kind: Kind::Result,
                 schema: schema_id(SCHEMA_RESULT),
                 data: encode(&ResultData {
+                    artifacts: None,
                     action_id,
                     status: ResultStatus::Success,
                     output: "Revenue grew 12% quarter over quarter.".into(),

@@ -38,6 +38,7 @@ fn receipt_under(rules: &VerifierRules) -> Vec<u8> {
                 kind: Kind::Candidate,
                 schema: schema_id(SCHEMA_CANDIDATE),
                 data: encode(&CandidateData {
+                    artifacts: None,
                     source: SourceBinding {
                         git: GitSource {
                             algo: SourceAlgo::Sha1,

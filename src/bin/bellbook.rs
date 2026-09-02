@@ -754,6 +754,7 @@ mod persist_cmds {
         };
 
         let data = checked_encode(&CandidateData {
+            artifacts: None,
             source: SourceBinding {
                 git: GitSource { algo, tree, commit },
                 manifest_hash: manifest_hash_val,

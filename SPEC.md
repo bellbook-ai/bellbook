@@ -165,6 +165,37 @@ produced software states are proposed, judged, and chosen:
   none, rationale: Option<String> }`. Set-valued: one survivor for
   best-of-N or a repair accept, several for population evolution.
 
+**Artifact identity (spec 0.4).** A delivery claim must bind exact,
+content-addressed artifact identity as a real record field, never parsed
+out of an opaque `output` string. `ArtifactRef` is the one shape for that:
+
+```
+ArtifactRef {
+  scheme: String          // token [a-z0-9][a-z0-9.-]*
+  digest: String          // lowercase hex, even length, 20..=64 bytes
+  name:   Option<String>  // label only, never identity
+}
+```
+
+Registered schemes fix their digest length: `git-tree-sha1` (20 bytes),
+`git-tree-sha256` (32), `manifest-v1` (Bellbook's canonical manifest below,
+32), `git-archive-tar-v1` (SHA-256 over an archive of a tree, 32),
+`oci-image-manifest` (32), `sha256-bytes` (32). An unregistered scheme is
+accepted by the core under the generic length rule; a profile may restrict
+to registered ones. A digest identifies content, never a recording: a
+scheme whose input includes timestamps or run identifiers is not a valid
+scheme, so replays converge on the same reference. `Candidate` and
+`Result` payloads carry an optional `artifacts: [ArtifactRef]` list
+(produced or bound artifacts beyond a candidate's `source`, which is
+unchanged; produced artifacts and evidence bundles on a result). The list
+is strictly sorted and deduplicated by `(scheme, digest, name)`; a
+malformed entry or an unordered list rejects with `ArtifactRefInvalid`
+(§4.1). The field is **additive**: it is absent from the canonical form
+when not set, so every 0.3 payload keeps its canonical bytes and its id.
+Additive optional fields are how a schema's shape may grow within an epoch
+without a new schema name (§14); a change to a required field or a
+vocabulary is a new schema name.
+
 **Canonical manifest v1.** A `manifest` binding's `manifest_hash` is
 `SHA-256` over the JCS bytes of a canonical manifest: a JSON object mapping
 each repo-relative POSIX path to `{ "mode": <string>, "sha256": <64-hex> }`.
@@ -371,7 +402,10 @@ payload lookup.
 - a `Candidate`'s `source` must be well-formed (`tree`, and `commit` when
   present, lowercase hex of the length its `algo` dictates - 40 for `sha1`,
   64 for `sha256` - and `manifest_hash` present exactly when
-  `binding == Manifest`), else `SourceBindingInvalid`. Its `basis`
+  `binding == Manifest`), else `SourceBindingInvalid`. A present
+  `artifacts` list (spec 0.4) must be well-formed and strictly ordered
+  (§2), else `ArtifactRefInvalid`; the same rule applies to a `Result`'s
+  `artifacts`. Its `basis`
   obligations must hold, including acceptance of every `Cause` target at
   commit position: `Root` allows at most one `Cause`, targeting an accepted
   `Request`, and no `parent`; `Continuation` requires exactly one `Cause` to
@@ -441,7 +475,7 @@ reason codes:
 `Refused`, `InvalidPayload`, `InvalidCheckpoint`, `AuthorRoleInvalid`,
 `AuthorityRefMissing`, `SourceBindingInvalid`, `LineageInvalid`,
 `PayloadRefUnresolved`, `EvaluationInvalid`, `SelectionInvalid`,
-`ReaffirmationInvalid`.
+`ReaffirmationInvalid`, `ArtifactRefInvalid`.
 
 Signature checks follow §3.2: `SignatureMissing` for a required-but-absent
 signature, `SignatureInvalid` for any present signature that fails strict

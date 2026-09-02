@@ -174,6 +174,7 @@ fn external_action_proposal(request_id: RecordId, class: &str, authority: &[Reco
 
 fn result_proposal(action_id: RecordId) -> Proposal {
     let data = encode(&ResultData {
+        artifacts: None,
         action_id,
         status: ResultStatus::Success,
         output: "done".into(),
@@ -195,6 +196,7 @@ fn result_proposal(action_id: RecordId) -> Proposal {
 
 fn candidate_proposal(author_: Author) -> Proposal {
     let data = encode(&CandidateData {
+        artifacts: None,
         source: SourceBinding {
             git: GitSource {
                 algo: SourceAlgo::Sha1,
@@ -276,6 +278,44 @@ fn selection_proposal(
     }
 }
 
+// --- Artifact identity builders (spec 0.4). ---
+
+fn artifact(scheme: &str, digest: &str, name: Option<&str>) -> ArtifactRef {
+    ArtifactRef {
+        scheme: scheme.into(),
+        digest: digest.into(),
+        name: name.map(|s| s.to_string()),
+    }
+}
+
+/// A root Candidate (reported binding) carrying the given artifact list
+/// exactly as written, so malformed and unordered lists reach the verifier.
+fn candidate_with_artifacts(artifacts: Vec<ArtifactRef>) -> Proposal {
+    let mut p = candidate_proposal(provider_author());
+    let data = CandidateData {
+        source: default_source(),
+        basis: CandidateBasis::Root,
+        parent: None,
+        note: None,
+        artifacts: Some(artifacts),
+    };
+    p.data = encode(&data).unwrap();
+    p
+}
+
+/// A Result for `action_id` carrying the given artifact list.
+fn result_with_artifacts(action_id: RecordId, artifacts: Vec<ArtifactRef>) -> Proposal {
+    let mut p = result_proposal(action_id);
+    p.data = encode(&ResultData {
+        action_id,
+        status: ResultStatus::Success,
+        output: "done".into(),
+        artifacts: Some(artifacts),
+    })
+    .unwrap();
+    p
+}
+
 // --- Flexible evolution builders (for the lineage/selection rule battery). ---
 
 fn default_source() -> SourceBinding {
@@ -300,6 +340,7 @@ fn candidate_custom(
     refs: Vec<Ref>,
 ) -> Proposal {
     let data = encode(&CandidateData {
+        artifacts: None,
         source,
         basis,
         parent,
@@ -1220,6 +1261,120 @@ fn build_record_cases() -> Vec<RecordCase> {
         "A root Candidate with a reported Git binding.",
         base_rules(),
         |_w, _r, _s| cand(candidate_proposal(provider_author())),
+    ));
+    // --- Artifact identity (spec 0.4): the additive `artifacts` list. ---
+    cases.push(record_case(
+        "accept-candidate-with-artifacts",
+        "A root Candidate binding two artifacts beyond its source: a registered scheme with a label and an unregistered scheme under the generic digest rule, in (scheme, digest, name) order.",
+        base_rules(),
+        |_w, _r, _s| {
+            cand(candidate_with_artifacts(vec![
+                artifact("git-archive-tar-v1", &"ab".repeat(32), Some("src.tar")),
+                artifact("x-custom-digest", &"cd".repeat(24), None),
+            ]))
+        },
+    ));
+    cases.push(record_case(
+        "reject-candidate-artifact-digest-length",
+        "A registered scheme fixes its digest length: a git-tree-sha1 digest of 32 bytes rejects with ArtifactRefInvalid.",
+        base_rules(),
+        |_w, _r, _s| {
+            cand(candidate_with_artifacts(vec![artifact(
+                "git-tree-sha1",
+                &"ab".repeat(32),
+                None,
+            )]))
+        },
+    ));
+    cases.push(record_case(
+        "reject-candidate-artifact-digest-uppercase",
+        "Digests are lowercase hex; an uppercase digit rejects with ArtifactRefInvalid.",
+        base_rules(),
+        |_w, _r, _s| {
+            cand(candidate_with_artifacts(vec![artifact(
+                "sha256-bytes",
+                &format!("AB{}", "ab".repeat(31)),
+                None,
+            )]))
+        },
+    ));
+    cases.push(record_case(
+        "reject-candidate-artifact-scheme-token",
+        "A scheme is a lowercase token; an uppercase or slash-bearing scheme rejects with ArtifactRefInvalid.",
+        base_rules(),
+        |_w, _r, _s| {
+            cand(candidate_with_artifacts(vec![artifact(
+                "OCI/manifest",
+                &"ab".repeat(32),
+                None,
+            )]))
+        },
+    ));
+    cases.push(record_case(
+        "reject-candidate-artifacts-unordered",
+        "The list is strictly sorted by (scheme, digest, name); two well-formed entries in the wrong order reject with ArtifactRefInvalid.",
+        base_rules(),
+        |_w, _r, _s| {
+            cand(candidate_with_artifacts(vec![
+                artifact("sha256-bytes", &"ab".repeat(32), None),
+                artifact("git-tree-sha256", &"ab".repeat(32), None),
+            ]))
+        },
+    ));
+    cases.push(record_case(
+        "reject-candidate-artifacts-duplicate",
+        "Deduplicated means strictly increasing: a repeated entry rejects with ArtifactRefInvalid.",
+        base_rules(),
+        |_w, _r, _s| {
+            cand(candidate_with_artifacts(vec![
+                artifact("sha256-bytes", &"ab".repeat(32), Some("a")),
+                artifact("sha256-bytes", &"ab".repeat(32), Some("a")),
+            ]))
+        },
+    ));
+    cases.push(record_case(
+        "reject-candidate-artifact-unregistered-too-short",
+        "An unregistered scheme takes the generic rule: a 16-byte digest is below the 20-byte floor and rejects with ArtifactRefInvalid.",
+        base_rules(),
+        |_w, _r, _s| {
+            cand(candidate_with_artifacts(vec![artifact(
+                "x-custom-digest",
+                &"ab".repeat(16),
+                None,
+            )]))
+        },
+    ));
+    cases.push(record_case(
+        "accept-result-with-artifacts",
+        "A Result naming the artifact it produced: the same additive list on the executor's record.",
+        base_rules(),
+        |w, r, s| {
+            let (rid, cid) = setup_request_cap(w, r, s, "tool", CapabilityMode::Auto);
+            let (aid, v) = w
+                .commit(action_proposal_with_authority(rid, "tool", &[cid]), r, s)
+                .unwrap();
+            assert_eq!(v.result, VerdictResult::Accept);
+            cand(result_with_artifacts(
+                aid,
+                vec![artifact("sha256-bytes", &"ef".repeat(32), Some("out.bin"))],
+            ))
+        },
+    ));
+    cases.push(record_case(
+        "reject-result-artifact-odd-hex",
+        "A Result's artifact digest must be even-length hex; an odd-length digest rejects with ArtifactRefInvalid.",
+        base_rules(),
+        |w, r, s| {
+            let (rid, cid) = setup_request_cap(w, r, s, "tool", CapabilityMode::Auto);
+            let (aid, v) = w
+                .commit(action_proposal_with_authority(rid, "tool", &[cid]), r, s)
+                .unwrap();
+            assert_eq!(v.result, VerdictResult::Accept);
+            cand(result_with_artifacts(
+                aid,
+                vec![artifact("x-custom-digest", &format!("{}a", "ab".repeat(20)), None)],
+            ))
+        },
     ));
     cases.push(record_case(
         "accept-evaluation",
@@ -3727,6 +3882,7 @@ fn wire_expressible_reasons() -> Vec<ReasonCode> {
         ReasonCode::EvaluationInvalid,
         ReasonCode::SelectionInvalid,
         ReasonCode::ReaffirmationInvalid,
+        ReasonCode::ArtifactRefInvalid,
     ]
 }
 
@@ -3863,6 +4019,7 @@ fn build_query_cases() -> Vec<QueryCase> {
     };
     let cand = |tree: &str, basis: CandidateBasis, parent: Option<RecordId>| {
         encode(&CandidateData {
+            artifacts: None,
             source: src(tree),
             basis,
             parent,

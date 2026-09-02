@@ -113,6 +113,10 @@ pub use record::kind::{
     SummaryType, UsageOutcome, VerdictResult,
 };
 pub use record::payloads::{
+    artifact_ref_well_formed, artifact_refs_well_formed, ArtifactRef, ARTIFACT_DIGEST_MAX_BYTES,
+    ARTIFACT_DIGEST_MIN_BYTES, ARTIFACT_SCHEMES,
+};
+pub use record::payloads::{
     selection_approval_subject_hash, ActionData, ApprovalData, Attachment, BindingMode,
     CandidateBasis, CandidateData, CapabilityData, EvaluationData, EvaluationOutcome,
     FailurePolicy, GitSource, PlanData, PlanStatus, PlanTask, PlanTaskKind, RefusalData,

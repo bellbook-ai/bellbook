@@ -49,6 +49,7 @@ fn main() {
         Kind::Candidate,
         SCHEMA_CANDIDATE,
         &CandidateData {
+            artifacts: None,
             source: source("1111111111111111111111111111111111111111"),
             basis: CandidateBasis::Root,
             parent: None,
@@ -91,6 +92,7 @@ fn main() {
         Kind::Candidate,
         SCHEMA_CANDIDATE,
         &CandidateData {
+            artifacts: None,
             source: source("2222222222222222222222222222222222222222"),
             basis: CandidateBasis::Derivation,
             parent: None,

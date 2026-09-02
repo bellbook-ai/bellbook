@@ -129,6 +129,7 @@ fn action_proposal(request_id: RecordId, class: &str) -> Proposal {
 
 fn result_proposal(action_id: RecordId) -> Proposal {
     let data = encode(&ResultData {
+        artifacts: None,
         action_id,
         status: ResultStatus::Success,
         output: "done".into(),
@@ -150,6 +151,7 @@ fn result_proposal(action_id: RecordId) -> Proposal {
 
 fn external_result_proposal(action_id: RecordId) -> Proposal {
     let data = encode(&ResultData {
+        artifacts: None,
         action_id,
         status: ResultStatus::Success,
         output: "external done".into(),

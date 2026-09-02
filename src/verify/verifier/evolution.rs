@@ -79,6 +79,13 @@ pub(super) fn check_candidate(
     if !source_binding_well_formed(&data.source) {
         return Some(ReasonCode::SourceBindingInvalid);
     }
+    // Artifact identities (spec 0.4): each well-formed, the list strictly
+    // ordered and deduplicated.
+    if let Some(artifacts) = &data.artifacts {
+        if !artifact_refs_well_formed(artifacts) {
+            return Some(ReasonCode::ArtifactRefInvalid);
+        }
+    }
 
     // A present `parent` must resolve to an accepted Candidate (the basis
     // rules below decide whether a parent is allowed at all).

@@ -284,6 +284,12 @@ pub enum ReasonCode {
     /// Selection with a different `objective`, or its author is not in the
     /// configured `reaffirmation_actors` allowlist.
     ReaffirmationInvalid,
+    /// An `artifacts` list (spec 0.4) is malformed: a scheme that is not a
+    /// valid token, a digest that is not lowercase hex of the length its
+    /// scheme dictates (registered length, or an even 20..=64 bytes for an
+    /// unregistered scheme), or a list that is not strictly sorted and
+    /// deduplicated by `(scheme, digest, name)`.
+    ArtifactRefInvalid,
 }
 
 /// How a capability gates actions of its (actor, action_class, scope).

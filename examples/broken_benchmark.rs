@@ -69,6 +69,7 @@ fn main() {
         Kind::Candidate,
         SCHEMA_CANDIDATE,
         &CandidateData {
+            artifacts: None,
             source: source("4b825dc642cb6eb9a060e54bf8d69288fbee4904"),
             basis: CandidateBasis::Root,
             parent: None,
@@ -135,6 +136,7 @@ fn main() {
         Kind::Candidate,
         SCHEMA_CANDIDATE,
         &CandidateData {
+            artifacts: None,
             source: source("1111111111111111111111111111111111111111"),
             basis: CandidateBasis::Continuation,
             parent: Some(c0),
@@ -156,6 +158,7 @@ fn main() {
         Kind::Candidate,
         SCHEMA_CANDIDATE,
         &CandidateData {
+            artifacts: None,
             source: source("2222222222222222222222222222222222222222"),
             basis: CandidateBasis::Derivation,
             parent: None,
@@ -175,6 +178,7 @@ fn main() {
         Kind::Candidate,
         SCHEMA_CANDIDATE,
         &CandidateData {
+            artifacts: None,
             source: source("3333333333333333333333333333333333333333"),
             basis: CandidateBasis::Derivation,
             parent: None,
@@ -200,6 +204,7 @@ fn main() {
         Kind::Candidate,
         SCHEMA_CANDIDATE,
         &CandidateData {
+            artifacts: None,
             source: source("4444444444444444444444444444444444444444"),
             basis: CandidateBasis::Derivation,
             parent: None,
@@ -250,6 +255,7 @@ fn main() {
         Kind::Candidate,
         SCHEMA_CANDIDATE,
         &CandidateData {
+            artifacts: None,
             source: source("5555555555555555555555555555555555555555"),
             basis: CandidateBasis::Derivation,
             parent: None,

@@ -117,6 +117,7 @@ fn fixture() -> Fixture {
     let mut st = State::default();
 
     let cand = |src: &str, basis: CandidateBasis, parent: Option<RecordId>| CandidateData {
+        artifacts: None,
         source: source(src),
         basis,
         parent,

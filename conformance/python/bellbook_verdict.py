@@ -112,7 +112,7 @@ REASON_CODE = frozenset({
     "Refused", "InvalidPayload", "InvalidCheckpoint", "AuthorRoleInvalid",
     "AuthorityRefMissing", "SourceBindingInvalid", "LineageInvalid",
     "PayloadRefUnresolved", "EvaluationInvalid", "SelectionInvalid",
-    "ReaffirmationInvalid",
+    "ReaffirmationInvalid", "ArtifactRefInvalid",
 })
 PLAN_STATUS = frozenset({"running", "completed", "abandoned"})
 TASK_STATUS = frozenset({"pending", "running", "done", "failed", "skipped"})
@@ -163,6 +163,8 @@ _STRUCT_SPECS = {
         "scale": ("int_range", 0, 12),
     },
     "SelectedCandidates": {"candidates": ("vec", "hash")},
+    # Artifact identity (spec 0.4): scheme token, hex digest, optional label.
+    "ArtifactRef": {"scheme": "str", "digest": "str", "name": ("opt", "str")},
     "PlanTask": {
         "id": "str",
         "description": "str",
@@ -198,7 +200,15 @@ _PAYLOAD_SPECS = {
         "turn_index": "u32",
         "closes_request": "bool",
     },
-    SCHEMA_RESULT: {"action_id": "hash", "status": ("enum", RESULT_STATUS), "output": "str"},
+    SCHEMA_RESULT: {
+        "action_id": "hash",
+        "status": ("enum", RESULT_STATUS),
+        "output": "str",
+        # Additive (spec 0.4): the key may be absent; when present it must
+        # be a list (a present `null` is not canonical and rejects, as the
+        # reference's `skip_serializing_if = Option::is_none` re-encode does).
+        "artifacts": ("optkey", ("vec", ("struct", "ArtifactRef"))),
+    },
     SCHEMA_CAPABILITY: {
         "actor_id": "str",
         "action_class": "str",
@@ -243,6 +253,7 @@ _PAYLOAD_SPECS = {
         "basis": ("enum", CANDIDATE_BASIS),
         "parent": ("opt", "hash"),
         "note": ("opt", "str"),
+        "artifacts": ("optkey", ("vec", ("struct", "ArtifactRef"))),
     },
     SCHEMA_EVALUATION: {
         "candidate": "hash",
@@ -743,10 +754,28 @@ def _conforms(value: Any, desc: Any) -> bool:
     raise AssertionError(f"unknown descriptor {desc!r}")
 
 
+def _is_optkey(desc: Any) -> bool:
+    return isinstance(desc, tuple) and desc[0] == "optkey"
+
+
 def _struct_conforms(value: Any, spec: dict) -> bool:
-    if not isinstance(value, dict) or set(value.keys()) != set(spec.keys()):
+    """Exact key set, except that an `optkey` field may be absent (an
+    additive spec-0.4 field the reference declares with `serde(default,
+    skip_serializing_if)`); when present it must conform to its inner
+    descriptor - a present `null` is a non-canonical spelling of "absent"
+    and rejects."""
+    if not isinstance(value, dict):
         return False
-    return all(_conforms(value[field], d) for field, d in spec.items())
+    required = {f for f, d in spec.items() if not _is_optkey(d)}
+    if not required <= set(value.keys()) <= set(spec.keys()):
+        return False
+    for field, d in spec.items():
+        if field not in value:
+            continue
+        inner = d[1] if _is_optkey(d) else d
+        if not _conforms(value[field], inner):
+            return False
+    return True
 
 
 def _decodes_canonically(record: dict) -> bool:
@@ -1089,6 +1118,8 @@ def _check_approval_for_action(record, data, prior, state):
 
 def _check_result(record, prior, rules, state):
     data = payload(record)
+    if not _artifacts_well_formed(data.get("artifacts")):
+        return "ArtifactRefInvalid"
     aid = h(data["action_id"])
     if aid not in state.open_actions:
         return "ActionClosed"
@@ -1335,6 +1366,46 @@ def _is_lower_hex(s: Any, length: int) -> bool:
     return isinstance(s, str) and len(s) == length and all(c in "0123456789abcdef" for c in s)
 
 
+# Registered artifact schemes and digest lengths in bytes (SPEC 2, spec 0.4);
+# an unregistered scheme takes the generic even 20..=64-byte rule.
+_ARTIFACT_SCHEMES = {
+    "git-tree-sha1": 20,
+    "git-tree-sha256": 32,
+    "manifest-v1": 32,
+    "git-archive-tar-v1": 32,
+    "oci-image-manifest": 32,
+    "sha256-bytes": 32,
+}
+
+
+def _artifact_ref_well_formed(a: dict) -> bool:
+    scheme, digest = a["scheme"], a["digest"]
+    if not scheme or scheme[0] not in "abcdefghijklmnopqrstuvwxyz0123456789":
+        return False
+    if any(c not in "abcdefghijklmnopqrstuvwxyz0123456789.-" for c in scheme):
+        return False
+    if len(digest) % 2 != 0 or not all(c in "0123456789abcdef" for c in digest):
+        return False
+    n = len(digest) // 2
+    want = _ARTIFACT_SCHEMES.get(scheme)
+    return n == want if want is not None else 20 <= n <= 64
+
+
+def _artifacts_well_formed(artifacts) -> bool:
+    """Absent is fine; a present list must be well-formed entry by entry and
+    strictly increasing by (scheme, digest, name), with an absent name
+    ordering before any present one (Rust `Option` ordering)."""
+    if artifacts is None:
+        return True
+    keys = []
+    for a in artifacts:
+        if not _artifact_ref_well_formed(a):
+            return False
+        name = a.get("name")
+        keys.append((a["scheme"], a["digest"], (0, "") if name is None else (1, name)))
+    return all(x < y for x, y in zip(keys, keys[1:]))
+
+
 def _source_binding_well_formed(sb: dict) -> bool:
     length = _OID_HEX_LEN[sb["git"]["algo"]]
     if not _is_lower_hex(sb["git"]["tree"], length):
@@ -1362,6 +1433,8 @@ def _check_candidate(record, prior, rules, state):
     data = payload(record)
     if not _source_binding_well_formed(data["source"]):
         return "SourceBindingInvalid"
+    if not _artifacts_well_formed(data.get("artifacts")):
+        return "ArtifactRefInvalid"
 
     parent = data.get("parent")
     if parent is not None and _resolve_candidate(parent, record, prior, state) is None:
