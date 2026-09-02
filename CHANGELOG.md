@@ -5,10 +5,23 @@ All notable changes to Bellbook are documented in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and releases follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.8.0] - 2026-09-02
 
-The requirement-binding epoch (RFC-0003, milestone v0.8.0). The first
-spec change since 0.3: spec version 0.4.
+Requirement binding: spec epoch 0.4, the first spec change since 0.3
+(RFC-0003). A receipt can now say what was required (`Requirement`),
+bind a judgment to the exact artifacts it judged (`ArtifactRef`), name
+who decided and how with fail-closed outcomes (the extended
+`Evaluation`), and declare the profiles it claims for every validator to
+re-check. What stays valid: the record envelope, canonical form, signing
+form, and every 0.3 schema are byte-for-byte those of 0.3; a 0.4
+validator replays a 0.3 receipt under the 0.3 schema set and reaches the
+identical decision its own epoch's validator reached (the 0.3 vectors and
+corpus are byte-frozen, re-derived in CI, and replayed through the
+published 0.7.0 binary); rules files from earlier versions stay valid
+with their `rules_hash` unchanged and reject a `Requirement` as
+`UnknownSchema` until the schema is added. The Python package gains the
+0.4 surfaces immediately after the core publish (the bindings track the
+published crate).
 
 ### Added
 

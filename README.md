@@ -314,11 +314,12 @@ evolution kinds to a log and exports a receipt. See
 
 ## Status
 
-**The published release is 0.7.0, implementing spec v0.3 (evolution
-semantics: Candidate, Evaluation, and Selection records with replay-derived
-lineage standing). This branch opens spec v0.4 (RFC-0003: requirement
-binding), to be released as 0.8.0.** SPEC.md is the authority for what
-each version means (v0.3 design notes in
+**The published release is 0.8.0, implementing spec v0.4 (RFC-0003:
+requirement binding - the `Requirement` record, first-class artifact
+identity, the extended `Evaluation`, and receipt profile declarations -
+on top of the v0.3 evolution semantics: Candidate, Evaluation, and
+Selection records with replay-derived lineage standing).** SPEC.md is the
+authority for what each version means (v0.3 design notes in
 [`spec/v0.3-delta.md`](spec/v0.3-delta.md); v0.4 design in
 [RFC-0003](docs/rfcs/0003-requirement-binding.md)). Earlier epochs stay
 valid: a 0.4 validator replays a v0.3 receipt under the v0.3 schema set
@@ -333,13 +334,17 @@ with replayable `verify_log` (identity-to-role binding, authority binding
 and revocation, single-use exact approvals, explicit request lifecycle,
 advisory plan consistency checks), Ed25519 signatures, retraction with
 taint, the v0.3 evolution kinds (Candidate / Evaluation / Selection) with
-source binding, the selection and reaffirmation rule battery, and the
+source binding, the v0.4 requirement binding (`Requirement`,
+`ArtifactRef`, the extended `Evaluation` with fail-closed outcomes,
+receipt profile declarations), the selection and reaffirmation rule
+battery, and the
 replay-derived standing section, derived state with incremental/full-build
 equivalence, checkpoints, the crash-safe writer with idempotent
 compare-and-append, and portable receipts with the offline `bellbook
-validate` CLI (including the `bellbook-core-v1` baseline profile check),
-the `candidate`/`eval`/`select`/`retract`/`lineage` recording
-commands, the read-side `query` command (the RFC-0002 named set: descent,
+validate` CLI (including the `bellbook-core-v1` baseline profile check,
+with declared profiles evaluated unasked), the
+`request`/`requirement`/`candidate`/`eval`/`select`/`retract`/`lineage`
+recording commands, the read-side `query` command (the RFC-0002 named set: descent,
 descendants, siblings, frontier, standing, evidence, selected - over a log
 or a receipt), and `rules init` / `export` to generate a starter rule set and
 bundle a log into a receipt - fully tested (every rejection reason code has a
@@ -367,9 +372,9 @@ verdict ([docs/profiles/bellbook-core-v1.md](docs/profiles/bellbook-core-v1.md))
 Open work, **not implemented** (sequenced in
 [RFC-0003](docs/rfcs/0003-requirement-binding.md) and SPEC §12.2):
 
-1. **Profile-aware receipts** - receipts declare claimed profiles;
-   the validator reports per-profile conformance instead of trusting
-   the declaration.
+1. **`delivery-receipt-v1`** - the grammar of a delivery claim over the
+   v0.4 records (requirement, evidence, evaluator decision, artifact
+   identity, capability profile), with its own fraud-rejection vectors.
 2. **`bellbook-core-signed-v1`** - the signed tier above the baseline:
    required signatures and pinned keys.
 3. **`PolicyDecision` record + `bellbook-policy-enforced-v1` profile** -

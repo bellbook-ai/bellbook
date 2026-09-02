@@ -42,7 +42,7 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           python -m pip install --no-index --find-links bindings/python/dist bellbook
-          python -c "import bellbook; assert bellbook.__version__ == '0.7.0', bellbook.__version__; assert bellbook.validate(b'x').status == 'invalid'; print('ok', bellbook.__version__)"
+          python -c "import bellbook; assert bellbook.__version__ == '0.8.0', bellbook.__version__; assert bellbook.validate(b'x').status == 'invalid'; print('ok', bellbook.__version__)"
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: wheel-${{ matrix.os }}
