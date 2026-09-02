@@ -309,7 +309,9 @@ pip install bellbook
 `bellbook.validate(bytes)` and `bellbook.read(bytes)` reach the exact
 Clean / Tainted / Invalid decision the Rust verifier does - over the same
 core, never a reimplementation - and `bellbook.Writer` records the v0.3
-evolution kinds to a log and exports a receipt. See
+evolution kinds and the v0.4 requirement binding (requests, requirements,
+artifact-bound candidates, extended evaluations) to a log and exports a
+receipt that can declare the profiles it claims. See
 [`bindings/python/`](bindings/python/) for the full API.
 
 ## Status
