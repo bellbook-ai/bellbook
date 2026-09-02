@@ -80,6 +80,14 @@ ALL_SCHEMAS = [
 ]
 
 
+# The frozen schema set of epoch 0.3 (SPEC 14): a 0.3 receipt replays with
+# exactly these known, so a schema a later epoch introduces rejects as
+# UnknownSchema under 0.3 even if the embedded rules map it. Mirrors the
+# reference's `SCHEMAS_V03` / `schemas_for_epoch`.
+SCHEMAS_V03 = list(ALL_SCHEMAS)
+EPOCH_SCHEMAS = {"0.3": SCHEMAS_V03, "0.4": ALL_SCHEMAS}
+
+
 def schema_id_hex(name: str) -> str:
     return bb.sha256(name.encode("utf-8")).hex()
 
@@ -401,12 +409,16 @@ def verified_key(record: dict) -> Optional[bytes]:
 
 
 class Rules:
-    """Read-only view over a receipt/record-case `rules` wire object."""
+    """Read-only view over a receipt/record-case `rules` wire object, as the
+    declared epoch sees it: `kind_schema_map` keeps only the schemas that
+    epoch admits (src/receipt.rs `rules_for_epoch`). Everything else in the
+    rules is epoch-neutral."""
 
-    def __init__(self, wire: dict):
+    def __init__(self, wire: dict, spec_version: str = bb.SPEC_VERSION):
         self.space = h(wire["space"])
+        known = {schema_id_hex(n) for n in EPOCH_SCHEMAS[spec_version]}
         # kind_schema_map: array of [schema_bytes, kind_name] pairs.
-        self.kind_schema_map = {h(s): k for s, k in wire["kind_schema_map"]}
+        self.kind_schema_map = {h(s): k for s, k in wire["kind_schema_map"] if h(s) in known}
         self.signature_required_kinds = set(wire["signature_required_kinds"])
         # author_keys: actor -> [pubkey_bytes, ...]; compare by raw bytes (hex).
         self.author_keys = {
@@ -1756,12 +1768,15 @@ def verify_log(records: list[dict], rules: Rules) -> LogVerdict:
     )
 
 
-def validate_receipt(records: list[dict], rules_wire: dict) -> dict:
+def validate_receipt(
+    records: list[dict], rules_wire: dict, spec_version: str = bb.SPEC_VERSION
+) -> dict:
     """Reproduce receipt validate()'s status/reason/taint (src/receipt.rs).
 
     The reference deserializes the whole receipt (validating every record's wire
     shape and enums) before replay; a record that fails that is a structural
-    `Invalid` with no reason code, exactly like an unparseable receipt."""
+    `Invalid` with no reason code, exactly like an unparseable receipt. The
+    replay runs under the schema set of the receipt's declared epoch."""
     for r in records:
         if not _structurally_decodes(r):
             return {
@@ -1771,7 +1786,7 @@ def validate_receipt(records: list[dict], rules_wire: dict) -> dict:
                 "tainted": [],
                 "standing": dict(_EMPTY_STANDING),
             }
-    rules = Rules(rules_wire)
+    rules = Rules(rules_wire, spec_version)
     v = verify_log(records, rules)
     if v.result == "Reject":
         status = "Invalid"

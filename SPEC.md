@@ -1,12 +1,15 @@
 # Bellbook specification
 
-**Spec version: 0.3 (first published as `bellbook` 0.3.0; also implemented by
-0.4.0 and later).** The previous epoch
-is 0.2; its artifacts remain valid under v0.2 rules forever, and the
-published 0.2.x release is their validator (§14). This document is
+**Spec version: 0.4 (in development on this branch; first released as
+`bellbook` 0.8.0).** The previous epochs are 0.3 (crates 0.3.0 through
+0.7.0) and 0.2 (crate 0.2.0); their artifacts remain valid under their
+own rules forever. A 0.4 validator replays a 0.3 receipt under the 0.3
+schema set and reaches the identical decision; the published 0.2.x
+release is the validator for 0.2 artifacts (§14). This document is
 versioned independently of the `bellbook` crate; the crate's CHANGELOG
 states which spec version each release implements (see §14). The v0.3
-design notes are in [`spec/v0.3-delta.md`](spec/v0.3-delta.md); this
+design notes are in [`spec/v0.3-delta.md`](spec/v0.3-delta.md) and the
+v0.4 design in [RFC-0003](docs/rfcs/0003-requirement-binding.md); this
 document is the normative description of what the implementation does.
 
 This document is **normative**: conformance is defined by this
@@ -220,9 +223,10 @@ which any mutation of history invalidates every dependent record.
 
 ### 3.1 Test vectors
 
-[`spec/test-vectors-v0.3.json`](spec/test-vectors-v0.3.json) contains one
-record of every kind from a fixed unsigned scripted log (the frozen v0.2
-vectors remain at
+[`spec/test-vectors-v0.4.json`](spec/test-vectors-v0.4.json) contains one
+record of every kind from a fixed unsigned scripted log (the frozen v0.3
+and v0.2 vectors remain at
+[`spec/test-vectors-v0.3.json`](spec/test-vectors-v0.3.json) and
 [`spec/test-vectors-v0.2.json`](spec/test-vectors-v0.2.json)): the record's exact
 canonical id form (the JCS bytes fed to SHA-256, with `id` omitted and the
 absent signature field omitted) and the resulting id, plus the UTF-8 names the
@@ -245,8 +249,11 @@ Records may carry a detached **Ed25519** (RFC 8032) signature in
   `{"domain":"bellbook.record-signature.v0.3","record":<record form>}`,
   where `<record form>` is the record with `id` and `author.signature`
   omitted and the whole envelope is serialized as JCS. The explicit protocol
-  and spec-epoch domain prevents a signature made for another protocol or
-  Bellbook epoch from being replayed as a v0.3 record. After signing, the
+  and signing-form domain prevents a signature made for another protocol or
+  another Bellbook signing form from being replayed as a current-epoch
+  record. The domain names the signing form, which was introduced in 0.3
+  and is unchanged in 0.4 (§14), so it reads `v0.3` in both epochs. After
+  signing, the
   record id is computed from the canonical id form (§3), which includes the completed
   signature. This avoids a circular dependency while ensuring signature
   removal or substitution changes the record id and every dependent ref and
@@ -1223,11 +1230,29 @@ implements.
   by the spec version, which portable artifacts (receipts, head
   attestations) carry explicitly. Hosts embedding raw logs pin the crate
   version, whose CHANGELOG names the spec version it implements.
-- Spec 0.3 is the second and current compatibility epoch, first released
-  in crate 0.3.0 and implemented by every release since: fifteen
-  kinds, signing domain `bellbook.record-signature.v0.3`. A v0.3 validator
-  rejects a v0.2 receipt as `Invalid` with a clear unsupported-version
-  report; v0.2 artifacts remain valid under v0.2 rules, whose validator is
-  the pinned, published 0.2.x release.
+- Spec 0.4 is the third and current compatibility epoch, opened by
+  [RFC-0003](docs/rfcs/0003-requirement-binding.md) and first released in
+  crate 0.8.0. It adds to 0.3 without changing anything 0.3 defined: the
+  record envelope, canonicalization, id form, signing form, and the
+  fifteen 0.3 schemas are byte-for-byte those of 0.3, so the signing
+  domain stays `bellbook.record-signature.v0.3` (the domain names the
+  signing form, which last changed in 0.3; a 0.3 signature must keep
+  verifying). A 0.4 validator **dispatches on the receipt's
+  `spec_version`**: a 0.3 receipt replays under the 0.3 schema set (a
+  schema introduced by 0.4 rejects as `UnknownSchema` there, even if the
+  embedded rules map it) and reaches the identical decision its own
+  epoch's validator reached; a 0.4 receipt replays under the full set. An
+  unsupported version is a structural `Invalid` with a clear report.
+  Three gates hold this: the 0.3 vectors and corpus are byte-frozen
+  (`tests/frozen_v03.rs`), every stored 0.3 outcome re-derives under the
+  0.4 validator (`tests/epoch_v03.rs`), and CI replays the 0.3 receipts
+  through the published 0.7.0 binary (`scripts/epoch_check.py`).
+- Spec 0.3 is the second compatibility epoch, first released in crate
+  0.3.0 and implemented through crate 0.7.0: fifteen kinds, signing
+  domain `bellbook.record-signature.v0.3`, vectors at
+  `spec/test-vectors-v0.3.json` and corpus at `spec/conformance/v0.3/`,
+  both frozen. A v0.3 validator rejects a v0.2 receipt as `Invalid` with
+  a clear unsupported-version report; v0.2 artifacts remain valid under
+  v0.2 rules, whose validator is the pinned, published 0.2.x release.
 - Spec 0.2 is the first published compatibility epoch. The backward-validity
   guarantee starts with artifacts produced under this version.

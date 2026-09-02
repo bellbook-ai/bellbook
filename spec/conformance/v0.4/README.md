@@ -1,17 +1,18 @@
-# Bellbook conformance corpus, spec version 0.3
+# Bellbook conformance corpus, spec version 0.4
 
-**Frozen.** Spec 0.3 is a published compatibility epoch (crates 0.3.0 through
-0.7.0). The JSON files in this directory are byte-pinned by
-`tests/frozen_v03.rs` and must never be edited; the current corpus is
-[`../v0.4/`](../v0.4/). Every outcome stored here still re-derives under the
-current validator (`tests/epoch_v03.rs`) and under the published 0.7.0 binary
-(CI job `epoch-v03`).
+Spec 0.4 is the current epoch (RFC-0003, crate 0.8.0). The previous epochs'
+corpora are frozen in place and stay valid under their own rules:
+[`../v0.3/`](../v0.3/) (crates 0.3.0 through 0.7.0) and [`../v0.2/`](../v0.2/)
+(crate 0.2.0). A 0.4 validator replays a 0.3 receipt under the 0.3 schema set
+and reaches the identical decision; `tests/epoch_v03.rs` re-derives every
+stored 0.3 outcome, and CI replays the 0.3 receipts through the published
+0.7.0 binary.
 
 A machine-readable set of verification cases. Each case pairs a portable input
 with the expected verification outcome, so a second, independent implementation
 (tracked in issue #5) can reproduce Bellbook's verification behavior byte for
 byte, not just its record hashing (which the per-kind vectors in
-[`../../test-vectors-v0.3.json`](../../test-vectors-v0.3.json) already fix).
+[`../../test-vectors-v0.4.json`](../../test-vectors-v0.4.json) already fix).
 
 The corpus is generated from, and continuously checked against, the reference
 implementation by the `conformance` test

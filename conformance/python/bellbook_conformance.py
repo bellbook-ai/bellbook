@@ -29,7 +29,13 @@ import hashlib
 import json
 from typing import Any
 
-SPEC_VERSION = "0.3"
+SPEC_VERSION = "0.4"
+# Epochs this validator replays, oldest first. Each replays under its own
+# schema set (see `bellbook_verdict.EPOCH_SCHEMAS`); any other version is a
+# structural reject, never a guess. Mirrors the reference's
+# `SUPPORTED_SPEC_VERSIONS`.
+SUPPORTED_SPEC_VERSIONS = ("0.3", "0.4")
+# Unchanged since 0.3: the signing form did not change in 0.4 (SPEC 14).
 SIGNING_DOMAIN = "bellbook.record-signature.v0.3"
 # 2**53 - 1: the I-JSON safe-integer range JCS numbers must stay within,
 # matching `MAX_SAFE_INTEGER` in the reference's canonical.rs.
@@ -271,10 +277,11 @@ def decode_receipt(text: str) -> dict:
     except json.JSONDecodeError as e:
         raise DecodeError(f"unparseable receipt: {e}") from e
     receipt = _require_exact_object(obj, RECEIPT_FIELDS, RECEIPT_FIELDS, "receipt")
-    if receipt["spec_version"] != SPEC_VERSION:
+    if receipt["spec_version"] not in SUPPORTED_SPEC_VERSIONS:
         raise DecodeError(
             f"unsupported spec version {receipt['spec_version']!r} "
-            f"(this validator implements {SPEC_VERSION!r})"
+            f"(this validator implements {SPEC_VERSION!r} and validates "
+            f"{', '.join(SUPPORTED_SPEC_VERSIONS)})"
         )
     if not isinstance(receipt["records"], list):
         raise DecodeError("records must be an array")

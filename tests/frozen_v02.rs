@@ -7,7 +7,7 @@
 //! artifacts). The complementary cross-version check - that the *published*
 //! 0.2.0 validator still reaches the same decision on every committed v0.2
 //! receipt - runs in CI as the `epoch-v02` job
-//! (`scripts/epoch_check_v02.py`); together they pin both the bytes and their
+//! (`scripts/epoch_check.py`); together they pin both the bytes and their
 //! meaning under the published validator.
 //!
 //! The hash is taken over LF-normalized content: `.gitattributes` already

@@ -95,7 +95,24 @@ jobs:
       - name: Install the published v0.2 validator
         run: cargo install bellbook --version 0.2.0 --root "$RUNNER_TEMP/bb020"
       - name: v0.2 receipts validate under the published v0.2 validator
-        run: python3 scripts/epoch_check_v02.py "$RUNNER_TEMP/bb020/bin/bellbook"
+        run: python3 scripts/epoch_check.py "$RUNNER_TEMP/bb020/bin/bellbook" 0.2
+
+  epoch-v03:
+    # Epoch check for spec 0.3 (issue #109): the committed v0.3 receipts must
+    # validate identically under the *published* 0.7.0 validator, the last
+    # crate that implemented spec 0.3. Same shape as `epoch-v02`. The
+    # byte-freeze of the v0.3 artifacts is `tests/frozen_v03.rs`; identical
+    # decisions under the current 0.4 validator is `tests/epoch_v03.rs`.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772
+        with:
+          toolchain: stable
+      - name: Install the published v0.3 validator (crate 0.7.0)
+        run: cargo install bellbook --version 0.7.0 --root "$RUNNER_TEMP/bb070"
+      - name: v0.3 receipts validate under the published v0.3 validator
+        run: python3 scripts/epoch_check.py "$RUNNER_TEMP/bb070/bin/bellbook" 0.3
 
   python-bindings:
     # Stage 1 of the PyO3 bindings (issue #13): build the extension and run

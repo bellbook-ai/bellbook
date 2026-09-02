@@ -13,10 +13,32 @@ pub fn schema_id(name: &str) -> SchemaId {
 
 /// The specification version this crate implements (SPEC.md §14). Carried
 /// by portable artifacts - head attestations and receipts - so verifiers
-/// can key their rule-sets by epoch. 0.3 is in development on this branch;
-/// the last published epoch is 0.2, whose artifacts remain valid under
-/// v0.2 rules (the pinned 0.2.x release validates them).
-pub const SPEC_VERSION: &str = "0.3";
+/// can key their rule-sets by epoch. 0.4 is in development on this branch
+/// (first released in crate 0.8.0); the previous epoch is 0.3 (crates
+/// 0.3.0 through 0.7.0), whose artifacts remain valid: this validator
+/// replays a 0.3 receipt under the 0.3 schema set and reaches the
+/// identical decision (see [`schemas_for_epoch`]). Epoch 0.2 artifacts are
+/// validated by the pinned, published 0.2.x release.
+pub const SPEC_VERSION: &str = "0.4";
+
+/// The spec versions a receipt may declare and this validator will replay,
+/// oldest first. Each is replayed under its own epoch's schema set; a
+/// version outside this list is a structural `Invalid` with a clear
+/// unsupported-version problem, never a guess.
+pub const SUPPORTED_SPEC_VERSIONS: &[&str] = &["0.3", "0.4"];
+
+/// The schema set an epoch admits. A receipt declaring `spec_version`
+/// replays with exactly these schemas known: a record carrying a schema
+/// introduced by a later epoch rejects as `UnknownSchema` even if the
+/// embedded rules map it, so an old epoch's meaning never drifts. `None`
+/// for a version this validator does not support.
+pub fn schemas_for_epoch(spec_version: &str) -> Option<&'static [&'static str]> {
+    match spec_version {
+        "0.3" => Some(SCHEMAS_V03),
+        "0.4" => Some(ALL_SCHEMAS),
+        _ => None,
+    }
+}
 
 /// Name whose hash is the default [`SpaceId`](crate::record::record::SpaceId):
 /// a convenience for single-space deployments; hosts with their own trust
@@ -71,7 +93,31 @@ pub const SCHEMA_EVALUATION: &str = "bellbook.evaluation.v1";
 /// under an objective).
 pub const SCHEMA_SELECTION: &str = "bellbook.selection.v1";
 
-/// All frozen schema names (for reverse lookup and documentation).
+/// The frozen schema set of spec epoch 0.3 (SPEC.md §14): the fifteen
+/// kinds' schemas as published in crates 0.3.0 through 0.7.0. Never
+/// edited; a 0.3 receipt replays with exactly these known.
+pub const SCHEMAS_V03: &[&str] = &[
+    SCHEMA_REQUEST,
+    SCHEMA_ACTION,
+    SCHEMA_RESPONSE,
+    SCHEMA_RESULT,
+    SCHEMA_RESULT_EXTERNAL,
+    SCHEMA_RESULT_EFFECT_CONFIRMATION,
+    SCHEMA_CAPABILITY,
+    SCHEMA_APPROVAL,
+    SCHEMA_SUMMARY,
+    SCHEMA_REFUSAL,
+    SCHEMA_USAGE,
+    SCHEMA_VERDICT,
+    SCHEMA_PLAN,
+    SCHEMA_RETRACTION,
+    SCHEMA_CANDIDATE,
+    SCHEMA_EVALUATION,
+    SCHEMA_SELECTION,
+];
+
+/// All frozen schema names of the current epoch (for reverse lookup and
+/// documentation).
 pub const ALL_SCHEMAS: &[&str] = &[
     SCHEMA_REQUEST,
     SCHEMA_ACTION,
@@ -113,5 +159,27 @@ mod tests {
         let id1 = schema_id(SCHEMA_REQUEST);
         let id2 = schema_id(SCHEMA_ACTION);
         assert_ne!(id1, id2);
+    }
+
+    #[test]
+    fn epochs_are_nested_and_the_current_one_is_complete() {
+        // Every supported epoch has a schema set, the current epoch's set is
+        // the full registry, and each earlier epoch's set is a subset of the
+        // next (an epoch only ever adds schemas; SPEC §14).
+        assert_eq!(schemas_for_epoch(SPEC_VERSION), Some(ALL_SCHEMAS));
+        assert_eq!(SUPPORTED_SPEC_VERSIONS.last(), Some(&SPEC_VERSION));
+        let mut previous: Option<&[&str]> = None;
+        for v in SUPPORTED_SPEC_VERSIONS {
+            let set = schemas_for_epoch(v).unwrap_or_else(|| panic!("epoch {v} has no schema set"));
+            if let Some(p) = previous {
+                for s in p {
+                    assert!(set.contains(s), "epoch {v} dropped schema {s}");
+                }
+            }
+            previous = Some(set);
+        }
+        assert_eq!(SCHEMAS_V03.len(), 17);
+        assert!(schemas_for_epoch("0.2").is_none());
+        assert!(schemas_for_epoch("0.5").is_none());
     }
 }

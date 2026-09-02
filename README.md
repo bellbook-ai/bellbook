@@ -67,7 +67,7 @@ embeds.
   RFC 8785 (JCS) canonical id form (only id excluded; a completed signature
   is included), so an
   independent implementation in any language computes identical ids
-  ([test vectors](spec/test-vectors-v0.3.json)). Records reference earlier
+  ([test vectors](spec/test-vectors-v0.4.json)). Records reference earlier
   records by that hash through typed refs (`Cause`, `Use`, `Require`,
   `Replace`), forming a DAG. Edit any byte of history and every id and ref
   that depends on it breaks.
@@ -298,11 +298,16 @@ evolution kinds to a log and exports a receipt. See
 
 **The published release is 0.7.0, implementing spec v0.3 (evolution
 semantics: Candidate, Evaluation, and Selection records with replay-derived
-lineage standing).** SPEC.md is the authority for what v0.3 means (design
-notes in [`spec/v0.3-delta.md`](spec/v0.3-delta.md)). The previous epoch,
-0.2.0 implementing spec v0.2, stays published and frozen: its artifacts
-remain valid under v0.2 rules forever, and the 0.2.x release is their
-validator.
+lineage standing). This branch opens spec v0.4 (RFC-0003: requirement
+binding), to be released as 0.8.0.** SPEC.md is the authority for what
+each version means (v0.3 design notes in
+[`spec/v0.3-delta.md`](spec/v0.3-delta.md); v0.4 design in
+[RFC-0003](docs/rfcs/0003-requirement-binding.md)). Earlier epochs stay
+valid: a 0.4 validator replays a v0.3 receipt under the v0.3 schema set
+and reaches the identical decision (the v0.3 vectors and corpus are
+byte-frozen and re-checked in CI, including under the published 0.7.0
+binary), and 0.2.0 implementing spec v0.2 stays published and frozen as
+the validator for v0.2 artifacts.
 
 It ships exactly what is implemented and tested today: the
 content-addressed (JCS-canonical) record model, the deterministic verifier
@@ -323,9 +328,10 @@ bundle a log into a receipt - fully tested (every rejection reason code has a
 triggering test), clippy-clean, no `unsafe`, no panics in library code.
 
 The repository also carries a language-neutral **conformance corpus**
-(`spec/conformance/v0.3/`: record, malformed, receipt-replay, standing,
+(`spec/conformance/v0.4/`: record, malformed, receipt-replay, standing,
 and named-query cases, run by `tests/conformance.rs`; the frozen
-`spec/conformance/v0.2/` corpus stays valid under v0.2 rules) and an
+`spec/conformance/v0.3/` and `spec/conformance/v0.2/` corpora stay valid
+under their own epochs' rules and are re-checked in CI) and an
 **independent Python implementation** of the verifier and the named query
 set (`conformance/python/`) that shares no
 code with this crate, recomputes every record id, and re-derives every

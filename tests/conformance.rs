@@ -3515,7 +3515,7 @@ fn build_corpus() -> Corpus {
 }
 
 fn corpus_dir() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("spec/conformance/v0.3")
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(format!("spec/conformance/v{SPEC_VERSION}"))
 }
 
 fn write_json<T: serde::Serialize>(path: &std::path::Path, value: &T) {
