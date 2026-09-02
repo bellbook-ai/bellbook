@@ -149,6 +149,18 @@ and the general query engine remains gated on §15's read-side signal. The
 first-party field evidence itself is recorded under
 [`field-tests/`](field-tests/).
 
+Second application (recorded 2026-08-28): RFC-0003 (requirement binding,
+artifact identity, and the delivery-receipt profile) proposes the first
+wire change since epoch 0.3, on the signal of a committed adopter with a
+concrete artifact to emit. That adopter is connected to this project, so
+the signal does **not** meet RFC-0001 §15 criterion 1; accepting RFC-0003
+is the explicit, recorded decision to set the gate aside for the
+requirement-binding and profile cluster only. The other "Later" stages
+above, and the PolicyDecision, adapter, and selective-disclosure issues,
+stay gated on independent adoption. This is the first time a gated wire
+change proceeds on a first-party-adjacent signal, and the RFC says so
+plainly.
+
 ## Design rules
 
 Every proposed Bellbook feature must pass:
