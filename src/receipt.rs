@@ -21,7 +21,7 @@
 
 use crate::base::canonical::{canonical_json, strict_set};
 use crate::base::hash::{hex_encode, sha256_canonical, sha256_concat_ids, Hash256};
-use crate::base::schema::SPEC_VERSION;
+use crate::base::schema::{schema_id, schemas_for_epoch, SPEC_VERSION, SUPPORTED_SPEC_VERSIONS};
 use crate::base::time::Time;
 use crate::record::kind::{ReasonCode, VerdictResult};
 use crate::record::record::Record;
@@ -150,6 +150,21 @@ impl Report {
     }
 }
 
+/// The rules as an epoch sees them: `kind_schema_map` restricted to the
+/// schemas that epoch admits. Everything else in the rules is epoch-neutral.
+/// A schema mapped by the embedded rules but introduced by a later epoch is
+/// dropped, so a record carrying it rejects as `UnknownSchema` under the
+/// older epoch, exactly as that epoch's own validator would have rejected
+/// it.
+fn rules_for_epoch(rules: &VerifierRules, schemas: &[&str]) -> VerifierRules {
+    let known: BTreeSet<Hash256> = schemas.iter().map(|s| schema_id(s)).collect();
+    let mut epoch_rules = rules.clone();
+    epoch_rules
+        .kind_schema_map
+        .retain(|schema, _| known.contains(schema));
+    epoch_rules
+}
+
 /// Resource bounds applied to untrusted receipts before verification.
 /// Defaults are generous (far above any realistic honest receipt) but
 /// finite, so a hostile receipt cannot demand unbounded work by
@@ -249,16 +264,24 @@ pub fn validate_with_limits(bytes: &[u8], limits: &ValidationLimits) -> Report {
         }
     }
 
-    if receipt.spec_version != SPEC_VERSION {
+    // Epoch dispatch (SPEC §14): the receipt replays under the schema set of
+    // the epoch it declares, so an older receipt reaches exactly the decision
+    // its own epoch's validator reached. An unsupported version never guesses.
+    let Some(epoch_schemas) = schemas_for_epoch(&receipt.spec_version) else {
         return Report::structural_failure(
             format!(
-                "unsupported spec version {:?} (this validator implements {:?})",
-                receipt.spec_version, SPEC_VERSION
+                "unsupported spec version {:?} (this validator implements {:?} and validates {})",
+                receipt.spec_version,
+                SPEC_VERSION,
+                SUPPORTED_SPEC_VERSIONS.join(", ")
             ),
             receipt.spec_version,
         );
-    }
+    };
+    let rules = rules_for_epoch(&receipt.rules, epoch_schemas);
 
+    // The reported rules hash is over the rules as embedded, so auditors
+    // compare what the producer committed under, not the epoch view of it.
     let rules_hash = match sha256_canonical(&receipt.rules) {
         Ok(h) => h,
         Err(e) => {
@@ -274,7 +297,7 @@ pub fn validate_with_limits(bytes: &[u8], limits: &ValidationLimits) -> Report {
 
     // Always replay from genesis: nothing inside an untrusted receipt may
     // establish checkpoint trust.
-    let verdict = verify_log(&receipt.records, &receipt.rules, None);
+    let verdict = verify_log(&receipt.records, &rules, None);
 
     let status = match verdict.result {
         VerdictResult::Reject => ValidationStatus::Invalid,

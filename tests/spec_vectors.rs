@@ -707,7 +707,8 @@ fn spec_vectors_match() {
     );
     assert_ne!(built.signed_vector.id, built.signed_vector.substitute_id);
 
-    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("spec/test-vectors-v0.3.json");
+    let rel = format!("spec/test-vectors-v{SPEC_VERSION}.json");
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(&rel);
     if std::env::var("UPDATE_VECTORS").is_ok() {
         let mut out = serde_json::to_string_pretty(&built).unwrap();
         out.push('\n');
@@ -715,14 +716,15 @@ fn spec_vectors_match() {
         return;
     }
 
-    let stored: VectorFile = serde_json::from_str(&std::fs::read_to_string(&path).expect(
-        "spec/test-vectors-v0.3.json missing - run UPDATE_VECTORS=1 cargo test --test spec_vectors",
-    ))
-    .unwrap();
+    let stored: VectorFile =
+        serde_json::from_str(&std::fs::read_to_string(&path).unwrap_or_else(|e| {
+            panic!("{rel} missing ({e}) - run UPDATE_VECTORS=1 cargo test --test spec_vectors")
+        }))
+        .unwrap();
     assert_eq!(
         built, stored,
-        "canonical form drifted from spec/test-vectors-v0.3.json; if the \
-         change is an intentional format change, regenerate with \
-         UPDATE_VECTORS=1 and document it in CHANGELOG/SPEC"
+        "canonical form drifted from {rel}; if the change is an intentional \
+         format change, regenerate with UPDATE_VECTORS=1 and document it in \
+         CHANGELOG/SPEC"
     );
 }

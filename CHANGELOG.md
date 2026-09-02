@@ -5,6 +5,35 @@ All notable changes to Bellbook are documented in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and releases follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+The requirement-binding epoch (RFC-0003, milestone v0.8.0). The first
+spec change since 0.3: spec version 0.4.
+
+### Changed
+
+- **Opened the spec 0.4 epoch** (#109). `SPEC_VERSION` is `0.4`; the
+  current test vectors and conformance corpus live at
+  `spec/test-vectors-v0.4.json` and `spec/conformance/v0.4/`. Epoch 0.4
+  adds to 0.3 without changing anything 0.3 defined: the record envelope,
+  canonical form, signing form, and the fifteen 0.3 schemas are
+  byte-for-byte those of 0.3, so the signing domain stays
+  `bellbook.record-signature.v0.3`.
+- **The validator dispatches on the receipt's `spec_version`.** A 0.3
+  receipt replays under the 0.3 schema set and reaches the identical
+  decision its own epoch's validator reached; a 0.4 receipt replays under
+  the full set; any other version is a structural `Invalid` naming the
+  supported versions. The 0.3 vectors and corpus are byte-frozen
+  (`tests/frozen_v03.rs`), every stored 0.3 outcome re-derives under the
+  0.4 validator (`tests/epoch_v03.rs`), and a new `epoch-v03` CI job
+  replays the 0.3 receipts through the published 0.7.0 binary
+  (`scripts/epoch_check.py`, which now serves both frozen epochs). The
+  independent Python validator accepts both epochs and runs both corpora.
+- Receipts exported by this version declare `spec_version` `0.4`; the
+  committed example receipt and the `bellbook-core-v1` profile vectors
+  are regenerated accordingly (the profile's clause table and hash are
+  unchanged).
+
 ## [0.7.0] - 2026-09-02
 
 Profiles foundation. RFC-0003 (accepted 2026-09-02) sets the sequence

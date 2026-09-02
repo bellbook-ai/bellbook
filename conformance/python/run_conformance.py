@@ -20,6 +20,7 @@ from anywhere:
 from __future__ import annotations
 
 import contextlib
+import functools
 import json
 import os
 import pathlib
@@ -32,8 +33,15 @@ import bellbook_queries as bq  # noqa: E402
 import bellbook_verdict as bv  # noqa: E402
 
 ROOT = pathlib.Path(__file__).resolve().parents[2]
-VECTORS = ROOT / "spec" / "test-vectors-v0.3.json"
-CORPUS = ROOT / "spec" / "conformance" / "v0.3"
+
+# Every epoch this validator replays (SPEC 14): the frozen 0.3 artifacts and
+# the current 0.4 ones, each run in full. The 0.3 run is the independent
+# half of the epoch promise: a 0.3 receipt reaches the identical decision
+# under a validator that implements 0.4.
+EPOCHS = [
+    (v, ROOT / "spec" / f"test-vectors-v{v}.json", ROOT / "spec" / "conformance" / f"v{v}")
+    for v in bb.SUPPORTED_SPEC_VERSIONS
+]
 
 
 class Failed(Exception):
@@ -52,8 +60,9 @@ def load(path: pathlib.Path):
 # ---------------------------------------------------------------------------
 
 
-def run_test_vectors() -> tuple[int, list[str]]:
-    vf = load(VECTORS)
+def run_test_vectors(vectors: pathlib.Path, spec_version: str) -> tuple[int, list[str]]:
+    vf = load(vectors)
+    check(vf["spec_version"] == spec_version, f"{vectors.name}: wrong spec_version")
     notes: list[str] = []
     n = 0
     check(len(vf["vectors"]) >= 12, "test-vectors: fewer than the 12 published per-kind vectors")
@@ -170,8 +179,10 @@ def _require_signature_or_skip(where: str, skipped: list[str], name: str) -> Non
     skipped.append(name)
 
 
-def run_record_cases() -> tuple[int, list[str]]:
-    cases = load(CORPUS / "record-cases.json")["cases"]
+def run_record_cases(corpus: pathlib.Path, spec_version: str) -> tuple[int, list[str]]:
+    doc = load(corpus / "record-cases.json")
+    check(doc["spec_version"] == spec_version, "record-cases.json: wrong spec_version")
+    cases = doc["cases"]
     check(len(cases) > 0, "record-cases.json is empty")
     ids = 0
     verdicts = 0
@@ -185,7 +196,7 @@ def run_record_cases() -> tuple[int, list[str]]:
             )
             ids += 1
         # 2. Independently re-derive the verdict and compare to the stored one.
-        rules = bv.Rules(c["rules"])
+        rules = bv.Rules(c["rules"], spec_version)
         state = bv.build_state_unchecked(c["prior"])
         expected = {"result": c["expect"]["result"], "reason": c["expect"].get("reason")}
         try:
@@ -210,8 +221,10 @@ def run_record_cases() -> tuple[int, list[str]]:
     return ids + verdicts, notes
 
 
-def run_receipt_cases() -> tuple[int, list[str]]:
-    cases = load(CORPUS / "receipt-cases.json")["cases"]
+def run_receipt_cases(corpus: pathlib.Path, spec_version: str) -> tuple[int, list[str]]:
+    doc = load(corpus / "receipt-cases.json")
+    check(doc["spec_version"] == spec_version, "receipt-cases.json: wrong spec_version")
+    cases = doc["cases"]
     check(len(cases) > 0, "receipt-cases.json is empty")
     assertions = 0
     statuses = {"Clean": 0, "Tainted": 0, "Invalid": 0}
@@ -220,6 +233,10 @@ def run_receipt_cases() -> tuple[int, list[str]]:
         rc = c["receipt"]
         records = rc["records"]
         expect = c["expect"]
+        check(
+            rc["spec_version"] == spec_version,
+            f"receipt case `{c['name']}`: receipt declares {rc['spec_version']!r}",
+        )
 
         # Structural cross-checks: head hash, rules hash, and record count are
         # reproduced independently for every case (including Invalid ones -
@@ -242,7 +259,7 @@ def run_receipt_cases() -> tuple[int, list[str]]:
         # retracted/tainted sets as the reference.
         try:
             with _quiet_native_stderr():
-                report = bv.validate_receipt(records, rc["rules"])
+                report = bv.validate_receipt(records, rc["rules"], rc["spec_version"])
         except bv.SignatureUnavailable:
             _require_signature_or_skip(f"receipt case `{c['name']}`", sig_skipped, c["name"])
             continue
@@ -302,8 +319,10 @@ def run_receipt_cases() -> tuple[int, list[str]]:
     return assertions, notes
 
 
-def run_malformed_cases() -> tuple[int, list[str]]:
-    cases = load(CORPUS / "malformed-cases.json")["cases"]
+def run_malformed_cases(corpus: pathlib.Path, spec_version: str) -> tuple[int, list[str]]:
+    doc = load(corpus / "malformed-cases.json")
+    check(doc["spec_version"] == spec_version, "malformed-cases.json: wrong spec_version")
+    cases = doc["cases"]
     reproduced = 0
     check(len(cases) > 0, "malformed-cases.json is empty")
     for c in cases:
@@ -326,12 +345,14 @@ def run_malformed_cases() -> tuple[int, list[str]]:
 # ---------------------------------------------------------------------------
 
 
-def run_query_cases() -> tuple[int, list[str]]:
+def run_query_cases(corpus: pathlib.Path, spec_version: str) -> tuple[int, list[str]]:
     """RFC-0002 named query set: re-derive every stored query answer from the
     stored receipt with the from-scratch implementation in
     `bellbook_queries.py` and require deep JSON equality with the reference's
     surface shapes."""
-    cases = load(CORPUS / "query-cases.json")["cases"]
+    doc = load(corpus / "query-cases.json")
+    check(doc["spec_version"] == spec_version, "query-cases.json: wrong spec_version")
+    cases = doc["cases"]
     check(len(cases) > 0, "query-cases.json is empty")
     assertions = 0
     per_query: dict[str, int] = {}
@@ -411,14 +432,26 @@ def run_profile_cases() -> tuple[int, list[str]]:
 
 
 def main() -> int:
-    sections = [
-        ("test vectors", run_test_vectors),
-        ("record cases (ids)", run_record_cases),
-        ("receipt cases (structure + hashes)", run_receipt_cases),
-        ("malformed cases (rejection)", run_malformed_cases),
-        ("query cases (RFC-0002 named set)", run_query_cases),
-        ("profile cases (bellbook-core-v1)", run_profile_cases),
-    ]
+    sections = []
+    for spec_version, vectors, corpus in EPOCHS:
+        tag = f"[spec {spec_version}]"
+        sections += [
+            (f"test vectors {tag}", functools.partial(run_test_vectors, vectors, spec_version)),
+            (f"record cases (ids) {tag}", functools.partial(run_record_cases, corpus, spec_version)),
+            (
+                f"receipt cases (structure + hashes) {tag}",
+                functools.partial(run_receipt_cases, corpus, spec_version),
+            ),
+            (
+                f"malformed cases (rejection) {tag}",
+                functools.partial(run_malformed_cases, corpus, spec_version),
+            ),
+            (
+                f"query cases (RFC-0002 named set) {tag}",
+                functools.partial(run_query_cases, corpus, spec_version),
+            ),
+        ]
+    sections.append(("profile cases (bellbook-core-v1)", run_profile_cases))
     total = 0
     all_notes: list[tuple[str, list[str]]] = []
     try:
@@ -439,7 +472,8 @@ def main() -> int:
     print("structural log integrity, and the full verdict rule battery")
     print("(per-record verdicts, retraction, and taint), the RFC-0002")
     print("named query set, and the bellbook-core-v1 profile, across the")
-    print("vectors and the entire conformance corpus.")
+    print("vectors and the entire conformance corpus of every supported")
+    print("epoch (" + ", ".join(v for v, _, _ in EPOCHS) + ").")
     return 0
 
 

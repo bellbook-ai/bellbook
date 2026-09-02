@@ -40,7 +40,7 @@
       "name": "clean-baseline-conformant",
       "description": "A Clean line committed under rules with the baseline thresholds: every clause holds.",
       "receipt": {
-        "spec_version": "0.3",
+        "spec_version": "0.4",
         "rules": {
           "space": [
             11,
@@ -2694,7 +2694,7 @@
       "name": "tainted-still-conformant",
       "description": "The evaluator retracts its evaluation: the receipt is Tainted, and Tainted conforms (B1 admits it). Conformance is about the rule shape, not the absence of retractions.",
       "receipt": {
-        "spec_version": "0.3",
+        "spec_version": "0.4",
         "rules": {
           "space": [
             11,
@@ -5927,7 +5927,7 @@
       "name": "missing-thresholds-fails-b3",
       "description": "Valid rules without evidence thresholds: the log verifies Clean, but the rules admit assumption-class evolution records, so B3 fails and nothing else does.",
       "receipt": {
-        "spec_version": "0.3",
+        "spec_version": "0.4",
         "rules": {
           "space": [
             11,
@@ -8577,7 +8577,7 @@
       "name": "weaker-than-base-threshold-fails-b3",
       "description": "A Selection threshold of Assumed is present but weaker than the schema base class (Inferred): B3 fails.",
       "receipt": {
-        "spec_version": "0.3",
+        "spec_version": "0.4",
         "rules": {
           "space": [
             11,
@@ -11231,7 +11231,7 @@
       "name": "context-bound-zero-fails-b4",
       "description": "max_context_records of 0 is outside the declared range: B4 fails while the thresholds (B3) hold.",
       "receipt": {
-        "spec_version": "0.3",
+        "spec_version": "0.4",
         "rules": {
           "space": [
             11,
@@ -13885,7 +13885,7 @@
       "name": "empty-log-empty-roles-fails-b2",
       "description": "An empty log validates Clean, but rules that register no author role compare nothing: B2 fails.",
       "receipt": {
-        "spec_version": "0.3",
+        "spec_version": "0.4",
         "rules": {
           "space": [
             11,
@@ -14611,7 +14611,7 @@
       "name": "invalid-receipt-fails-b1",
       "description": "One payload byte altered: the receipt parses, replay rejects it, and B1 fails. B6 reports no accepted candidates because a rejected log made no claims.",
       "receipt": {
-        "spec_version": "0.3",
+        "spec_version": "0.4",
         "rules": {
           "space": [
             11,
