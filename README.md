@@ -196,14 +196,20 @@ checkout):
 ```
 bellbook validate receipt.json          # human-readable report
 bellbook validate receipt.json --json   # same report as JSON
+bellbook validate receipt.json --require-profile bellbook-core-v1
+                                        # plus baseline-profile conformance
 ```
 
-Exit codes: `0` clean, `1` invalid, `2` valid-but-tainted. See SPEC §12
-for the receipt format and the normative truth rules. Two honesty notes.
+Exit codes: `0` clean, `1` invalid, `2` valid-but-tainted, `3` validates
+but a required profile is not met. See SPEC §12 for the receipt format
+and the normative truth rules. Two honesty notes.
 **Clean is relative to the rules embedded in the receipt** (compare the
 reported `rules_hash` against a rule set you trust) - under default rules
 it means "internally consistent", not "meets a shared security
-baseline". And a receipt proves the recorded *process*, not source
+baseline". The [`bellbook-core-v1`](docs/profiles/bellbook-core-v1.md)
+profile is the shared baseline for that comparison: a content-addressed
+clause table over the rule shape, evaluated on request and reported
+alongside the verdict (never changing it). And a receipt proves the recorded *process*, not source
 contents: a `Candidate`'s Git OIDs are pointers the repository resolves
 (under `manifest` binding a party holding the tree can recompute the hash
 and bind the receipt to actual contents; under `reported` binding it is a
@@ -326,19 +332,26 @@ verdict, standing section, and query answer across the corpus, agreeing
 with this reference on every case - including the deliberately malformed and forged
 inputs it must reject.
 
-Open work, **not implemented**:
+The repository also publishes the **`bellbook-core-v1` baseline profile**
+(`spec/profiles/bellbook-core-v1/`: the content-addressed clause table
+and its vectors, run by `tests/profile_vectors.rs` and re-derived by the
+Python validator), the shared minimum rule shape for comparing receipts
+across organizations, evaluated on request and reported alongside the
+verdict ([docs/profiles/bellbook-core-v1.md](docs/profiles/bellbook-core-v1.md)).
 
-1. **`bellbook-core-v1` baseline profile** - a fixed minimum rule set
-   (required signatures, pinned keys, evidence thresholds) for comparing
-   receipts under shared rules.
-2. **`PolicyDecision` record + `bellbook-policy-enforced-v1` profile** -
+Open work, **not implemented** (sequenced in
+[RFC-0003](docs/rfcs/0003-requirement-binding.md) and SPEC §12.2):
+
+1. **Profile-aware receipts** - receipts declare claimed profiles;
+   the validator reports per-profile conformance instead of trusting
+   the declaration.
+2. **`bellbook-core-signed-v1`** - the signed tier above the baseline:
+   required signatures and pinned keys.
+3. **`PolicyDecision` record + `bellbook-policy-enforced-v1` profile** -
    first-class capture of external policy-engine permit/deny decisions,
    kept strictly separate from Bellbook's own Verdicts, followed by a
    reference adapter for an open-source authorization engine (see
    [docs/ECOSYSTEM.md](docs/ECOSYSTEM.md)).
-3. **Profile-aware receipts** - receipts declare claimed profiles;
-   the validator reports per-profile conformance instead of trusting
-   the declaration.
 
 The Python bindings (`pip install bellbook`) and the outward standards
 mapping ([docs/STANDARDS.md](docs/STANDARDS.md): OpenTelemetry, W3C PROV,

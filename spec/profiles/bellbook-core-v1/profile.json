@@ -1,0 +1,30 @@
+{
+  "id": "bellbook-core-v1",
+  "version": 1,
+  "clauses": [
+    {
+      "id": "B1",
+      "statement": "The receipt validates Clean or Tainted; an Invalid receipt never conforms."
+    },
+    {
+      "id": "B2",
+      "statement": "author_roles is non-empty, and every accepted record's author is registered in it."
+    },
+    {
+      "id": "B3",
+      "statement": "evidence_thresholds carries entries for Candidate, Evaluation, and Selection, each no weaker than the schema base class (Reported, Reported, Inferred)."
+    },
+    {
+      "id": "B4",
+      "statement": "max_context_records is declared within 1..=100000."
+    },
+    {
+      "id": "B5",
+      "statement": "Retraction and reaffirmation authority are readable from the rules: admin_retraction_actors and reaffirmation_actors are reported."
+    },
+    {
+      "id": "B6",
+      "statement": "The source binding mode of every accepted Candidate (Manifest or Reported) is reported; neither is required."
+    }
+  ]
+}

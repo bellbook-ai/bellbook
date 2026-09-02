@@ -1014,8 +1014,9 @@ signatures are required and no evidence thresholds are set, so Clean
 means "this history is internally consistent under the rules it names" -
 not "this meets a shared security baseline". Receipts are comparable
 across organizations only when the parties compare `rules_hash` against
-an agreed rule set; a fixed baseline profile is planned (§12.2) but not
-part of this spec version.
+an agreed rule set, or name a profile (§12.2): the `bellbook-core-v1`
+baseline is that agreement, evaluated on request as a report alongside
+the verdict, not a change to this spec version.
 
 Validation is resource-bounded: `validate` applies default
 `ValidationLimits` (64 MiB receipt bytes - the same default as the CLI,
@@ -1084,8 +1085,13 @@ what could not be checked. [RFC-0003](docs/rfcs/0003-requirement-binding.md)
 - **`bellbook-core-signed-v1`** (crate 1.0.0): the signed tier above the
   baseline.
 
-Nothing in this list is implemented until the release named beside it;
-until then, the validator knows no profiles.
+The baseline is implemented: `bellbook validate --require-profile
+bellbook-core-v1` evaluates it, the clause table and its hash are
+published in `spec/profiles/bellbook-core-v1/profile.json` with vectors
+in `cases.json` beside it, and the profile document is
+[docs/profiles/bellbook-core-v1.md](docs/profiles/bellbook-core-v1.md).
+Nothing else in this list is implemented until the release named beside
+it.
 
 ### 12.3 Conformance
 

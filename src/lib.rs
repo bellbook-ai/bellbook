@@ -74,6 +74,9 @@ pub mod log;
 /// Canonical manifest v1: an algorithm-independent content commitment over a
 /// Git tree (SPEC §5.1).
 pub mod manifest;
+/// Profiles (RFC-0003): separately versioned predicates evaluated over a
+/// receipt on request and reported alongside the verdict.
+pub mod profiles;
 /// The untrusted [`Proposer`] interface - emits proposals, holds no append
 /// authority.
 pub mod propose;
@@ -128,8 +131,13 @@ pub use checkpoint::{
 };
 #[cfg(feature = "persist")]
 pub use log::writer::{BatchAppend, LogWriter, DEFAULT_MAX_LOG_BYTES, EMPTY_HEAD};
+pub use profiles::{
+    core_v1_table, evaluate_profile, known_profiles, profile_hash, profile_table, Clause,
+    ClauseResult, ProfileResult, ProfileStatus, ProfileTable, BELLBOOK_CORE_V1,
+};
 pub use receipt::{
-    validate, validate_with_limits, Receipt, Report, ValidationLimits, ValidationStatus,
+    validate, validate_with_limits, validate_with_profiles, Receipt, Report, ValidationLimits,
+    ValidationStatus,
 };
 
 pub use queries::{
