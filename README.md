@@ -296,7 +296,7 @@ evolution kinds to a log and exports a receipt. See
 
 ## Status
 
-**The published release is 0.6.0, implementing spec v0.3 (evolution
+**The published release is 0.7.0, implementing spec v0.3 (evolution
 semantics: Candidate, Evaluation, and Selection records with replay-derived
 lineage standing).** SPEC.md is the authority for what v0.3 means (design
 notes in [`spec/v0.3-delta.md`](spec/v0.3-delta.md)). The previous epoch,
@@ -314,7 +314,8 @@ source binding, the selection and reaffirmation rule battery, and the
 replay-derived standing section, derived state with incremental/full-build
 equivalence, checkpoints, the crash-safe writer with idempotent
 compare-and-append, and portable receipts with the offline `bellbook
-validate` CLI, the `candidate`/`eval`/`select`/`retract`/`lineage` recording
+validate` CLI (including the `bellbook-core-v1` baseline profile check),
+the `candidate`/`eval`/`select`/`retract`/`lineage` recording
 commands, the read-side `query` command (the RFC-0002 named set: descent,
 descendants, siblings, frontier, standing, evidence, selected - over a log
 or a receipt), and `rules init` / `export` to generate a starter rule set and
