@@ -13,8 +13,8 @@ to cross-check the specification.)
 
 ## Status
 
-Validation, reading, writing, and the read-side query set (issue #13,
-RFC-0002).
+Validation (with the `bellbook-core-v1` baseline profile check), reading,
+writing, and the read-side query set (issue #13, RFC-0002, RFC-0003).
 
 ## Validate
 
@@ -39,7 +39,23 @@ print(report)                 # the full human-readable report (same as the CLI)
 Validation never raises for a bad receipt: an unparseable or failing receipt
 returns a `Report` with `status == "invalid"` and a `problem` or `reason`
 set. As with the CLI, **Clean is relative to the rules embedded in the
-receipt** - compare `rules_hash` against a rule set you trust.
+receipt** - compare `rules_hash` against a rule set you trust, or name the
+shared baseline:
+
+```python
+report = bellbook.validate(data, require_profile="bellbook-core-v1")
+p = report.profiles[0]
+print(p["status"])            # "Conformant" | "NonConformant" | "Unknown"
+print(p["hash"])              # hex of the profile's clause-table hash
+for c in p["clauses"]:        # [{"id": "B1", "passed": True, "detail": "..."}, ...]
+    print(c["id"], c["passed"], c["detail"])
+```
+
+`require_profile` takes one id or a list; results land in `report.profiles`
+in request order, and an unknown id is reported as `"Unknown"`, not raised.
+A profile result is a report alongside the verdict: it never changes
+`status` or `reason`. The profile itself is documented in
+[docs/profiles/bellbook-core-v1.md](../../docs/profiles/bellbook-core-v1.md).
 
 ## Read
 
@@ -79,7 +95,9 @@ never hand-author a rules object. `authors` maps an actor id to a role (`user`,
 `provider`, `system`, `executor`, or `verifier`, case-insensitive). `admins`
 lists actors allowed to retract records they did not author; `reaffirmers`,
 when given, restricts reaffirming selections to the listed actors. Both must
-also appear in `authors`:
+also appear in `authors`. Like `rules init`, the result carries the
+`bellbook-core-v1` baseline evidence thresholds, so a log committed under it
+conforms to the baseline profile out of the box:
 
 ```python
 import bellbook

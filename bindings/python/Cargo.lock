@@ -10,9 +10,9 @@ checksum = "2af50177e190e07a26ab74f8b1efbfe2ef87da2116221318cb1c2e82baf7de06"
 
 [[package]]
 name = "bellbook"
-version = "0.6.0"
+version = "0.7.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "34c9389baa6854da4de249b5f47c62e332a64ad902061fdec2c73b9b33d1495c"
+checksum = "61ae7aa59eaa5042f29b927d553b799cd175ce52e2ce69c5a97c8d3030a0c504"
 dependencies = [
  "ed25519-dalek",
  "fs4",

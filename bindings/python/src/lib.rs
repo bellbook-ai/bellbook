@@ -1,9 +1,11 @@
 //! Python bindings for Bellbook (issue #13): offline receipt validation and
 //! reading from Python.
 //!
-//! - `bellbook.validate(data: bytes) -> Report` wraps the crate's `validate`,
-//!   so Python reaches the exact same Clean / Tainted / Invalid decision the
-//!   Rust CLI does, over the same core.
+//! - `bellbook.validate(data: bytes, require_profile=None) -> Report` wraps
+//!   the crate's `validate`, so Python reaches the exact same Clean / Tainted
+//!   / Invalid decision the Rust CLI does, over the same core. Naming a
+//!   profile (`"bellbook-core-v1"`, or a list of ids) adds the profile
+//!   results to the report without changing the verdict.
 //! - `bellbook.read(data: bytes) -> Receipt` parses a receipt for inspection
 //!   (records, kinds, authors, evidence, refs, payloads). Reading does not
 //!   verify; call `validate` for the decision.
@@ -26,12 +28,12 @@
 
 use bellbook_core::{
     decode, default_space, encode, hex_decode, hex_encode, manifest_from_dir, manifest_hash,
-    schema_id, validate as core_validate, verify_and_build_state, Author, AuthorType, BindingMode,
+    schema_id, validate_with_profiles, verify_and_build_state, Author, AuthorType, BindingMode,
     CandidateBasis, CandidateData, EvaluationData, EvaluationOutcome, GitSource, Kind, LogWriter,
     Proposal, Queries, Receipt as CoreReceipt, Record as CoreRecord, RecordId, Ref, RefType,
     Report as CoreReport, RetractionData, ScoredValue, SelectionData, SelectionOutcome, SourceAlgo,
-    SourceBinding, State, ValidationStatus, VerdictResult, VerifierRules, SCHEMA_CANDIDATE,
-    SCHEMA_EVALUATION, SCHEMA_RETRACTION, SCHEMA_SELECTION,
+    SourceBinding, State, ValidationLimits, ValidationStatus, VerdictResult, VerifierRules,
+    SCHEMA_CANDIDATE, SCHEMA_EVALUATION, SCHEMA_RETRACTION, SCHEMA_SELECTION,
 };
 use pyo3::exceptions::{PyRuntimeError, PyValueError};
 use pyo3::prelude::*;
@@ -145,6 +147,40 @@ impl Report {
         Ok(out)
     }
 
+    /// Profile results, in the order requested via
+    /// `validate(..., require_profile=...)`; empty unless profiles were
+    /// requested. Each is a dict `{"id", "hash" (lowercase hex of the
+    /// profile's clause-table hash), "status" ("Conformant" |
+    /// "NonConformant" | "Unknown"), "clauses": [{"id", "passed",
+    /// "detail"}, ...]}`. A profile result is a report alongside the
+    /// verdict: it never changes `status` or `reason`.
+    #[getter]
+    fn profiles<'py>(&self, py: Python<'py>) -> PyResult<Vec<Bound<'py, PyDict>>> {
+        self.inner
+            .profiles
+            .iter()
+            .map(|p| {
+                let out = PyDict::new(py);
+                out.set_item("id", &p.id)?;
+                out.set_item("hash", hex_encode(&p.hash))?;
+                out.set_item("status", format!("{:?}", p.status))?;
+                let clauses = p
+                    .clauses
+                    .iter()
+                    .map(|c| {
+                        let d = PyDict::new(py);
+                        d.set_item("id", &c.id)?;
+                        d.set_item("passed", c.passed)?;
+                        d.set_item("detail", &c.detail)?;
+                        Ok(d)
+                    })
+                    .collect::<PyResult<Vec<_>>>()?;
+                out.set_item("clauses", clauses)?;
+                Ok(out)
+            })
+            .collect()
+    }
+
     fn __repr__(&self) -> String {
         format!(
             "Report(status={:?}, records={}, spec_version={:?})",
@@ -165,11 +201,33 @@ impl Report {
 /// re-derived, evidence, taint, and the standing section. It never raises for
 /// an invalid receipt - an unparseable or failing receipt returns a `Report`
 /// with `status == "invalid"` and a `problem` or `reason` set.
+///
+/// `require_profile` names a profile id (or a list of ids) to evaluate on
+/// top of the verdict, e.g. `"bellbook-core-v1"`; the results land in
+/// `Report.profiles` in request order. An id the validator does not know is
+/// reported as `"Unknown"`, never raised. Profiles never change the verdict.
 #[pyfunction]
-fn validate(data: &[u8]) -> Report {
-    Report {
-        inner: core_validate(data),
+#[pyo3(signature = (data, require_profile=None))]
+fn validate(data: &[u8], require_profile: Option<Bound<'_, PyAny>>) -> PyResult<Report> {
+    let profiles = match require_profile {
+        None => Vec::new(),
+        Some(v) => profile_ids(&v)?,
+    };
+    let ids: Vec<&str> = profiles.iter().map(String::as_str).collect();
+    Ok(Report {
+        inner: validate_with_profiles(data, &ValidationLimits::default(), &ids),
+    })
+}
+
+/// `require_profile` accepts one id or a list of ids; anything else is a
+/// `ValueError` rather than a silently ignored argument.
+fn profile_ids(v: &Bound<'_, PyAny>) -> PyResult<Vec<String>> {
+    if let Ok(one) = v.extract::<String>() {
+        return Ok(vec![one]);
     }
+    v.extract::<Vec<String>>().map_err(|_| {
+        PyValueError::new_err("require_profile must be a profile id (str) or a list of ids")
+    })
 }
 
 // --- read-side queries (RFC-0002, the named set) ---------------------------
@@ -445,6 +503,11 @@ fn parse_role(s: &str) -> PyResult<AuthorType> {
 /// `authors`: an actor with no role binding could never author an accepted
 /// record, so listing it here would be a silent no-op.
 ///
+/// Like `bellbook rules init`, the result carries the `bellbook-core-v1`
+/// baseline evidence thresholds (Candidate `Reported`, Evaluation
+/// `Reported`, Selection `Inferred` - the schema base classes), so a log
+/// committed under it conforms to the baseline profile out of the box.
+///
 /// ```python
 /// rules = bellbook.default_rules({"agent": "provider", "evaluator": "provider"},
 ///                                admins=["agent"])
@@ -463,7 +526,7 @@ fn default_rules(
             "default_rules needs at least one author binding",
         ));
     }
-    let mut rules = VerifierRules::new(default_space(), max_context);
+    let mut rules = VerifierRules::new(default_space(), max_context).with_baseline_thresholds();
     for (id, role) in &authors {
         if id.is_empty() {
             return Err(PyValueError::new_err("author id must be non-empty"));
@@ -479,9 +542,8 @@ fn default_rules(
             }
         }
     }
-    // Insert into the public sets directly rather than through the core's
-    // builder methods, so the binding keeps building against the published
-    // core crate (the builders arrive with the next core release).
+    // Direct inserts into the public sets; equivalent to the core's
+    // `with_admin_retraction_actor` / `with_reaffirmation_actor` builders.
     for id in admins.iter().flatten() {
         rules.admin_retraction_actors.insert(id.clone().into());
     }
