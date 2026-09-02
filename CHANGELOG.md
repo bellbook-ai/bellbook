@@ -5,7 +5,18 @@ All notable changes to Bellbook are documented in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and releases follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.7.0] - 2026-09-02
+
+Profiles foundation. RFC-0003 (accepted 2026-09-02) sets the sequence
+from a Clean receipt to a checkable delivery claim, and this release
+ships its first step: the `bellbook-core-v1` baseline profile, the
+content-addressed agreement two parties name so their receipts are
+comparable. A profile is a report alongside the verdict, never a change
+to it. No record or receipt wire change - the spec epoch stays 0.3 and
+the 0.3 corpus is byte-unchanged - and existing 0.3-0.6 receipts and
+rules validate identically. The Python package gains the profile check
+and baseline-default rules immediately after the core publish (the
+bindings track the published crate).
 
 ### Added
 
