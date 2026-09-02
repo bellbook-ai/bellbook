@@ -1,7 +1,7 @@
 # Bellbook specification
 
-**Spec version: 0.4 (in development on this branch; first released as
-`bellbook` 0.8.0).** The previous epochs are 0.3 (crates 0.3.0 through
+**Spec version: 0.4 (first released as `bellbook` 0.8.0).** The
+previous epochs are 0.3 (crates 0.3.0 through
 0.7.0) and 0.2 (crate 0.2.0); their artifacts remain valid under their
 own rules forever. A 0.4 validator replays a 0.3 receipt under the 0.3
 schema set and reaches the identical decision; the published 0.2.x
@@ -1230,10 +1230,10 @@ opaque `output` string - and the sketch was removed rather than promise
 what could not be checked. [RFC-0003](docs/rfcs/0003-requirement-binding.md)
 (accepted 2026-09-02) restores it as checkable design, in this sequence:
 
-- **`bellbook-core-v1`** (crate 0.7.0, this epoch, validator-side only): the
+- **`bellbook-core-v1`** (crate 0.7.0, spec 0.3, validator-side only): the
   content-addressed baseline fixing what Clean, Tainted, and Invalid mean
   under a declared rule shape, with no signature requirement.
-- **Spec epoch 0.4** (crate 0.8.0): the `Requirement` record, first-class
+- **Spec epoch 0.4** (crate 0.8.0, shipped): the `Requirement` record, first-class
   artifact identity (`ArtifactRef`), the extended `Evaluation` with the
   shared decider-binding vocabulary, the attested evaluation schema, and
   receipt profile declarations (`profiles: [ProfileRef]`).
