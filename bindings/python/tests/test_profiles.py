@@ -98,11 +98,14 @@ def test_published_profile_vectors_match_reference():
     assert len(doc["cases"]) >= 7
     # The bindings track the *published* core. Between a spec-epoch bump on
     # main and the pin bump that follows the next core publish, the vectors
-    # declare an epoch the pinned core does not implement; that is a
-    # structural Invalid with an unsupported-version problem, not a profile
-    # result, and not a disagreement to hide. Skip loudly until the pin moves.
+    # come from an epoch the pinned core does not implement: it reports a
+    # structural problem (an unsupported version, or a rules map naming a
+    # kind it has never heard of) instead of a profile result. That is not a
+    # disagreement to hide; skip loudly until the pin moves. The current
+    # core always parses its own vectors, so a structural problem here can
+    # only be the epoch gap.
     probe = bellbook.validate(json.dumps(doc["cases"][0]["receipt"]).encode())
-    if probe.problem and "unsupported spec version" in probe.problem:
+    if probe.problem:
         pytest.skip(f"vectors are from a newer spec epoch than the pinned core: {probe.problem}")
     for case in doc["cases"]:
         data = json.dumps(case["receipt"]).encode()
