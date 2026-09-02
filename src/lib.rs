@@ -100,9 +100,9 @@ pub use base::schema::{
     default_space, schema_id, schema_name_for_id, schemas_for_epoch, SchemaId, ALL_SCHEMAS,
     DEFAULT_SPACE_NAME, SCHEMAS_V03, SCHEMA_ACTION, SCHEMA_APPROVAL, SCHEMA_CANDIDATE,
     SCHEMA_CAPABILITY, SCHEMA_EVALUATION, SCHEMA_PLAN, SCHEMA_REFUSAL, SCHEMA_REQUEST,
-    SCHEMA_RESPONSE, SCHEMA_RESULT, SCHEMA_RESULT_EFFECT_CONFIRMATION, SCHEMA_RESULT_EXTERNAL,
-    SCHEMA_RETRACTION, SCHEMA_SELECTION, SCHEMA_SUMMARY, SCHEMA_USAGE, SCHEMA_VERDICT,
-    SPEC_VERSION, SUPPORTED_SPEC_VERSIONS,
+    SCHEMA_REQUIREMENT, SCHEMA_RESPONSE, SCHEMA_RESULT, SCHEMA_RESULT_EFFECT_CONFIRMATION,
+    SCHEMA_RESULT_EXTERNAL, SCHEMA_RETRACTION, SCHEMA_SELECTION, SCHEMA_SUMMARY, SCHEMA_USAGE,
+    SCHEMA_VERDICT, SPEC_VERSION, SUPPORTED_SPEC_VERSIONS,
 };
 pub use base::time::{Time, TimeSource};
 
@@ -113,8 +113,8 @@ pub use record::kind::{
     SummaryType, UsageOutcome, VerdictResult,
 };
 pub use record::payloads::{
-    artifact_ref_well_formed, artifact_refs_well_formed, ArtifactRef, ARTIFACT_DIGEST_MAX_BYTES,
-    ARTIFACT_DIGEST_MIN_BYTES, ARTIFACT_SCHEMES,
+    artifact_ref_well_formed, artifact_refs_well_formed, ArtifactRef, Provenance, RequirementData,
+    ARTIFACT_DIGEST_MAX_BYTES, ARTIFACT_DIGEST_MIN_BYTES, ARTIFACT_SCHEMES,
 };
 pub use record::payloads::{
     selection_approval_subject_hash, ActionData, ApprovalData, Attachment, BindingMode,

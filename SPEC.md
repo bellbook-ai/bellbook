@@ -51,7 +51,7 @@ Record {
 
 **Kinds:** `Request`, `Action`, `Response`, `Result`, `Summary`, `Approval`,
 `Capability`, `Usage`, `Refusal`, `Verdict`, `Plan`, `Retraction`,
-`Candidate`, `Evaluation`, `Selection`.
+`Candidate`, `Evaluation`, `Selection`, and (spec 0.4) `Requirement`.
 
 **Author types:** `User`, `Provider` (LLM), `System`, `Executor` (tool),
 `Verifier` (verdicts only).
@@ -76,6 +76,7 @@ a forbidden kind.
 | `Candidate` | `User`, `Provider`, `Executor`, `System` |
 | `Evaluation` | `User`, `Provider`, `Executor`, `System` |
 | `Selection` | `User`, `Provider`, `System` |
+| `Requirement` (0.4) | `User`, `Provider`, `System` |
 
 Rationale: authority-granting and authority-exercising roles must never
 coincide. Capabilities and approvals come from the human principal (or,
@@ -164,6 +165,32 @@ produced software states are proposed, judged, and chosen:
   considered: [RecordId], outcome: selected { candidates: [RecordId] } |
   none, rationale: Option<String> }`. Set-valued: one survivor for
   best-of-N or a repair accept, several for population evolution.
+
+**Requirement (spec 0.4).** A claim of delivery needs an addressable
+statement of what was required, so evidence and evaluator decisions can
+reference it and a reader can see which requirements were met, unmet, or
+informational. Plan tasks do not serve: a task's `done_when` is a fixed
+completion predicate, not a requirement with evidence binding.
+
+- `Requirement` (`bellbook.requirement.v1`, base evidence `Reported`):
+  `{ key: String (non-empty), description: String (non-empty), required:
+  bool, expected_evidence: Option<String>, provenance: user_authored |
+  derived }`. `required: false` records an informational requirement a
+  profile never counts toward a claim.
+- Exactly one `Cause` ref, to an accepted `Request` in the same thread and
+  space: the requirement belongs to that request. `key` is unique among
+  accepted, unretracted Requirements under the request; a duplicate
+  rejects with `RequirementInvalid`, as do an empty key or description or
+  any other `Cause` shape.
+- **Provenance is bound to authorship.** `user_authored` requires a `User`
+  author; `derived` requires `Provider` or `System` (an `Executor` never
+  authors a Requirement). "Confirmed by a person" is thereby a
+  replay-verifiable fact about who wrote the record, not a flag anyone
+  can set; a mismatch rejects with `AuthorRoleInvalid`.
+- Amendment is append-only: a wrong requirement is retracted and a new one
+  recorded. `Replace` is not accepted on Requirements (`ReplacementInvalid`);
+  retracting a Requirement releases its key, so the corrected one may carry
+  the same handle.
 
 **Artifact identity (spec 0.4).** A delivery claim must bind exact,
 content-addressed artifact identity as a real record field, never parsed
@@ -399,6 +426,13 @@ must resolve, in the same space, to a previously accepted `Candidate`, else
 conditions surface through refs, evidence, and standing, never through
 payload lookup.
 
+- a `Requirement` (spec 0.4) must carry a non-empty `key` and
+  `description` and exactly one `Cause` ref to an accepted `Request` in
+  the same thread and space, and its `key` must not already be held by an
+  accepted, unretracted Requirement under that request, else
+  `RequirementInvalid`; its `provenance` must match the author's role
+  (`user_authored` from a `User`, `derived` from a `Provider` or `System`),
+  else `AuthorRoleInvalid`. A retracted Requirement releases its key (§8).
 - a `Candidate`'s `source` must be well-formed (`tree`, and `commit` when
   present, lowercase hex of the length its `algo` dictates - 40 for `sha1`,
   64 for `sha256` - and `manifest_hash` present exactly when
@@ -475,7 +509,7 @@ reason codes:
 `Refused`, `InvalidPayload`, `InvalidCheckpoint`, `AuthorRoleInvalid`,
 `AuthorityRefMissing`, `SourceBindingInvalid`, `LineageInvalid`,
 `PayloadRefUnresolved`, `EvaluationInvalid`, `SelectionInvalid`,
-`ReaffirmationInvalid`, `ArtifactRefInvalid`.
+`ReaffirmationInvalid`, `ArtifactRefInvalid`, `RequirementInvalid`.
 
 Signature checks follow §3.2: `SignatureMissing` for a required-but-absent
 signature, `SignatureInvalid` for any present signature that fails strict
@@ -659,8 +693,8 @@ exhaustive mapping; adding a schema requires classifying it):
 - `bellbook.request.v1`, `bellbook.action.v1`, `bellbook.response.v1`,
   `bellbook.result.v1`, `bellbook.result.effect_confirmation.v1`,
   `bellbook.capability.v1`, `bellbook.approval.v1`, `bellbook.refusal.v1`,
-  `bellbook.usage.v1`, `bellbook.candidate.v1`, `bellbook.evaluation.v1`
-  → `Reported`
+  `bellbook.usage.v1`, `bellbook.candidate.v1`, `bellbook.evaluation.v1`,
+  `bellbook.requirement.v1` (0.4) → `Reported`
 - `bellbook.summary.v1`, `bellbook.plan.v1`, `bellbook.selection.v1`
   → `Inferred`
 

@@ -104,6 +104,47 @@ pub struct ResultData {
     pub artifacts: Option<Vec<ArtifactRef>>,
 }
 
+// ──────────────────── Requirement (spec 0.4, RFC-0003) ────────────────────
+
+/// Who asserted a requirement. Bound to authorship by the verifier
+/// (`AuthorRoleInvalid`): `user_authored` needs a `User` author,
+/// `derived` a `Provider` or `System`. "Confirmed by a person" is thereby a
+/// replay-checked fact about who wrote the record, not a flag anyone can
+/// set.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Provenance {
+    /// Stated by the human principal.
+    UserAuthored,
+    /// Derived by the agent or host from the request.
+    Derived,
+}
+
+/// Payload for `Kind::Requirement` (`bellbook.requirement.v1`, spec 0.4) -
+/// an addressable statement of what a Request requires. Carries exactly one
+/// `Cause` ref to its accepted Request (same thread and space); `key` is
+/// unique among accepted, unretracted Requirements under that request.
+/// Non-empty `key` and `description`, key uniqueness, and the Cause shape
+/// are verifier rules (`RequirementInvalid`). Never replaced: a wrong
+/// requirement is retracted and a new one recorded, which releases its key.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RequirementData {
+    /// Stable label within the request (e.g. "R1", "tests-pass"); the
+    /// handle a reader and a profile refer to.
+    pub key: String,
+    /// What is required, in words.
+    pub description: String,
+    /// Whether the requirement counts toward a claim (`false` records an
+    /// informational requirement a profile never counts).
+    pub required: bool,
+    /// What evidence would satisfy it, if stated; not interpreted.
+    #[serde(default)]
+    pub expected_evidence: Option<String>,
+    /// Who asserted it; bound to the author's role.
+    pub provenance: Provenance,
+}
+
 // ─────────────────── Artifact identity (spec 0.4, RFC-0003) ───────────────────
 
 /// A content-addressed, scheme-tagged artifact identity (SPEC §2, spec 0.4):

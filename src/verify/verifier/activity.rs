@@ -27,6 +27,8 @@ pub(super) fn check_kind_specific(
         Kind::Candidate => check_candidate(record, prior, rules, state),
         Kind::Evaluation => check_evaluation(record, prior, rules, state),
         Kind::Selection => check_selection(record, prior, rules, state),
+        // Spec 0.4: requirement binding (RFC-0003 section 4.1).
+        Kind::Requirement => check_requirement(record, prior, state),
     }
 }
 

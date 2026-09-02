@@ -106,6 +106,26 @@ fn scripted_log(dir: &std::path::Path) -> Vec<Record> {
         &mut state,
     );
 
+    // Spec 0.4: a Requirement stated by the principal for the request.
+    commit(
+        proposal(
+            Kind::Requirement,
+            SCHEMA_REQUIREMENT,
+            encode(&RequirementData {
+                key: "demo-file-written".into(),
+                description: "demo.txt exists after the run".into(),
+                required: true,
+                expected_evidence: Some("a Result naming demo.txt".into()),
+                provenance: Provenance::UserAuthored,
+            })
+            .unwrap(),
+            vec![cause(request_id)],
+            author("human", AuthorType::User),
+        ),
+        &mut writer,
+        &mut state,
+    );
+
     let capability_id = commit(
         proposal(
             Kind::Capability,
@@ -683,7 +703,7 @@ fn build_vector_file(records: &[Record]) -> VectorFile {
     vectors.sort_by_key(|v| v.time);
     VectorFile {
         spec_version: SPEC_VERSION.into(),
-        description: "One unsigned record of each non-evolution kind plus every evolution-kind (Candidate/Evaluation/Selection) subject from a fixed scripted log, so the richer v0.3 canonical forms (manifest binding, scored vs passed, none vs selected, continuation/derivation, Replace) and the spec 0.4 `artifacts` list on a Candidate and a Result are each pinned; plus a deterministic signed Request and valid alternate-key substitution. id = SHA-256(canonical id form); the domain-separated signing form wraps the record with id and author.signature omitted, while a signed canonical id form omits only id. space/thread/scope ids are SHA-256 of the given UTF-8 names."
+        description: "One unsigned record of each non-evolution kind plus every evolution-kind (Candidate/Evaluation/Selection) subject from a fixed scripted log, so the richer v0.3 canonical forms (manifest binding, scored vs passed, none vs selected, continuation/derivation, Replace) and the spec 0.4 `artifacts` list on a Candidate and a Result and a `Requirement` are each pinned; plus a deterministic signed Request and valid alternate-key substitution. id = SHA-256(canonical id form); the domain-separated signing form wraps the record with id and author.signature omitted, while a signed canonical id form omits only id. space/thread/scope ids are SHA-256 of the given UTF-8 names."
             .into(),
         space_name: SPACE_NAME.into(),
         thread_name: THREAD_NAME.into(),
@@ -698,7 +718,7 @@ fn build_vector_file(records: &[Record]) -> VectorFile {
 fn spec_vectors_match() {
     let dir = tempfile::tempdir().unwrap();
     let records = scripted_log(dir.path());
-    assert_eq!(records.len(), 40); // 20 subjects + 20 verdicts
+    assert_eq!(records.len(), 42); // 21 subjects + 21 verdicts
 
     let built = build_vector_file(&records);
     // One vector per non-evolution kind, plus every evolution-kind subject
@@ -709,7 +729,7 @@ fn spec_vectors_match() {
         .filter(|v| matches!(v.kind.as_str(), "Candidate" | "Evaluation" | "Selection"))
         .count();
     assert_eq!(evolution, 8, "richer evolution shapes pinned");
-    assert_eq!(built.vectors.len(), 20);
+    assert_eq!(built.vectors.len(), 21);
 
     // Every unsigned and signed vector must round-trip to its published id.
     for v in &built.vectors {

@@ -188,6 +188,19 @@ fn apply_accepted(state: &mut State, record: &Record) -> Result<(), serde_json::
                     state.class_approvals.remove(&key);
                 }
             }
+            // A retracted Requirement releases its key (spec 0.4): amendment
+            // is retract-and-record, and the corrected requirement may carry
+            // the same handle. The reverse index entry stays, so a second
+            // retraction of the same target is a no-op here.
+            if let Some((request_id, key)) = state.requirement_index.get(&data.target_id) {
+                if let Some(keys) = state.requirement_keys.get_mut(request_id) {
+                    keys.remove(key);
+                    if keys.is_empty() {
+                        let request_id = *request_id;
+                        state.requirement_keys.remove(&request_id);
+                    }
+                }
+            }
         }
         Kind::Response => {
             let data: ResponseData = decode(&record.data)?;
@@ -211,6 +224,26 @@ fn apply_accepted(state: &mut State, record: &Record) -> Result<(), serde_json::
             // Candidates and evaluations contribute no operational state in
             // this fold; standing is a replay-derived report dimension, not
             // state (SPEC §7.2, delta D6). Tracked in #26.
+        }
+        Kind::Requirement => {
+            // Key uniqueness under the request (spec 0.4): the verifier
+            // guaranteed exactly one Cause to the request.
+            let data: RequirementData = decode(&record.data)?;
+            if let Some(request_id) = record
+                .refs
+                .iter()
+                .find(|r| r.type_ == RefType::Cause)
+                .map(|r| r.target)
+            {
+                state
+                    .requirement_keys
+                    .entry(request_id)
+                    .or_default()
+                    .insert(data.key.clone());
+                state
+                    .requirement_index
+                    .insert(record.id, (request_id, data.key));
+            }
         }
         Kind::Selection => {
             let data: SelectionData = decode(&record.data)?;

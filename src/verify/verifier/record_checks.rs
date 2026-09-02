@@ -349,6 +349,9 @@ fn check_payload_decode(record: &Record) -> Option<ReasonCode> {
         _ if schema == schema_id(SCHEMA_SELECTION) => {
             decodes_canonically::<SelectionData>(&record.data)
         }
+        _ if schema == schema_id(SCHEMA_REQUIREMENT) => {
+            decodes_canonically::<RequirementData>(&record.data)
+        }
         _ => return Some(ReasonCode::UnknownSchema),
     };
     if ok {

@@ -196,9 +196,8 @@ fn v03_query_answers_are_identical() {
 fn v03_receipt_cannot_carry_a_later_epoch_schema() {
     // Epoch dispatch is not a courtesy: a receipt that declares 0.3 replays
     // with the 0.3 schema set, so its embedded rules cannot smuggle in a
-    // schema the epoch never had. Today the two sets coincide except for
-    // what later 0.4 PRs add; the invariant is pinned so those PRs inherit
-    // it. A 0.3 receipt keeps its rules_hash as embedded either way.
+    // schema the epoch never had. A 0.3 receipt keeps its rules_hash as
+    // embedded either way.
     let doc = corpus("receipt-cases.json");
     let case = &doc["cases"][0];
     let bytes = serde_json::to_vec(&case["receipt"]).unwrap();
@@ -209,4 +208,85 @@ fn v03_receipt_cannot_carry_a_later_epoch_schema() {
         assert!(ALL_SCHEMAS.contains(s), "0.4 dropped a 0.3 schema: {s}");
     }
     assert_eq!(schemas_for_epoch("0.3"), Some(SCHEMAS_V03));
+    assert!(!SCHEMAS_V03.contains(&SCHEMA_REQUIREMENT));
+}
+
+/// The same invariant exercised end to end: a 0.4 log that carries a
+/// Requirement validates Clean as 0.4, and the identical bytes relabeled
+/// `spec_version: "0.3"` reject the Requirement as `UnknownSchema` even
+/// though the embedded rules map its schema, because 0.3 never had it.
+#[test]
+#[cfg(feature = "persist")]
+fn relabeling_a_v04_receipt_as_v03_rejects_the_new_kind() {
+    let space = default_space();
+    let rules = VerifierRules::new(space, 200).with_author_role("human", AuthorType::User);
+    let dir = tempfile::tempdir().unwrap();
+    let mut w = LogWriter::open(dir.path(), &rules).unwrap();
+    let mut st = State::default();
+    let author = || Author {
+        id: "human".into(),
+        type_: AuthorType::User,
+        signature: None,
+    };
+    let (rid, v) = w
+        .commit(
+            Proposal {
+                space,
+                thread: space,
+                author: author(),
+                kind: Kind::Request,
+                schema: schema_id(SCHEMA_REQUEST),
+                data: encode(&RequestData {
+                    objective: "epoch dispatch".into(),
+                    scope: space,
+                    attachments: vec![],
+                    parent_request_id: None,
+                })
+                .unwrap(),
+                refs: vec![],
+            },
+            &rules,
+            &mut st,
+        )
+        .unwrap();
+    assert_eq!(v.result, VerdictResult::Accept);
+    let (_, v) = w
+        .commit(
+            Proposal {
+                space,
+                thread: space,
+                author: author(),
+                kind: Kind::Requirement,
+                schema: schema_id(SCHEMA_REQUIREMENT),
+                data: encode(&RequirementData {
+                    key: "r1".into(),
+                    description: "the first requirement".into(),
+                    required: true,
+                    expected_evidence: None,
+                    provenance: Provenance::UserAuthored,
+                })
+                .unwrap(),
+                refs: vec![Ref {
+                    type_: RefType::Cause,
+                    target: rid,
+                }],
+            },
+            &rules,
+            &mut st,
+        )
+        .unwrap();
+    assert_eq!(v.result, VerdictResult::Accept, "{:?}", v.reason);
+
+    let receipt = Receipt::new(w.records(), &rules);
+    let as_v04 = validate(&receipt.to_bytes().unwrap());
+    assert_eq!(as_v04.status, ValidationStatus::Clean);
+
+    let mut relabeled = serde_json::to_value(&receipt).unwrap();
+    relabeled["spec_version"] = Value::String("0.3".into());
+    let as_v03 = validate(&serde_json::to_vec(&relabeled).unwrap());
+    assert_eq!(as_v03.status, ValidationStatus::Invalid);
+    assert_eq!(as_v03.reason, Some(ReasonCode::UnknownSchema));
+    assert_eq!(as_v03.spec_version, "0.3");
+    // The rules hash is over the rules as embedded, in both readings.
+    assert_eq!(as_v03.rules_hash, as_v04.rules_hash);
 }
