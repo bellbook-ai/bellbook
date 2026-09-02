@@ -63,6 +63,7 @@ fn line(rules: &VerifierRules, retract: bool) -> Vec<Record> {
         Kind::Candidate,
         SCHEMA_CANDIDATE,
         encode(&CandidateData {
+            artifacts: None,
             source: SourceBinding {
                 git: GitSource {
                     algo: SourceAlgo::Sha1,

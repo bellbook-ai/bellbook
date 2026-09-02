@@ -10,6 +10,23 @@ and releases follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 The requirement-binding epoch (RFC-0003, milestone v0.8.0). The first
 spec change since 0.3: spec version 0.4.
 
+### Added
+
+- **First-class artifact identity: `ArtifactRef`** (RFC-0003 section
+  4.2, SPEC section 2; #108). `{scheme, digest, name}`: a scheme token, a
+  lowercase-hex content digest of the length the scheme dictates
+  (registered: `git-tree-sha1`, `git-tree-sha256`, `manifest-v1`,
+  `git-archive-tar-v1`, `oci-image-manifest`, `sha256-bytes`; an
+  unregistered scheme is accepted under a generic 20..=64-byte rule), and
+  an optional label that is never identity. `Candidate` and `Result`
+  payloads gain an optional `artifacts` list, strictly sorted and
+  deduplicated; a malformed entry or an unordered list rejects with the
+  new reason code `ArtifactRefInvalid`. The field is additive and absent
+  from the canonical form when unset, so every 0.3 payload keeps its
+  bytes and id. Vectors pin the new canonical forms; the corpus carries
+  accepting and rejecting cases for both kinds; the independent Python
+  validator implements the rule from scratch.
+
 ### Changed
 
 - **Opened the spec 0.4 epoch** (#109). `SPEC_VERSION` is `0.4`; the

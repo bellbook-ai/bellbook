@@ -95,6 +95,90 @@ pub struct ResultData {
     pub status: ResultStatus,
     /// Raw tool output (or error text) as produced by the executor.
     pub output: String,
+    /// Artifacts this result produced or carries as evidence bundles (spec
+    /// 0.4, [`ArtifactRef`]): content-addressed, scheme-tagged identities a
+    /// later claim can bind to. Additive: absent on the wire when not set,
+    /// so every 0.3 payload keeps its canonical form. Well-formedness and
+    /// ordering are verifier rules (`ArtifactRefInvalid`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub artifacts: Option<Vec<ArtifactRef>>,
+}
+
+// ─────────────────── Artifact identity (spec 0.4, RFC-0003) ───────────────────
+
+/// A content-addressed, scheme-tagged artifact identity (SPEC §2, spec 0.4):
+/// a source tree, a source archive, a built asset, a container manifest, or
+/// raw bytes all bind through this one type without privileging any scheme.
+/// A digest identifies content, never a recording: a scheme whose input
+/// includes timestamps or run identifiers is not a valid scheme, so replays
+/// converge on the same reference.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ArtifactRef {
+    /// Scheme token, `[a-z0-9][a-z0-9.-]*`. Registered schemes fix their
+    /// digest length ([`ARTIFACT_SCHEMES`]); an unregistered scheme is
+    /// accepted by the core under the generic 20..=64-byte rule, and a
+    /// profile may restrict to registered ones.
+    pub scheme: String,
+    /// Lowercase hex digest, even length, 20 through 64 bytes (40 through
+    /// 128 characters); exactly the registered length for a registered
+    /// scheme.
+    pub digest: String,
+    /// Optional human label (a path, an image name); never part of identity.
+    #[serde(default)]
+    pub name: Option<String>,
+}
+
+/// Registered artifact schemes and their fixed digest lengths in bytes
+/// (RFC-0003 section 4.2). Bellbook's canonical manifest v1 (SPEC §2) is one
+/// scheme among several, not the only one.
+pub const ARTIFACT_SCHEMES: &[(&str, usize)] = &[
+    ("git-tree-sha1", 20),
+    ("git-tree-sha256", 32),
+    ("manifest-v1", 32),
+    ("git-archive-tar-v1", 32),
+    ("oci-image-manifest", 32),
+    ("sha256-bytes", 32),
+];
+
+/// Bounds of the generic digest rule for unregistered schemes, in bytes.
+pub const ARTIFACT_DIGEST_MIN_BYTES: usize = 20;
+/// See [`ARTIFACT_DIGEST_MIN_BYTES`].
+pub const ARTIFACT_DIGEST_MAX_BYTES: usize = 64;
+
+/// Whether one [`ArtifactRef`] is well-formed: a valid scheme token and a
+/// lowercase-hex digest of the length its scheme dictates (the registered
+/// length, or any even length within the generic bounds).
+pub fn artifact_ref_well_formed(a: &ArtifactRef) -> bool {
+    let mut bytes = a.scheme.bytes();
+    let head_ok = matches!(bytes.next(), Some(b'a'..=b'z' | b'0'..=b'9'));
+    if !head_ok || !bytes.all(|b| matches!(b, b'a'..=b'z' | b'0'..=b'9' | b'.' | b'-')) {
+        return false;
+    }
+    if a.digest.len() % 2 != 0
+        || !a
+            .digest
+            .bytes()
+            .all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'))
+    {
+        return false;
+    }
+    let digest_bytes = a.digest.len() / 2;
+    match ARTIFACT_SCHEMES
+        .iter()
+        .find(|(s, _)| *s == a.scheme)
+        .map(|(_, n)| *n)
+    {
+        Some(n) => digest_bytes == n,
+        None => (ARTIFACT_DIGEST_MIN_BYTES..=ARTIFACT_DIGEST_MAX_BYTES).contains(&digest_bytes),
+    }
+}
+
+/// Whether an artifact list is well-formed: every entry well-formed and the
+/// list strictly increasing by `(scheme, digest, name)`, so identical
+/// content always serializes identically and duplicates cannot hide.
+pub fn artifact_refs_well_formed(list: &[ArtifactRef]) -> bool {
+    list.iter().all(artifact_ref_well_formed) && list.windows(2).all(|w| w[0] < w[1])
 }
 
 /// Payload for `Kind::Capability` (`bellbook.capability.v1`) - a permission
@@ -457,6 +541,14 @@ pub struct CandidateData {
     /// Free-form label; not interpreted by the verifier.
     #[serde(default)]
     pub note: Option<String>,
+    /// Artifacts bound to this candidate beyond its source binding (spec
+    /// 0.4, [`ArtifactRef`]): produced assets, archives, images. Additive:
+    /// absent on the wire when not set, so every 0.3 payload keeps its
+    /// canonical form. `source` is unchanged; `artifacts` adds to it.
+    /// Well-formedness and ordering are verifier rules
+    /// (`ArtifactRefInvalid`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub artifacts: Option<Vec<ArtifactRef>>,
 }
 
 /// A bounded fixed-point score: `value / 10^scale`. Bounds are enforced at

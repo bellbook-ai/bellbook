@@ -64,6 +64,7 @@ fn main() {
         Kind::Candidate,
         SCHEMA_CANDIDATE,
         &CandidateData {
+            artifacts: None,
             source: next_source(),
             basis: CandidateBasis::Root,
             parent: None,
@@ -141,6 +142,7 @@ fn main() {
             Kind::Candidate,
             SCHEMA_CANDIDATE,
             &CandidateData {
+                artifacts: None,
                 source: next_source(),
                 basis: CandidateBasis::Continuation,
                 parent: Some(prev_winner),
@@ -159,6 +161,7 @@ fn main() {
             Kind::Candidate,
             SCHEMA_CANDIDATE,
             &CandidateData {
+                artifacts: None,
                 source: next_source(),
                 basis: CandidateBasis::Continuation,
                 parent: Some(prev_winner),

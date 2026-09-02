@@ -8,6 +8,14 @@ pub(super) fn check_result(
 ) -> Option<ReasonCode> {
     let data: ResultData = dec!(&record.data, ResultData);
 
+    // Artifact identities (spec 0.4): each well-formed, the list strictly
+    // ordered and deduplicated.
+    if let Some(artifacts) = &data.artifacts {
+        if !artifact_refs_well_formed(artifacts) {
+            return Some(ReasonCode::ArtifactRefInvalid);
+        }
+    }
+
     // Must reference an open action in same thread/space
     if !state.open_actions.contains(&data.action_id) {
         return Some(ReasonCode::ActionClosed);

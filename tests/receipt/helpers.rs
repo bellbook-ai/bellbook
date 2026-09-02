@@ -114,6 +114,7 @@ fn small_log(dir: &std::path::Path, retract_result: bool) -> (Vec<Record>, Verif
                 kind: Kind::Result,
                 schema: schema_id(SCHEMA_RESULT),
                 data: encode(&ResultData {
+                    artifacts: None,
                     action_id: aid,
                     status: ResultStatus::Success,
                     output: "done".into(),
