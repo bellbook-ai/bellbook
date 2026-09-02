@@ -53,8 +53,14 @@ for c in p["clauses"]:        # [{"id": "B1", "passed": True, "detail": "..."}, 
 
 `require_profile` takes one id or a list; results land in `report.profiles`
 in request order, and an unknown id is reported as `"Unknown"`, not raised.
-A profile result is a report alongside the verdict: it never changes
-`status` or `reason`. The profile itself is documented in
+A receipt that declares profiles (spec 0.4, `Writer.receipt(profiles=...)`)
+needs no `require_profile`: every declared profile is evaluated unasked and
+comes first, with `p["declared"]`, `p["declaration_matches"]` (whether the
+declared version and hash name the clause table that was evaluated; `None`
+for an undeclared or unknown profile), and `p["met"]` (Conformant and, if
+declared, matching). A declaration is never trusted. A profile result is a
+report alongside the verdict: it never changes `status` or `reason`. The
+profile itself is documented in
 [docs/profiles/bellbook-core-v1.md](../../docs/profiles/bellbook-core-v1.md).
 
 ## Read
@@ -117,7 +123,8 @@ report = bellbook.validate(w.receipt())
 assert report.status == "clean"
 ```
 
-Each of `candidate`, `evaluate`, `select`, and `retract` commits one record
+Each of `request`, `requirement`, `candidate`, `evaluate`, `select`, and
+`retract` commits one record
 and returns a `Commit` (`id`, `accepted`, `result`, `reason`). A record is durably committed
 whether accepted or rejected - a rejected record is evidence a proposal was
 refused - so `accepted` may be `False` without an exception. Statically-knowable
@@ -136,13 +143,54 @@ written.
     (`derives_from=[sound_parent.id, failing_eval.id]`), and because `Cause`
     carries intent, not taint, retracting that evaluation later does not
     taint the repair.
+  `artifacts` (spec 0.4) binds artifact identities: a list of
+  `"scheme:digest[:name]"` strings or `{"scheme", "digest", "name"?}` dicts
+  (registered schemes: `git-tree-sha1`, `git-tree-sha256`, `manifest-v1`,
+  `git-archive-tar-v1`, `oci-image-manifest`, `sha256-bytes`), checked and
+  canonically ordered before the write.
 - `evaluate(author, candidate, criterion, *, passed=False, failed=False,
-  score=None, scale=None, procedure=None, uses=None)` - exactly one of
-  `passed`, `failed`, or a `score` (with `scale`, a decimal exponent 0-12).
+  score=None, scale=None, procedure=None, uses=None, blocked=False,
+  insufficient=False, stale=False, not_run=False, evaluator=None,
+  evaluator_version=None, procedure_hash=None, input_hash=None, basis=None,
+  requirements=None, artifacts=None)` - exactly one outcome: `passed`,
+  `failed`, a `score` (with `scale`, a decimal exponent 0-12), or one of the
+  spec 0.4 fail-closed outcomes (only `passed` passes). With `evaluator` and
+  `basis` (`"recomputed"` or `"declared"`; never inferred) the extended
+  evaluation is written: who decided with what procedure over what input,
+  the `artifacts` judged, and the accepted Requirement ids it speaks to
+  (`requirements`, each also a `Use` ref, so a retracted requirement taints
+  the evaluations that judged against it). Any of those without both
+  `evaluator` and `basis` raises `ValueError`; without them the v1 shape is
+  written.
 - `select(author, objective, consider, *, choose=None, uses_eval=None,
   none=False, replaces=None, rationale=None)` - exactly one of `choose` (with
   `uses_eval`) or `none=True`; `replaces` reaffirms a prior selection.
   `consider`, `choose`, and `uses_eval` are **lists** of record ids.
+- `request(author, objective)` (spec 0.4) - what a person asked for; the
+  author must have the `user` role. Requirements bind to it.
+- `requirement(author, request, key, description, *, required=True,
+  expected_evidence=None, provenance=None)` (spec 0.4) - an addressable
+  statement of what the request requires. `key` must be unique among the
+  request's accepted, unretracted requirements (a duplicate commits as a
+  rejected record with `RequirementInvalid`; retract-and-record releases
+  it). `provenance` is `"user_authored"` or `"derived"`, defaults from the
+  author's role (user -> user_authored, provider or system -> derived), and
+  a value the role cannot carry raises `ValueError` before the write.
+- `receipt(profiles=None)` - `profiles=["bellbook-core-v1"]` declares the
+  profiles the receipt claims (spec 0.4). A declaration is never trusted:
+  every validator evaluates it unasked and reports `declared`,
+  `declaration_matches`, and `met` beside the result.
+
+```python
+req = w.request(author="human", objective="ship the bound build")
+r1 = w.requirement(author="human", request=req.id, key="R1", description="unit tests pass")
+c0 = w.candidate(author="agent", git_tree=tree, artifacts=[f"git-tree-sha1:{tree}:src"])
+e0 = w.evaluate(author="evaluator", candidate=c0.id, criterion="unit-tests", passed=True,
+                evaluator="test-harness", basis="recomputed",
+                requirements=[r1.id], artifacts=[f"git-tree-sha1:{tree}"])
+report = bellbook.validate(w.receipt(profiles=["bellbook-core-v1"]))
+report.profiles[0]["met"]     # True: Conformant, and the declaration matches
+```
 
 ## Retract
 

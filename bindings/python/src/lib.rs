@@ -10,11 +10,12 @@
 //!   (records, kinds, authors, evidence, refs, payloads). Reading does not
 //!   verify; call `validate` for the decision.
 //! - `bellbook.Writer(log_dir, rules)` records evolution to a persistent,
-//!   single-writer log: `candidate`, `evaluate`, `select`, and `retract`
-//!   each commit one record and return a [`Commit`]. The writer holds the
-//!   same exclusive lock and runs the same replay-on-commit the Rust
-//!   `LogWriter` does. Export the log with `writer.receipt()` and feed it
-//!   straight back to `validate`.
+//!   single-writer log: `request`, `requirement`, `candidate`, `evaluate`,
+//!   `select`, and `retract` each commit one record and return a
+//!   [`Commit`]. The writer holds the same exclusive lock and runs the same
+//!   replay-on-commit the Rust `LogWriter` does. Export the log with
+//!   `writer.receipt()` (optionally declaring profiles) and feed it straight
+//!   back to `validate`.
 //! - The RFC-0002 named query set - `descent`, `descendants`, `siblings`,
 //!   `frontier`, `standing`, `evidence`, `selected` - is available as
 //!   methods on both `Receipt` and `Writer`, returning the shared surface
@@ -27,13 +28,16 @@
 #![allow(clippy::useless_conversion)]
 
 use bellbook_core::{
-    decode, default_space, encode, hex_decode, hex_encode, manifest_from_dir, manifest_hash,
-    schema_id, validate_with_profiles, verify_and_build_state, Author, AuthorType, BindingMode,
-    CandidateBasis, CandidateData, EvaluationData, EvaluationOutcome, GitSource, Kind, LogWriter,
-    Proposal, Queries, Receipt as CoreReceipt, Record as CoreRecord, RecordId, Ref, RefType,
-    Report as CoreReport, RetractionData, ScoredValue, SelectionData, SelectionOutcome, SourceAlgo,
+    artifact_ref_well_formed, decode, default_space, encode, hex_decode, hex_encode,
+    manifest_from_dir, manifest_hash, schema_id, validate_with_profiles, verify_and_build_state,
+    ArtifactRef, Author, AuthorType, Basis, BindingMode, CandidateBasis, CandidateData,
+    DeciderBinding, EvaluationData, EvaluationDataV2, EvaluationOutcome, EvaluationOutcomeV2,
+    GitSource, Kind, LogWriter, Proposal, Provenance, Queries, Receipt as CoreReceipt,
+    Record as CoreRecord, RecordId, Ref, RefType, Report as CoreReport, RequestData,
+    RequirementData, RetractionData, ScoredValue, SelectionData, SelectionOutcome, SourceAlgo,
     SourceBinding, State, ValidationLimits, ValidationStatus, VerdictResult, VerifierRules,
-    SCHEMA_CANDIDATE, SCHEMA_EVALUATION, SCHEMA_RETRACTION, SCHEMA_SELECTION,
+    SCHEMA_CANDIDATE, SCHEMA_EVALUATION, SCHEMA_EVALUATION_V2, SCHEMA_REQUEST, SCHEMA_REQUIREMENT,
+    SCHEMA_RETRACTION, SCHEMA_SELECTION,
 };
 use pyo3::exceptions::{PyRuntimeError, PyValueError};
 use pyo3::prelude::*;
@@ -147,12 +151,18 @@ impl Report {
         Ok(out)
     }
 
-    /// Profile results, in the order requested via
-    /// `validate(..., require_profile=...)`; empty unless profiles were
-    /// requested. Each is a dict `{"id", "hash" (lowercase hex of the
-    /// profile's clause-table hash), "status" ("Conformant" |
-    /// "NonConformant" | "Unknown"), "clauses": [{"id", "passed",
-    /// "detail"}, ...]}`. A profile result is a report alongside the
+    /// Profile results: every profile the receipt declares (spec 0.4), in
+    /// declaration order, then the ids requested via
+    /// `validate(..., require_profile=...)` that the receipt did not declare.
+    /// Empty when the receipt declares nothing and nothing was requested.
+    /// Each is a dict `{"id", "hash" (lowercase hex of the profile's
+    /// clause-table hash the validator evaluated), "status" ("Conformant" |
+    /// "NonConformant" | "Unknown"), "declared" (bool),
+    /// "declaration_matches" (True/False for a declared, known profile:
+    /// whether the declared version and hash name the evaluated table; None
+    /// otherwise), "met" (Conformant and, if declared, matching),
+    /// "clauses": [{"id", "passed", "detail"}, ...]}`. A declaration is
+    /// never trusted, and a profile result is a report alongside the
     /// verdict: it never changes `status` or `reason`.
     #[getter]
     fn profiles<'py>(&self, py: Python<'py>) -> PyResult<Vec<Bound<'py, PyDict>>> {
@@ -164,6 +174,9 @@ impl Report {
                 out.set_item("id", &p.id)?;
                 out.set_item("hash", hex_encode(&p.hash))?;
                 out.set_item("status", format!("{:?}", p.status))?;
+                out.set_item("declared", p.declared)?;
+                out.set_item("declaration_matches", p.declaration_matches)?;
+                out.set_item("met", p.met())?;
                 let clauses = p
                     .clauses
                     .iter()
@@ -594,6 +607,72 @@ fn parse_id(hex: &str) -> PyResult<RecordId> {
     hex_decode(hex).ok_or_else(|| PyValueError::new_err(format!("invalid record id {hex:?}")))
 }
 
+fn parse_hash(name: &str, hex: &str) -> PyResult<[u8; 32]> {
+    hex_decode(hex).ok_or_else(|| {
+        PyValueError::new_err(format!("invalid {name} {hex:?} (expected 64 hex chars)"))
+    })
+}
+
+/// `artifacts=[...]` (spec 0.4): each entry is `"scheme:digest[:name]"` (the
+/// CLI form) or a dict `{"scheme", "digest", "name"?}`. Every reference is
+/// checked against the artifact rule before anything is written, and the
+/// list is sorted and deduplicated into the canonical order the verifier
+/// requires, so a well-formed call never mints an `ArtifactRefInvalid`
+/// record. `None` when the argument was omitted.
+fn parse_artifacts(items: Option<Vec<Bound<'_, PyAny>>>) -> PyResult<Option<Vec<ArtifactRef>>> {
+    let Some(items) = items else {
+        return Ok(None);
+    };
+    let mut refs = Vec::with_capacity(items.len());
+    for item in items {
+        let a = if let Ok(s) = item.extract::<String>() {
+            let mut parts = s.splitn(3, ':');
+            let scheme = parts.next().unwrap_or_default().to_string();
+            let digest = parts
+                .next()
+                .ok_or_else(|| {
+                    PyValueError::new_err(format!(
+                        "invalid artifact {s:?} (expected scheme:digest[:name])"
+                    ))
+                })?
+                .to_string();
+            ArtifactRef {
+                scheme,
+                digest,
+                name: parts.next().map(str::to_string),
+            }
+        } else if let Ok(d) = item.cast::<PyDict>() {
+            let field = |k: &str| -> PyResult<Option<String>> {
+                match d.get_item(k)? {
+                    Some(v) if !v.is_none() => Ok(Some(v.extract::<String>()?)),
+                    _ => Ok(None),
+                }
+            };
+            ArtifactRef {
+                scheme: field("scheme")?
+                    .ok_or_else(|| PyValueError::new_err("artifact dict requires scheme"))?,
+                digest: field("digest")?
+                    .ok_or_else(|| PyValueError::new_err("artifact dict requires digest"))?,
+                name: field("name")?,
+            }
+        } else {
+            return Err(PyValueError::new_err(
+                "artifacts entries must be 'scheme:digest[:name]' strings or dicts",
+            ));
+        };
+        if !artifact_ref_well_formed(&a) {
+            return Err(PyValueError::new_err(format!(
+                "invalid artifact {}:{}: scheme must match [a-z0-9][a-z0-9.-]* and the digest must be lowercase hex of the scheme's length",
+                a.scheme, a.digest
+            )));
+        }
+        refs.push(a);
+    }
+    refs.sort();
+    refs.dedup();
+    Ok(Some(refs))
+}
+
 /// Encode a payload, then decode it back so the payload's `TryFrom` invariants
 /// (score bounds, non-empty criterion/objective) are checked before the write,
 /// exactly as the CLI does. Without this a statically-knowable violation would
@@ -694,13 +773,131 @@ impl Writer {
         })
     }
 
+    /// Record a Request: what a person asked for (spec 0.4 surfaces bind
+    /// requirements to it). Single-thread writer, so the request's scope is
+    /// the space and it has no parent request. The verifier admits only a
+    /// user-role author.
+    #[pyo3(signature = (author, objective))]
+    fn request(&mut self, author: &str, objective: &str) -> PyResult<Commit> {
+        let author = self.resolve_author(author)?;
+        let data = checked_encode(&RequestData {
+            objective: objective.to_string(),
+            scope: self.rules.space,
+            attachments: Vec::new(),
+            parent_request_id: None,
+        })?;
+        self.do_commit(
+            author,
+            Kind::Request,
+            schema_id(SCHEMA_REQUEST),
+            data,
+            Vec::new(),
+        )
+    }
+
+    /// Record a Requirement under a request (spec 0.4): an addressable
+    /// statement of what it requires. Exactly one `Cause` to the request; the
+    /// key must be unique among the request's accepted, unretracted
+    /// requirements (a duplicate commits as a durable rejected record with
+    /// `RequirementInvalid`; retract-and-record releases the key).
+    /// `provenance` is `"user_authored"` or `"derived"` and is bound to the
+    /// author's role by the verifier; it defaults from the role (user ->
+    /// user_authored, provider or system -> derived) and a stated value the
+    /// role cannot carry raises `ValueError` before anything is written.
+    /// `required=False` records an informational requirement a profile never
+    /// counts; `expected_evidence` is recorded, not interpreted.
+    #[pyo3(signature = (author, request, key, description, *, required=true,
+        expected_evidence=None, provenance=None))]
+    #[allow(clippy::too_many_arguments)]
+    fn requirement(
+        &mut self,
+        author: &str,
+        request: &str,
+        key: &str,
+        description: &str,
+        required: bool,
+        expected_evidence: Option<String>,
+        provenance: Option<&str>,
+    ) -> PyResult<Commit> {
+        let author = self.resolve_author(author)?;
+        let request_id = parse_id(request)?;
+        if !self.state.accepted_records.contains(&request_id)
+            || !self
+                .inner
+                .records()
+                .iter()
+                .any(|r| r.id == request_id && r.kind == Kind::Request)
+        {
+            return Err(PyValueError::new_err(format!(
+                "request {request:?} is not an accepted Request in this log"
+            )));
+        }
+        if key.is_empty() || description.is_empty() {
+            return Err(PyValueError::new_err(
+                "key and description must be non-empty",
+            ));
+        }
+        let role_default = match author.type_ {
+            AuthorType::User => Provenance::UserAuthored,
+            AuthorType::Provider | AuthorType::System => Provenance::Derived,
+            other => {
+                return Err(PyValueError::new_err(format!(
+                    "author {:?} has role {other:?}, which cannot author a Requirement",
+                    author.id
+                )))
+            }
+        };
+        let provenance = match provenance {
+            None => role_default,
+            Some("user_authored") | Some("user-authored") => Provenance::UserAuthored,
+            Some("derived") => Provenance::Derived,
+            Some(other) => {
+                return Err(PyValueError::new_err(format!(
+                    "invalid provenance {other:?} (expected user_authored or derived)"
+                )))
+            }
+        };
+        if provenance != role_default {
+            return Err(PyValueError::new_err(format!(
+                "provenance {:?} cannot be authored by {:?} (role {:?}): provenance is bound to the author's role",
+                match provenance {
+                    Provenance::UserAuthored => "user_authored",
+                    Provenance::Derived => "derived",
+                },
+                author.id,
+                author.type_
+            )));
+        }
+        let data = checked_encode(&RequirementData {
+            key: key.to_string(),
+            description: description.to_string(),
+            required,
+            expected_evidence,
+            provenance,
+        })?;
+        self.do_commit(
+            author,
+            Kind::Requirement,
+            schema_id(SCHEMA_REQUIREMENT),
+            data,
+            vec![Ref {
+                type_: RefType::Cause,
+                target: request_id,
+            }],
+        )
+    }
+
     /// Record a Candidate (a proposed source state). Basis is chosen by exactly
     /// one of `continues` (with `parent`), `derives_from`, or `upgrades`;
     /// omitting all three records a Root. `algo` is `"sha1"` (default) or
     /// `"sha256"`. Passing `manifest` (a directory path) binds the source by a
     /// canonical manifest hash; otherwise the git tree is reported.
+    /// `artifacts` (spec 0.4) binds artifact identities: a list of
+    /// `"scheme:digest[:name]"` strings or `{"scheme", "digest", "name"?}`
+    /// dicts, checked and canonically ordered before the write.
     #[pyo3(signature = (author, git_tree, *, git_commit=None, algo="sha1", note=None,
-        continues=None, parent=None, derives_from=None, upgrades=None, manifest=None))]
+        continues=None, parent=None, derives_from=None, upgrades=None, manifest=None,
+        artifacts=None))]
     #[allow(clippy::too_many_arguments)]
     fn candidate(
         &mut self,
@@ -714,8 +911,10 @@ impl Writer {
         derives_from: Option<Vec<String>>,
         upgrades: Option<&str>,
         manifest: Option<&str>,
+        artifacts: Option<Vec<Bound<'_, PyAny>>>,
     ) -> PyResult<Commit> {
         let author = self.resolve_author(author)?;
+        let artifacts = parse_artifacts(artifacts)?;
         let algo = match algo {
             "sha1" => SourceAlgo::Sha1,
             "sha256" => SourceAlgo::Sha256,
@@ -826,6 +1025,7 @@ impl Writer {
         };
 
         let data = checked_encode(&CandidateData {
+            artifacts,
             source: SourceBinding {
                 git: GitSource {
                     algo,
@@ -848,11 +1048,26 @@ impl Writer {
         )
     }
 
-    /// Record an Evaluation of a candidate. Exactly one of `passed`, `failed`,
-    /// or a `score` (with `scale`) states the outcome. The evaluation Uses its
-    /// candidate, plus any extra `uses` ids.
+    /// Record an Evaluation of a candidate. Exactly one outcome: `passed`,
+    /// `failed`, a `score` (with `scale`), or one of the spec 0.4 fail-closed
+    /// outcomes `blocked`, `insufficient`, `stale`, `not_run` (only `passed`
+    /// passes; a decision that could not run to a pass is recorded as exactly
+    /// what it is). The evaluation Uses its candidate, each requirement it
+    /// speaks to, plus any extra `uses` ids.
+    ///
+    /// With `evaluator` and `basis` (`"recomputed"` or `"declared"`; basis is
+    /// declared, never inferred) the extended shape is written
+    /// (`bellbook.evaluation.v2`): who decided (`evaluator`,
+    /// `evaluator_version`, `procedure_hash`, `input_hash`), the artifacts
+    /// judged (`artifacts`, as on `candidate`), and the accepted Requirement
+    /// ids it speaks to (`requirements`). Any of those, or a fail-closed
+    /// outcome, without both `evaluator` and `basis` raises `ValueError`.
+    /// Without them the v1 shape is written as before.
     #[pyo3(signature = (author, candidate, criterion, *, passed=false, failed=false,
-        score=None, scale=None, procedure=None, uses=None))]
+        score=None, scale=None, procedure=None, uses=None, blocked=false,
+        insufficient=false, stale=false, not_run=false, evaluator=None,
+        evaluator_version=None, procedure_hash=None, input_hash=None, basis=None,
+        requirements=None, artifacts=None))]
     #[allow(clippy::too_many_arguments)]
     fn evaluate(
         &mut self,
@@ -865,31 +1080,118 @@ impl Writer {
         scale: Option<u8>,
         procedure: Option<String>,
         uses: Option<Vec<String>>,
+        blocked: bool,
+        insufficient: bool,
+        stale: bool,
+        not_run: bool,
+        evaluator: Option<String>,
+        evaluator_version: Option<String>,
+        procedure_hash: Option<&str>,
+        input_hash: Option<&str>,
+        basis: Option<&str>,
+        requirements: Option<Vec<String>>,
+        artifacts: Option<Vec<Bound<'_, PyAny>>>,
     ) -> PyResult<Commit> {
         let author = self.resolve_author(author)?;
         let candidate = parse_id(candidate)?;
 
-        let outcome = match (passed, failed, score) {
-            (true, false, None) => EvaluationOutcome::Passed,
-            (false, true, None) => EvaluationOutcome::Failed,
-            (false, false, Some(value)) => {
+        // Exactly one outcome.
+        let unit: Vec<&str> = [
+            ("passed", passed),
+            ("failed", failed),
+            ("blocked", blocked),
+            ("insufficient", insufficient),
+            ("stale", stale),
+            ("not_run", not_run),
+        ]
+        .into_iter()
+        .filter(|(_, on)| *on)
+        .map(|(name, _)| name)
+        .collect();
+        let scored = match score {
+            Some(value) => {
                 let scale = scale.ok_or_else(|| {
                     PyValueError::new_err("score requires scale (the denominator)")
                 })?;
-                EvaluationOutcome::Scored(ScoredValue { value, scale })
+                Some(ScoredValue { value, scale })
             }
-            _ => {
-                return Err(PyValueError::new_err(
-                    "exactly one of passed, failed, or score is required",
-                ))
-            }
+            None => None,
+        };
+        if unit.len() + usize::from(scored.is_some()) != 1 {
+            return Err(PyValueError::new_err(
+                "exactly one of passed, failed, score, blocked, insufficient, stale, or not_run is required",
+            ));
+        }
+        let outcome_v2 = match (unit.first().copied(), scored) {
+            (_, Some(s)) => EvaluationOutcomeV2::Scored(s),
+            (Some("passed"), None) => EvaluationOutcomeV2::Passed,
+            (Some("failed"), None) => EvaluationOutcomeV2::Failed,
+            (Some("blocked"), None) => EvaluationOutcomeV2::Blocked,
+            (Some("insufficient"), None) => EvaluationOutcomeV2::Insufficient,
+            (Some("stale"), None) => EvaluationOutcomeV2::Stale,
+            (Some("not_run"), None) => EvaluationOutcomeV2::NotRun,
+            _ => unreachable!("one outcome was checked above"),
         };
 
-        // The evaluation must Use its candidate, plus any extra uses refs.
+        // The extended shape is chosen by its binding: evaluator and basis
+        // together. Any other 0.4-only argument or outcome needs them.
+        let extended_args: Vec<&str> = [
+            ("evaluator", evaluator.is_some()),
+            ("evaluator_version", evaluator_version.is_some()),
+            ("procedure_hash", procedure_hash.is_some()),
+            ("input_hash", input_hash.is_some()),
+            ("basis", basis.is_some()),
+            ("requirements", requirements.is_some()),
+            ("artifacts", artifacts.is_some()),
+            ("blocked", blocked),
+            ("insufficient", insufficient),
+            ("stale", stale),
+            ("not_run", not_run),
+        ]
+        .into_iter()
+        .filter(|(_, on)| *on)
+        .map(|(name, _)| name)
+        .collect();
+        let extended = !extended_args.is_empty();
+        if extended && !(evaluator.is_some() && basis.is_some()) {
+            return Err(PyValueError::new_err(format!(
+                "the extended evaluation ({}) requires both evaluator and basis ('recomputed' or 'declared')",
+                extended_args.join(", ")
+            )));
+        }
+
+        // The evaluation must Use its candidate, then each requirement it
+        // speaks to (mirrored in the payload), then any extra uses refs.
         let mut refs = vec![Ref {
             type_: RefType::Use,
             target: candidate,
         }];
+        let mut requirement_ids: Vec<RecordId> = requirements
+            .as_deref()
+            .unwrap_or_default()
+            .iter()
+            .map(|s| parse_id(s))
+            .collect::<PyResult<_>>()?;
+        requirement_ids.sort();
+        requirement_ids.dedup();
+        for rid in &requirement_ids {
+            if !self
+                .inner
+                .records()
+                .iter()
+                .any(|r| r.id == *rid && r.kind == Kind::Requirement)
+                || !self.state.accepted_records.contains(rid)
+            {
+                return Err(PyValueError::new_err(format!(
+                    "requirement {} is not an accepted Requirement in this log",
+                    hex_encode(rid)
+                )));
+            }
+            refs.push(Ref {
+                type_: RefType::Use,
+                target: *rid,
+            });
+        }
         if let Some(extra) = &uses {
             for s in extra {
                 refs.push(Ref {
@@ -899,19 +1201,56 @@ impl Writer {
             }
         }
 
-        let data = checked_encode(&EvaluationData {
-            candidate,
-            criterion: criterion.to_string(),
-            procedure,
-            outcome,
-        })?;
-        self.do_commit(
-            author,
-            Kind::Evaluation,
-            schema_id(SCHEMA_EVALUATION),
-            data,
-            refs,
-        )
+        let (schema, data) = if extended {
+            let evaluator_id = evaluator.unwrap_or_default();
+            if evaluator_id.is_empty() {
+                return Err(PyValueError::new_err("evaluator must be non-empty"));
+            }
+            let basis = match basis.unwrap_or_default() {
+                "recomputed" => Basis::Recomputed,
+                "declared" => Basis::Declared,
+                other => {
+                    return Err(PyValueError::new_err(format!(
+                        "invalid basis {other:?} (expected 'recomputed' or 'declared')"
+                    )))
+                }
+            };
+            let data = checked_encode(&EvaluationDataV2 {
+                candidate,
+                criterion: criterion.to_string(),
+                procedure,
+                outcome: outcome_v2,
+                evaluator: DeciderBinding {
+                    id: evaluator_id,
+                    version: evaluator_version,
+                    procedure_hash: procedure_hash
+                        .map(|h| parse_hash("procedure_hash", h))
+                        .transpose()?,
+                    input_hash: input_hash
+                        .map(|h| parse_hash("input_hash", h))
+                        .transpose()?,
+                },
+                basis,
+                evidence: parse_artifacts(artifacts)?.unwrap_or_default(),
+                requirements: requirement_ids,
+            })?;
+            (SCHEMA_EVALUATION_V2, data)
+        } else {
+            let outcome = match outcome_v2 {
+                EvaluationOutcomeV2::Passed => EvaluationOutcome::Passed,
+                EvaluationOutcomeV2::Failed => EvaluationOutcome::Failed,
+                EvaluationOutcomeV2::Scored(s) => EvaluationOutcome::Scored(s),
+                _ => unreachable!("fail-closed outcomes select the extended shape"),
+            };
+            let data = checked_encode(&EvaluationData {
+                candidate,
+                criterion: criterion.to_string(),
+                procedure,
+                outcome,
+            })?;
+            (SCHEMA_EVALUATION, data)
+        };
+        self.do_commit(author, Kind::Evaluation, schema_id(schema), data, refs)
     }
 
     /// Record a Selection over candidates, or a reaffirmation. Exactly one of
@@ -1063,8 +1402,26 @@ impl Writer {
 
     /// Export the log as a portable receipt (canonical JSON bytes). Feed it to
     /// `validate` or `read`, or hand it to any independent verifier.
-    fn receipt<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyBytes>> {
+    /// `profiles` (spec 0.4) declares the named profiles the receipt claims
+    /// (e.g. `["bellbook-core-v1"]`), with the version and hash this
+    /// package knows; the declaration is not evaluated here - every validator
+    /// re-checks it - so a false claim exports and then reports
+    /// `NonConformant`. An unknown or repeated id raises `ValueError`.
+    #[pyo3(signature = (profiles=None))]
+    fn receipt<'py>(
+        &self,
+        py: Python<'py>,
+        profiles: Option<Vec<String>>,
+    ) -> PyResult<Bound<'py, PyBytes>> {
+        let declared: Vec<&str> = profiles
+            .as_deref()
+            .unwrap_or_default()
+            .iter()
+            .map(String::as_str)
+            .collect();
         let bytes = CoreReceipt::new(self.inner.records(), &self.rules)
+            .with_declared_profiles(&declared)
+            .map_err(PyValueError::new_err)?
             .to_bytes()
             .map_err(|e| PyRuntimeError::new_err(format!("cannot serialize receipt: {e}")))?;
         Ok(PyBytes::new(py, &bytes))
