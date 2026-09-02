@@ -99,10 +99,11 @@ pub use base::hash::{
 pub use base::schema::{
     default_space, schema_id, schema_name_for_id, schemas_for_epoch, SchemaId, ALL_SCHEMAS,
     DEFAULT_SPACE_NAME, SCHEMAS_V03, SCHEMA_ACTION, SCHEMA_APPROVAL, SCHEMA_CANDIDATE,
-    SCHEMA_CAPABILITY, SCHEMA_EVALUATION, SCHEMA_PLAN, SCHEMA_REFUSAL, SCHEMA_REQUEST,
-    SCHEMA_REQUIREMENT, SCHEMA_RESPONSE, SCHEMA_RESULT, SCHEMA_RESULT_EFFECT_CONFIRMATION,
-    SCHEMA_RESULT_EXTERNAL, SCHEMA_RETRACTION, SCHEMA_SELECTION, SCHEMA_SUMMARY, SCHEMA_USAGE,
-    SCHEMA_VERDICT, SPEC_VERSION, SUPPORTED_SPEC_VERSIONS,
+    SCHEMA_CAPABILITY, SCHEMA_EVALUATION, SCHEMA_EVALUATION_ATTESTED, SCHEMA_EVALUATION_V2,
+    SCHEMA_PLAN, SCHEMA_REFUSAL, SCHEMA_REQUEST, SCHEMA_REQUIREMENT, SCHEMA_RESPONSE,
+    SCHEMA_RESULT, SCHEMA_RESULT_EFFECT_CONFIRMATION, SCHEMA_RESULT_EXTERNAL, SCHEMA_RETRACTION,
+    SCHEMA_SELECTION, SCHEMA_SUMMARY, SCHEMA_USAGE, SCHEMA_VERDICT, SPEC_VERSION,
+    SUPPORTED_SPEC_VERSIONS,
 };
 pub use base::time::{Time, TimeSource};
 
@@ -113,7 +114,8 @@ pub use record::kind::{
     SummaryType, UsageOutcome, VerdictResult,
 };
 pub use record::payloads::{
-    artifact_ref_well_formed, artifact_refs_well_formed, ArtifactRef, Provenance, RequirementData,
+    artifact_ref_well_formed, artifact_refs_well_formed, evaluation_summary, ArtifactRef, Basis,
+    DeciderBinding, EvaluationDataV2, EvaluationOutcomeV2, Provenance, RequirementData,
     ARTIFACT_DIGEST_MAX_BYTES, ARTIFACT_DIGEST_MIN_BYTES, ARTIFACT_SCHEMES,
 };
 pub use record::payloads::{

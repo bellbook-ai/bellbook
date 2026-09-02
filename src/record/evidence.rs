@@ -57,8 +57,14 @@ pub fn base_evidence(schema: &Hash256) -> Evidence {
         // selections at most Inferred (SPEC §7).
         Some(SCHEMA_CANDIDATE) => Evidence::Reported,
         Some(SCHEMA_EVALUATION) => Evidence::Reported,
-        // A requirement is asserted by its author (spec 0.4, RFC-0003 4.7).
+        // A requirement is asserted by its author (spec 0.4, RFC-0003 4.7);
+        // the extended evaluation is still host-asserted; only the attested
+        // schema - a signed attestation from a key-pinned author, enforced
+        // by the verifier - earns Verified, exactly like the external
+        // receipt. Signatures never promote a class; the schema does.
         Some(SCHEMA_REQUIREMENT) => Evidence::Reported,
+        Some(SCHEMA_EVALUATION_V2) => Evidence::Reported,
+        Some(SCHEMA_EVALUATION_ATTESTED) => Evidence::Verified,
         Some(SCHEMA_SUMMARY) => Evidence::Inferred,
         Some(SCHEMA_PLAN) => Evidence::Inferred,
         Some(SCHEMA_SELECTION) => Evidence::Inferred,
@@ -121,7 +127,15 @@ mod tests {
         // base_evidence classifies each frozen schema with an explicit match
         // arm. If this count changes, a schema was added or removed: update
         // the match in base_evidence (and this pin) in the same change.
-        assert_eq!(ALL_SCHEMAS.len(), 18);
+        assert_eq!(ALL_SCHEMAS.len(), 20);
+        assert_eq!(
+            base_evidence(&schema_id(SCHEMA_EVALUATION_ATTESTED)),
+            Evidence::Verified
+        );
+        assert_eq!(
+            base_evidence(&schema_id(SCHEMA_EVALUATION_V2)),
+            Evidence::Reported
+        );
         for name in ALL_SCHEMAS {
             // No frozen schema may fall through to the unknown-schema floor
             // by accident; Assumed as a base class must be a deliberate
