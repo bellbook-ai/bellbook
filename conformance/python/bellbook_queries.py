@@ -96,10 +96,11 @@ class QueryContext:
                 continue
             data = bv.payload(t)
             outcome = data["outcome"]
-            if outcome == "passed":
-                outcome_s = "passed"
-            elif outcome == "failed":
-                outcome_s = "failed"
+            # A unit variant (v1: passed/failed; spec 0.4 adds the fail-closed
+            # blocked/insufficient/stale/not_run) is its own label; the
+            # struct variant is `scored`.
+            if isinstance(outcome, str):
+                outcome_s = outcome
             else:
                 s = outcome["scored"]
                 outcome_s = f"scored {s['value']}e-{s['scale']}"

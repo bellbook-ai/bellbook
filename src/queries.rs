@@ -23,8 +23,7 @@ use serde::{Deserialize, Serialize};
 use crate::base::hash::hex_encode;
 use crate::record::kind::{Kind, ReasonCode, RefType, VerdictResult};
 use crate::record::payloads::{
-    CandidateBasis, CandidateData, EvaluationData, EvaluationOutcome, SelectionData,
-    SelectionOutcome,
+    evaluation_summary, CandidateBasis, CandidateData, SelectionData, SelectionOutcome,
 };
 use crate::record::record::{decode, Record};
 use crate::record::refs::RecordId;
@@ -362,17 +361,14 @@ impl<'a> Queries<'a> {
             if target.kind != Kind::Evaluation {
                 continue;
             }
-            let Ok(ed) = decode::<EvaluationData>(&target.data) else {
+            // Either evaluation shape (v1, or the spec 0.4 v2/attested).
+            let Some((_, criterion, outcome)) = evaluation_summary(&target.schema, &target.data)
+            else {
                 continue;
-            };
-            let outcome = match ed.outcome {
-                EvaluationOutcome::Passed => "passed".to_string(),
-                EvaluationOutcome::Failed => "failed".to_string(),
-                EvaluationOutcome::Scored(s) => format!("scored {}e-{}", s.value, s.scale),
             };
             out.push(EvidenceEntry {
                 node: self.node(target),
-                criterion: ed.criterion,
+                criterion,
                 outcome,
             });
         }

@@ -688,6 +688,173 @@ impl TryFrom<EvaluationDataRaw> for EvaluationData {
     }
 }
 
+// ──────────────── Extended evaluation (spec 0.4, RFC-0003 4.3) ────────────────
+
+/// How an evaluator reached the facts it judged. Declared by the record,
+/// never inferred: `Recomputed` means the evaluator re-derived them from the
+/// bound evidence; `Declared` means it checked facts as recorded. A profile
+/// reports the weakest basis in a claim rather than hiding it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Basis {
+    /// Re-derived from the bound evidence.
+    Recomputed,
+    /// Checked as recorded.
+    Declared,
+}
+
+/// "Who decided, with what procedure, over what input": the one vocabulary
+/// for binding a decider to its decision. `Evaluation` (v2) uses it; a
+/// future `PolicyDecision` reuses it rather than inventing a parallel set of
+/// fields.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct DeciderBinding {
+    /// Stable evaluator identity (a harness name, a service URI); non-empty
+    /// (`EvaluationInvalid` otherwise).
+    pub id: String,
+    /// Evaluator version, if it has one.
+    #[serde(default)]
+    pub version: Option<String>,
+    /// Hash of the exact procedure that ran - the binding `procedure`
+    /// (narrative) cannot provide.
+    #[serde(default)]
+    pub procedure_hash: Option<Hash256>,
+    /// Hash of the normalized input the evaluator judged.
+    #[serde(default)]
+    pub input_hash: Option<Hash256>,
+}
+
+/// Outcome of an extended evaluation. Fail-closed: only `Passed` is a
+/// passing outcome. A complete decision that could not run to a pass is
+/// recorded as exactly what it is, never as a pass and never omitted.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum EvaluationOutcomeV2 {
+    /// The criterion held.
+    Passed,
+    /// The criterion did not hold.
+    Failed,
+    /// A fixed-point measurement against the criterion.
+    Scored(ScoredValue),
+    /// The evaluator could not proceed (a prerequisite was missing).
+    Blocked,
+    /// The evidence was insufficient to decide.
+    Insufficient,
+    /// The evidence no longer matches the candidate it was judged for.
+    Stale,
+    /// The evaluation was scheduled but never ran.
+    NotRun,
+}
+
+impl EvaluationOutcomeV2 {
+    /// The surface label the query set and the CLI print: the snake_case
+    /// variant name, or `scored VALUEe-SCALE`.
+    pub fn label(&self) -> String {
+        match self {
+            EvaluationOutcomeV2::Passed => "passed".into(),
+            EvaluationOutcomeV2::Failed => "failed".into(),
+            EvaluationOutcomeV2::Scored(s) => format!("scored {}e-{}", s.value, s.scale),
+            EvaluationOutcomeV2::Blocked => "blocked".into(),
+            EvaluationOutcomeV2::Insufficient => "insufficient".into(),
+            EvaluationOutcomeV2::Stale => "stale".into(),
+            EvaluationOutcomeV2::NotRun => "not_run".into(),
+        }
+    }
+}
+
+/// Payload for `bellbook.evaluation.v2` and `bellbook.evaluation.attested.v1`
+/// (spec 0.4): the v1 judgment plus who decided, on what basis, over which
+/// evidence, against which requirements. `requirements` are payload ids of
+/// accepted Requirements, sorted and deduplicated, each mirrored by a `Use`
+/// ref so a retracted requirement taints the evaluations that judged
+/// against it (`EvaluationInvalid` otherwise); `evidence` follows the
+/// artifact rules (`ArtifactRefInvalid`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, try_from = "EvaluationDataV2Raw")]
+pub struct EvaluationDataV2 {
+    /// The candidate judged; must resolve to an accepted Candidate and be
+    /// matched by a `Use` ref.
+    pub candidate: RecordId,
+    /// Non-empty criterion name.
+    pub criterion: String,
+    /// How it was run, in words; not interpreted. `evaluator.procedure_hash`
+    /// is the binding.
+    #[serde(default)]
+    pub procedure: Option<String>,
+    /// The fail-closed outcome.
+    pub outcome: EvaluationOutcomeV2,
+    /// Who decided, with what procedure, over what input.
+    pub evaluator: DeciderBinding,
+    /// Recomputed or declared; never inferred.
+    pub basis: Basis,
+    /// What was judged: artifact identities, sorted and deduplicated.
+    pub evidence: Vec<ArtifactRef>,
+    /// Requirements this evaluation speaks to, sorted and deduplicated.
+    pub requirements: Vec<RecordId>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct EvaluationDataV2Raw {
+    candidate: RecordId,
+    criterion: String,
+    #[serde(default)]
+    procedure: Option<String>,
+    outcome: EvaluationOutcomeV2,
+    evaluator: DeciderBinding,
+    basis: Basis,
+    evidence: Vec<ArtifactRef>,
+    requirements: Vec<RecordId>,
+}
+
+impl TryFrom<EvaluationDataV2Raw> for EvaluationDataV2 {
+    type Error = String;
+    fn try_from(raw: EvaluationDataV2Raw) -> Result<Self, Self::Error> {
+        if raw.criterion.is_empty() {
+            return Err("evaluation criterion must be non-empty".into());
+        }
+        Ok(Self {
+            candidate: raw.candidate,
+            criterion: raw.criterion,
+            procedure: raw.procedure,
+            outcome: raw.outcome,
+            evaluator: raw.evaluator,
+            basis: raw.basis,
+            evidence: raw.evidence,
+            requirements: raw.requirements,
+        })
+    }
+}
+
+/// The parts of an Evaluation every consumer needs regardless of shape:
+/// the judged candidate, the criterion, and the outcome label. Decodes
+/// `bellbook.evaluation.v1` or the v2/attested shape by schema; `None` for
+/// any other schema or an undecodable payload.
+pub fn evaluation_summary(
+    schema: &crate::base::schema::SchemaId,
+    data: &[u8],
+) -> Option<(RecordId, String, String)> {
+    use crate::base::schema::*;
+    if *schema == schema_id(SCHEMA_EVALUATION) {
+        let d: EvaluationData = crate::record::record::decode(data).ok()?;
+        let label = match d.outcome {
+            EvaluationOutcome::Passed => "passed".to_string(),
+            EvaluationOutcome::Failed => "failed".to_string(),
+            EvaluationOutcome::Scored(s) => format!("scored {}e-{}", s.value, s.scale),
+        };
+        Some((d.candidate, d.criterion, label))
+    } else if *schema == schema_id(SCHEMA_EVALUATION_V2)
+        || *schema == schema_id(SCHEMA_EVALUATION_ATTESTED)
+    {
+        let d: EvaluationDataV2 = crate::record::record::decode(data).ok()?;
+        let label = d.outcome.label();
+        Some((d.candidate, d.criterion, label))
+    } else {
+        None
+    }
+}
+
 /// A selection's decision.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]

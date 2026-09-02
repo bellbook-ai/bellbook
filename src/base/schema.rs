@@ -95,6 +95,14 @@ pub const SCHEMA_SELECTION: &str = "bellbook.selection.v1";
 /// Schema name for Requirement records (spec 0.4: an addressable statement
 /// of what a request requires, so evidence and decisions can bind to it).
 pub const SCHEMA_REQUIREMENT: &str = "bellbook.requirement.v1";
+/// Schema name for the extended Evaluation shape (spec 0.4): decider
+/// binding, basis, evidence artifacts, bound requirements, and the
+/// fail-closed outcome vocabulary. `bellbook.evaluation.v1` stays frozen.
+pub const SCHEMA_EVALUATION_V2: &str = "bellbook.evaluation.v2";
+/// Schema name for an attested Evaluation (spec 0.4): the extended shape
+/// with base evidence `Verified`, valid only as a signed attestation from an
+/// author with pinned keys, exactly like `result.external_receipt.v1`.
+pub const SCHEMA_EVALUATION_ATTESTED: &str = "bellbook.evaluation.attested.v1";
 
 /// The frozen schema set of spec epoch 0.3 (SPEC.md §14): the fifteen
 /// kinds' schemas as published in crates 0.3.0 through 0.7.0. Never
@@ -141,6 +149,8 @@ pub const ALL_SCHEMAS: &[&str] = &[
     SCHEMA_SELECTION,
     // Spec 0.4.
     SCHEMA_REQUIREMENT,
+    SCHEMA_EVALUATION_V2,
+    SCHEMA_EVALUATION_ATTESTED,
 ];
 
 /// Resolve a schema hash to its registered frozen name, if known.
@@ -184,8 +194,14 @@ mod tests {
             previous = Some(set);
         }
         assert_eq!(SCHEMAS_V03.len(), 17);
-        assert!(!SCHEMAS_V03.contains(&SCHEMA_REQUIREMENT));
-        assert!(ALL_SCHEMAS.contains(&SCHEMA_REQUIREMENT));
+        for s in [
+            SCHEMA_REQUIREMENT,
+            SCHEMA_EVALUATION_V2,
+            SCHEMA_EVALUATION_ATTESTED,
+        ] {
+            assert!(!SCHEMAS_V03.contains(&s), "{s} is a 0.4 schema");
+            assert!(ALL_SCHEMAS.contains(&s));
+        }
         assert!(schemas_for_epoch("0.2").is_none());
         assert!(schemas_for_epoch("0.5").is_none());
     }

@@ -318,6 +318,115 @@ fn setup_request(w: &mut LogWriter, rules: &VerifierRules, st: &mut State) -> Re
     rid
 }
 
+// --- Extended evaluation builders (spec 0.4). ---
+
+fn decider(id: &str) -> DeciderBinding {
+    DeciderBinding {
+        id: id.into(),
+        version: Some("1.0".into()),
+        procedure_hash: Some(sha256_utf8("cargo test --release")),
+        input_hash: None,
+    }
+}
+
+/// An extended evaluation of `candidate_id` under `schema`, judging against
+/// `requirements` (payload ids, written exactly as given) with `refs` as
+/// given, so binding and ordering failures reach the verifier.
+#[allow(clippy::too_many_arguments)]
+fn evaluation_v2_proposal(
+    schema: &str,
+    candidate_id: RecordId,
+    outcome: EvaluationOutcomeV2,
+    evaluator: DeciderBinding,
+    evidence: Vec<ArtifactRef>,
+    requirements: Vec<RecordId>,
+    author_: Author,
+    refs: Vec<Ref>,
+) -> Proposal {
+    let data = encode(&EvaluationDataV2 {
+        candidate: candidate_id,
+        criterion: "tests".into(),
+        procedure: Some("cargo test --release".into()),
+        outcome,
+        evaluator,
+        basis: Basis::Recomputed,
+        evidence,
+        requirements,
+    })
+    .unwrap();
+    Proposal {
+        space: SPACE,
+        thread: THREAD,
+        author: author_,
+        kind: Kind::Evaluation,
+        schema: schema_id(schema),
+        data,
+        refs,
+    }
+}
+
+/// Commit a Request, a user-authored Requirement under it, and a root
+/// Candidate; returns (requirement, candidate) ids.
+fn setup_requirement_and_candidate(
+    w: &mut LogWriter,
+    rules: &VerifierRules,
+    st: &mut State,
+) -> (RecordId, RecordId) {
+    let rid = setup_request(w, rules, st);
+    let (req, v) = w
+        .commit(
+            requirement_proposal(
+                "tests-pass",
+                Provenance::UserAuthored,
+                human_author(),
+                vec![cause_ref(rid)],
+            ),
+            rules,
+            st,
+        )
+        .unwrap();
+    assert_eq!(v.result, VerdictResult::Accept);
+    let (cid, v) = w
+        .commit(candidate_proposal(provider_author()), rules, st)
+        .unwrap();
+    assert_eq!(v.result, VerdictResult::Accept);
+    (req, cid)
+}
+
+/// As [`setup_requirement_and_candidate`], but under pinned rules: the
+/// human's Request and Requirement are signed with `signer`, as every
+/// record of a key-pinned actor must be.
+fn setup_requirement_and_candidate_signed(
+    w: &mut LogWriter,
+    rules: &VerifierRules,
+    st: &mut State,
+    signer: &Ed25519Signer,
+) -> (RecordId, RecordId) {
+    let (rid, v) = w
+        .commit_signed(request_proposal(), rules, st, signer)
+        .unwrap();
+    assert_eq!(v.result, VerdictResult::Accept, "{:?}", v.reason);
+    let (req, v) = w
+        .commit_signed(
+            requirement_proposal(
+                "tests-pass",
+                Provenance::UserAuthored,
+                human_author(),
+                vec![cause_ref(rid)],
+            ),
+            rules,
+            st,
+            signer,
+        )
+        .unwrap();
+    assert_eq!(v.result, VerdictResult::Accept, "{:?}", v.reason);
+    let (cid, v) = w
+        .commit(candidate_proposal(provider_author()), rules, st)
+        .unwrap();
+    assert_eq!(v.result, VerdictResult::Accept, "{:?}", v.reason);
+    (req, cid)
+}
+
 // --- Artifact identity builders (spec 0.4). ---
 
 fn artifact(scheme: &str, digest: &str, name: Option<&str>) -> ArtifactRef {
@@ -1496,6 +1605,245 @@ fn build_record_cases() -> Vec<RecordCase> {
                 human_author(),
                 vec![cause_ref(rid), replace_ref(req1)],
             ))
+        },
+    ));
+
+    // --- Extended evaluation (spec 0.4): decider binding, evidence,
+    // requirement binding, fail-closed outcomes, the attested schema. ---
+    cases.push(record_case(
+        "accept-evaluation-v2",
+        "An extended Evaluation: a bound decider, recomputed basis, one evidence artifact, and one Requirement it speaks to, mirrored by Use refs to both the candidate and the requirement.",
+        base_rules(),
+        |w, r, s| {
+            let (req, cid) = setup_requirement_and_candidate(w, r, s);
+            cand(evaluation_v2_proposal(
+                SCHEMA_EVALUATION_V2,
+                cid,
+                EvaluationOutcomeV2::Passed,
+                decider("ci-harness"),
+                vec![artifact("sha256-bytes", &"ab".repeat(32), Some("junit.xml"))],
+                vec![req],
+                provider_author(),
+                vec![use_ref(cid), use_ref(req)],
+            ))
+        },
+    ));
+    cases.push(record_case(
+        "accept-evaluation-v2-blocked",
+        "A fail-closed outcome: the evaluator could not proceed and says so (blocked), with no requirements and no evidence. Recorded as what it is, never as a pass.",
+        base_rules(),
+        |w, r, s| {
+            let (_req, cid) = setup_requirement_and_candidate(w, r, s);
+            cand(evaluation_v2_proposal(
+                SCHEMA_EVALUATION_V2,
+                cid,
+                EvaluationOutcomeV2::Blocked,
+                decider("ci-harness"),
+                vec![],
+                vec![],
+                provider_author(),
+                vec![use_ref(cid)],
+            ))
+        },
+    ));
+    cases.push(record_case(
+        "reject-evaluation-v2-empty-evaluator-id",
+        "A decider binding needs an identity: an empty evaluator.id rejects with EvaluationInvalid.",
+        base_rules(),
+        |w, r, s| {
+            let (_req, cid) = setup_requirement_and_candidate(w, r, s);
+            cand(evaluation_v2_proposal(
+                SCHEMA_EVALUATION_V2,
+                cid,
+                EvaluationOutcomeV2::Passed,
+                decider(""),
+                vec![],
+                vec![],
+                provider_author(),
+                vec![use_ref(cid)],
+            ))
+        },
+    ));
+    cases.push(record_case(
+        "reject-evaluation-v2-requirement-not-used",
+        "Each bound requirement must be mirrored by a Use ref (so a retracted requirement taints the evaluation): the payload names the requirement but the refs do not; EvaluationInvalid.",
+        base_rules(),
+        |w, r, s| {
+            let (req, cid) = setup_requirement_and_candidate(w, r, s);
+            cand(evaluation_v2_proposal(
+                SCHEMA_EVALUATION_V2,
+                cid,
+                EvaluationOutcomeV2::Passed,
+                decider("ci-harness"),
+                vec![],
+                vec![req],
+                provider_author(),
+                vec![use_ref(cid)],
+            ))
+        },
+    ));
+    cases.push(record_case(
+        "reject-evaluation-v2-requirement-not-a-requirement",
+        "A bound requirement must resolve to an accepted Requirement: naming the candidate itself rejects with EvaluationInvalid.",
+        base_rules(),
+        |w, r, s| {
+            let (_req, cid) = setup_requirement_and_candidate(w, r, s);
+            cand(evaluation_v2_proposal(
+                SCHEMA_EVALUATION_V2,
+                cid,
+                EvaluationOutcomeV2::Passed,
+                decider("ci-harness"),
+                vec![],
+                vec![cid],
+                provider_author(),
+                vec![use_ref(cid)],
+            ))
+        },
+    ));
+    cases.push(record_case(
+        "reject-evaluation-v2-requirements-unordered",
+        "The requirements list is strictly increasing: two accepted requirements in the wrong order reject with EvaluationInvalid.",
+        base_rules(),
+        |w, r, s| {
+            let (req1, cid) = setup_requirement_and_candidate(w, r, s);
+            let rid = {
+                // The request is the Cause of req1.
+                let rec = w.records().iter().find(|x| x.id == req1).unwrap();
+                rec.refs[0].target
+            };
+            let (req2, v) = w
+                .commit(
+                    requirement_proposal(
+                        "lint-clean",
+                        Provenance::UserAuthored,
+                        human_author(),
+                        vec![cause_ref(rid)],
+                    ),
+                    r,
+                    s,
+                )
+                .unwrap();
+            assert_eq!(v.result, VerdictResult::Accept);
+            let (lo, hi) = if req1 < req2 {
+                (req1, req2)
+            } else {
+                (req2, req1)
+            };
+            cand(evaluation_v2_proposal(
+                SCHEMA_EVALUATION_V2,
+                cid,
+                EvaluationOutcomeV2::Passed,
+                decider("ci-harness"),
+                vec![],
+                vec![hi, lo],
+                provider_author(),
+                vec![use_ref(cid), use_ref(lo), use_ref(hi)],
+            ))
+        },
+    ));
+    cases.push(record_case(
+        "reject-evaluation-v2-evidence-malformed",
+        "The evidence list follows the artifact rules: a registered scheme with the wrong digest length rejects with ArtifactRefInvalid.",
+        base_rules(),
+        |w, r, s| {
+            let (_req, cid) = setup_requirement_and_candidate(w, r, s);
+            cand(evaluation_v2_proposal(
+                SCHEMA_EVALUATION_V2,
+                cid,
+                EvaluationOutcomeV2::Passed,
+                decider("ci-harness"),
+                vec![artifact("git-tree-sha1", &"ab".repeat(32), None)],
+                vec![],
+                provider_author(),
+                vec![use_ref(cid)],
+            ))
+        },
+    ));
+    cases.push(record_case(
+        "accept-evaluation-attested-signed-pinned",
+        "The attested schema earns Verified: a key-pinned User signs an extended evaluation; the signature verifies under the pinned key.",
+        pinned_rules(),
+        |w, r, s| {
+            let signer = Ed25519Signer::from_secret_bytes(&HUMAN_SEED);
+            let (req, cid) = setup_requirement_and_candidate_signed(w, r, s, &signer);
+            signed(
+                evaluation_v2_proposal(
+                    SCHEMA_EVALUATION_ATTESTED,
+                    cid,
+                    EvaluationOutcomeV2::Passed,
+                    decider("reviewer-desk"),
+                    vec![],
+                    vec![req],
+                    human_author(),
+                    vec![use_ref(cid), use_ref(req)],
+                ),
+                Ed25519Signer::from_secret_bytes(&HUMAN_SEED),
+            )
+        },
+    ));
+    cases.push(record_case(
+        "reject-evaluation-attested-unsigned",
+        "Verified is earned, never asserted: an unsigned record under the attested schema rejects with SignatureMissing even though nothing pins its author.",
+        base_rules(),
+        |w, r, s| {
+            let (_req, cid) = setup_requirement_and_candidate(w, r, s);
+            cand(evaluation_v2_proposal(
+                SCHEMA_EVALUATION_ATTESTED,
+                cid,
+                EvaluationOutcomeV2::Passed,
+                decider("ci-harness"),
+                vec![],
+                vec![],
+                provider_author(),
+                vec![use_ref(cid)],
+            ))
+        },
+    ));
+    cases.push(record_case(
+        "reject-evaluation-attested-unpinned-signer",
+        "A valid signature from an author with no pinned keys proves key possession, not identity: the attested schema rejects it with SignatureInvalid.",
+        base_rules(),
+        |w, r, s| {
+            let (_req, cid) = setup_requirement_and_candidate(w, r, s);
+            signed(
+                evaluation_v2_proposal(
+                    SCHEMA_EVALUATION_ATTESTED,
+                    cid,
+                    EvaluationOutcomeV2::Passed,
+                    decider("reviewer-desk"),
+                    vec![],
+                    vec![],
+                    human_author(),
+                    vec![use_ref(cid)],
+                ),
+                Ed25519Signer::from_secret_bytes(&HUMAN_SEED),
+            )
+        },
+    ));
+    cases.push(record_case(
+        "accept-selection-uses-v2-evaluation",
+        "A Selection may Use an extended evaluation as its evidence: the subject rule reads the v2 shape.",
+        base_rules(),
+        |w, r, s| {
+            let (req, cid) = setup_requirement_and_candidate(w, r, s);
+            let (eid, v) = w
+                .commit(
+                    evaluation_v2_proposal(
+                        SCHEMA_EVALUATION_V2,
+                        cid,
+                        EvaluationOutcomeV2::Passed,
+                        decider("ci-harness"),
+                        vec![],
+                        vec![req],
+                        provider_author(),
+                        vec![use_ref(cid), use_ref(req)],
+                    ),
+                    r,
+                    s,
+                )
+                .unwrap();
+            assert_eq!(v.result, VerdictResult::Accept, "{:?}", v.reason);
+            cand(selection_proposal(cid, eid, provider_author()))
         },
     ));
 

@@ -107,7 +107,7 @@ fn scripted_log(dir: &std::path::Path) -> Vec<Record> {
     );
 
     // Spec 0.4: a Requirement stated by the principal for the request.
-    commit(
+    let requirement_id = commit(
         proposal(
             Kind::Requirement,
             SCHEMA_REQUIREMENT,
@@ -527,6 +527,54 @@ fn scripted_log(dir: &std::path::Path) -> Vec<Record> {
         &mut state,
     );
 
+    // Spec 0.4: an extended evaluation of the continuation, bound to a
+    // decider and to the requirement, with one evidence artifact; pins the
+    // v2 canonical form (DeciderBinding, basis, evidence, requirements).
+    commit(
+        proposal(
+            Kind::Evaluation,
+            SCHEMA_EVALUATION_V2,
+            encode(&EvaluationDataV2 {
+                candidate: continuation_id,
+                criterion: "demo-file-written".into(),
+                procedure: Some("test -f demo.txt".into()),
+                outcome: EvaluationOutcomeV2::Passed,
+                evaluator: DeciderBinding {
+                    id: "ci-harness".into(),
+                    version: Some("1.0".into()),
+                    procedure_hash: Some(sha256_utf8("test -f demo.txt")),
+                    input_hash: None,
+                },
+                basis: Basis::Recomputed,
+                evidence: vec![ArtifactRef {
+                    scheme: "sha256-bytes".into(),
+                    digest: "2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824"
+                        .into(),
+                    name: Some("demo.txt".into()),
+                }],
+                requirements: vec![requirement_id],
+            })
+            .unwrap(),
+            {
+                let mut refs = vec![
+                    Ref {
+                        type_: RefType::Use,
+                        target: continuation_id,
+                    },
+                    Ref {
+                        type_: RefType::Use,
+                        target: requirement_id,
+                    },
+                ];
+                sort_and_dedup_refs(&mut refs);
+                refs
+            },
+            author("tool-executor", AuthorType::Executor),
+        ),
+        &mut writer,
+        &mut state,
+    );
+
     // A `none` selection (a prune): exercises the unit-variant outcome with no
     // candidate Require refs.
     commit(
@@ -703,7 +751,7 @@ fn build_vector_file(records: &[Record]) -> VectorFile {
     vectors.sort_by_key(|v| v.time);
     VectorFile {
         spec_version: SPEC_VERSION.into(),
-        description: "One unsigned record of each non-evolution kind plus every evolution-kind (Candidate/Evaluation/Selection) subject from a fixed scripted log, so the richer v0.3 canonical forms (manifest binding, scored vs passed, none vs selected, continuation/derivation, Replace) and the spec 0.4 `artifacts` list on a Candidate and a Result and a `Requirement` are each pinned; plus a deterministic signed Request and valid alternate-key substitution. id = SHA-256(canonical id form); the domain-separated signing form wraps the record with id and author.signature omitted, while a signed canonical id form omits only id. space/thread/scope ids are SHA-256 of the given UTF-8 names."
+        description: "One unsigned record of each non-evolution kind plus every evolution-kind (Candidate/Evaluation/Selection) subject from a fixed scripted log, so the richer v0.3 canonical forms (manifest binding, scored vs passed, none vs selected, continuation/derivation, Replace) and the spec 0.4 `artifacts` list on a Candidate and a Result, a `Requirement`, and an extended `bellbook.evaluation.v2` Evaluation are each pinned; plus a deterministic signed Request and valid alternate-key substitution. id = SHA-256(canonical id form); the domain-separated signing form wraps the record with id and author.signature omitted, while a signed canonical id form omits only id. space/thread/scope ids are SHA-256 of the given UTF-8 names."
             .into(),
         space_name: SPACE_NAME.into(),
         thread_name: THREAD_NAME.into(),
@@ -718,18 +766,18 @@ fn build_vector_file(records: &[Record]) -> VectorFile {
 fn spec_vectors_match() {
     let dir = tempfile::tempdir().unwrap();
     let records = scripted_log(dir.path());
-    assert_eq!(records.len(), 42); // 21 subjects + 21 verdicts
+    assert_eq!(records.len(), 44); // 22 subjects + 22 verdicts
 
     let built = build_vector_file(&records);
     // One vector per non-evolution kind, plus every evolution-kind subject
-    // (3 candidates, 2 evaluations, 3 selections).
+    // (3 candidates, 3 evaluations, 3 selections).
     let evolution = built
         .vectors
         .iter()
         .filter(|v| matches!(v.kind.as_str(), "Candidate" | "Evaluation" | "Selection"))
         .count();
-    assert_eq!(evolution, 8, "richer evolution shapes pinned");
-    assert_eq!(built.vectors.len(), 21);
+    assert_eq!(evolution, 9, "richer evolution shapes pinned");
+    assert_eq!(built.vectors.len(), 22);
 
     // Every unsigned and signed vector must round-trip to its published id.
     for v in &built.vectors {

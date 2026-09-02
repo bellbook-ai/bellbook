@@ -192,6 +192,42 @@ completion predicate, not a requirement with evidence binding.
   retracting a Requirement releases its key, so the corrected one may carry
   the same handle.
 
+**Extended evaluation (spec 0.4).** `bellbook.evaluation.v1` is frozen as
+written above. The extended shape is a new schema name, because it adds
+required fields and a vocabulary (§14):
+
+- `bellbook.evaluation.v2` (base evidence `Reported`) and
+  `bellbook.evaluation.attested.v1` (base evidence `Verified`), both
+  `Kind::Evaluation`, carry `{ candidate, criterion (non-empty),
+  procedure: Option<String>, outcome, evaluator: DeciderBinding, basis:
+  recomputed | declared, evidence: [ArtifactRef], requirements:
+  [RecordId] }`.
+- `DeciderBinding` is `{ id: String (non-empty), version: Option<String>,
+  procedure_hash: Option<Hash256>, input_hash: Option<Hash256> }`: who
+  decided, with what exact procedure, over what normalized input. It is
+  the one vocabulary for binding a decider to its decision; `procedure`
+  (narrative) stays, `procedure_hash` is the binding.
+- **Basis is declared, never inferred.** `recomputed` means the evaluator
+  re-derived the facts it judged from the bound evidence; `declared`
+  means it checked facts as recorded. The record states which.
+- **Outcomes are fail-closed.** `outcome` is `passed | failed | scored {
+  value, scale } | blocked | insufficient | stale | not_run`. Only
+  `passed` is a passing outcome; a complete decision that could not run to
+  a pass is recorded as exactly what it is, never as a pass and never
+  omitted.
+- `evidence` follows the artifact rules (sorted, deduplicated,
+  well-formed; `ArtifactRefInvalid`). `requirements` are payload ids of
+  accepted `Requirement`s in the same space, sorted and deduplicated, each
+  mirrored by a `Use` ref so a retracted requirement taints the
+  evaluations that judged against it; a binding failure, an unordered
+  list, or an empty `evaluator.id` rejects with `EvaluationInvalid` (§4.1).
+- The attested schema differs from `evaluation.v2` in schema id and
+  nothing else, and `Verified` is earned, never asserted: the record must
+  carry a valid signature from an author with pinned keys in
+  `author_keys`, exactly as `result.external_receipt.v1` must
+  (`SignatureMissing` / `SignatureInvalid`). A signature never promotes a
+  class; the schema does.
+
 **Artifact identity (spec 0.4).** A delivery claim must bind exact,
 content-addressed artifact identity as a real record field, never parsed
 out of an opaque `output` string. `ArtifactRef` is the one shape for that:
@@ -433,6 +469,15 @@ payload lookup.
   `RequirementInvalid`; its `provenance` must match the author's role
   (`user_authored` from a `User`, `derived` from a `Provider` or `System`),
   else `AuthorRoleInvalid`. A retracted Requirement releases its key (§8).
+- an `Evaluation` under `bellbook.evaluation.v2` or
+  `bellbook.evaluation.attested.v1` (spec 0.4) follows the v1 subject
+  rules, and additionally: `evaluator.id` non-empty, `evidence`
+  well-formed and ordered (`ArtifactRefInvalid`), `requirements` strictly
+  increasing with each id resolving to an accepted `Requirement` in the
+  same space and mirrored by a `Use` ref (`EvaluationInvalid` otherwise).
+  The attested schema must carry a signature from an author with pinned
+  keys (`SignatureMissing` when absent, `SignatureInvalid` when the author
+  has no pinned keys); a Selection may `Use` either shape.
 - a `Candidate`'s `source` must be well-formed (`tree`, and `commit` when
   present, lowercase hex of the length its `algo` dictates - 40 for `sha1`,
   64 for `sha256` - and `manifest_hash` present exactly when
@@ -689,12 +734,14 @@ Base evidence by schema - every frozen schema is classified explicitly (an
 exhaustive mapping; adding a schema requires classifying it):
 
 - `bellbook.verdict.v1` → `Deterministic`
-- `bellbook.result.external_receipt.v1` → `Verified`
+- `bellbook.result.external_receipt.v1`, `bellbook.evaluation.attested.v1`
+  (0.4) → `Verified`
 - `bellbook.request.v1`, `bellbook.action.v1`, `bellbook.response.v1`,
   `bellbook.result.v1`, `bellbook.result.effect_confirmation.v1`,
   `bellbook.capability.v1`, `bellbook.approval.v1`, `bellbook.refusal.v1`,
   `bellbook.usage.v1`, `bellbook.candidate.v1`, `bellbook.evaluation.v1`,
-  `bellbook.requirement.v1` (0.4) → `Reported`
+  `bellbook.requirement.v1` (0.4), `bellbook.evaluation.v2` (0.4)
+  → `Reported`
 - `bellbook.summary.v1`, `bellbook.plan.v1`, `bellbook.selection.v1`
   → `Inferred`
 

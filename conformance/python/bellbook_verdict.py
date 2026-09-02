@@ -60,6 +60,8 @@ SCHEMA_EVALUATION = "bellbook.evaluation.v1"
 SCHEMA_SELECTION = "bellbook.selection.v1"
 # Spec 0.4.
 SCHEMA_REQUIREMENT = "bellbook.requirement.v1"
+SCHEMA_EVALUATION_V2 = "bellbook.evaluation.v2"
+SCHEMA_EVALUATION_ATTESTED = "bellbook.evaluation.attested.v1"
 
 ALL_SCHEMAS = [
     SCHEMA_REQUEST,
@@ -80,6 +82,8 @@ ALL_SCHEMAS = [
     SCHEMA_EVALUATION,
     SCHEMA_SELECTION,
     SCHEMA_REQUIREMENT,
+    SCHEMA_EVALUATION_V2,
+    SCHEMA_EVALUATION_ATTESTED,
 ]
 
 
@@ -135,6 +139,9 @@ SOURCE_ALGO = frozenset({"sha1", "sha256"})
 BINDING_MODE = frozenset({"reported", "manifest"})
 CANDIDATE_BASIS = frozenset({"root", "continuation", "derivation"})
 PROVENANCE = frozenset({"user_authored", "derived"})
+BASIS = frozenset({"recomputed", "declared"})
+# Fail-closed outcome vocabulary of the extended evaluation (unit variants).
+EVALUATION_UNITS_V2 = frozenset({"passed", "failed", "blocked", "insufficient", "stale", "not_run"})
 
 # Envelope enums (validated structurally, as serde does when it decodes a
 # Record; an unknown value here is a decode rejection, not a rule violation).
@@ -174,6 +181,13 @@ _STRUCT_SPECS = {
     "SelectedCandidates": {"candidates": ("vec", "hash")},
     # Artifact identity (spec 0.4): scheme token, hex digest, optional label.
     "ArtifactRef": {"scheme": "str", "digest": "str", "name": ("opt", "str")},
+    # Who decided, with what procedure, over what input (spec 0.4).
+    "DeciderBinding": {
+        "id": "str",
+        "version": ("opt", "str"),
+        "procedure_hash": ("opt", "hash"),
+        "input_hash": ("opt", "hash"),
+    },
     "PlanTask": {
         "id": "str",
         "description": "str",
@@ -285,7 +299,20 @@ _PAYLOAD_SPECS = {
         "expected_evidence": ("opt", "str"),
         "provenance": ("enum", PROVENANCE),
     },
+    SCHEMA_EVALUATION_V2: {
+        "candidate": "hash",
+        "criterion": "nonempty_str",
+        "procedure": ("opt", "str"),
+        "outcome": ("tagged", EVALUATION_UNITS_V2, {"scored": "ScoredValue"}),
+        "evaluator": ("struct", "DeciderBinding"),
+        "basis": ("enum", BASIS),
+        "evidence": ("vec", ("struct", "ArtifactRef")),
+        "requirements": ("vec", "hash"),
+    },
 }
+# The attested evaluation carries the v2 shape; it differs in schema id (and
+# therefore base evidence and the pinned-signature rule) and nothing else.
+_PAYLOAD_SPECS[SCHEMA_EVALUATION_ATTESTED] = _PAYLOAD_SPECS[SCHEMA_EVALUATION_V2]
 # The three Result schemas share the ResultData shape.
 _PAYLOAD_SPECS[SCHEMA_RESULT_EXTERNAL] = _PAYLOAD_SPECS[SCHEMA_RESULT]
 _PAYLOAD_SPECS[SCHEMA_RESULT_EFFECT_CONFIRMATION] = _PAYLOAD_SPECS[SCHEMA_RESULT]
@@ -325,6 +352,10 @@ BASE_EVIDENCE = {
     SCHEMA_PLAN: "Inferred",
     SCHEMA_SELECTION: "Inferred",
     SCHEMA_REQUIREMENT: "Reported",
+    SCHEMA_EVALUATION_V2: "Reported",
+    # Verified is earned by the schema plus the pinned-key signature rule,
+    # exactly like the external receipt; a signature never promotes a class.
+    SCHEMA_EVALUATION_ATTESTED: "Verified",
 }
 
 ALLOWED_AUTHOR_TYPES = {
@@ -1555,13 +1586,52 @@ def _check_requirement(record, prior, rules, state):
     return None
 
 
+def _uses(record, target_hex: str) -> bool:
+    return any(r["type"] == "Use" and h(r["target"]) == target_hex for r in record["refs"])
+
+
 def _check_evaluation(record, prior, rules, state):
+    schema = schema_hex(record)
+    if schema in (schema_id_hex(SCHEMA_EVALUATION_V2), schema_id_hex(SCHEMA_EVALUATION_ATTESTED)):
+        return _check_evaluation_v2(record, prior, rules, state)
     data = payload(record)
     if _resolve_candidate(data["candidate"], record, prior, state) is None:
         return "PayloadRefUnresolved"
-    cand_hex = h(data["candidate"])
-    if not any(r["type"] == "Use" and h(r["target"]) == cand_hex for r in record["refs"]):
+    if not _uses(record, h(data["candidate"])):
         return "EvaluationInvalid"
+    return None
+
+
+def _check_evaluation_v2(record, prior, rules, state):
+    """Spec 0.4 (src/verify/verifier/evolution.rs check_evaluation_v2)."""
+    data = payload(record)
+    if schema_hex(record) == schema_id_hex(SCHEMA_EVALUATION_ATTESTED):
+        if record["author"].get("signature") is None:
+            return "SignatureMissing"
+        if record["author"]["id"] not in rules.author_keys:
+            return "SignatureInvalid"
+    if _resolve_candidate(data["candidate"], record, prior, state) is None:
+        return "PayloadRefUnresolved"
+    if not _uses(record, h(data["candidate"])):
+        return "EvaluationInvalid"
+    if not data["evaluator"]["id"]:
+        return "EvaluationInvalid"
+    if not _artifacts_well_formed(data["evidence"]):
+        return "ArtifactRefInvalid"
+    reqs = [h(r) for r in data["requirements"]]
+    if any(not (a < b) for a, b in zip(reqs, reqs[1:])):
+        return "EvaluationInvalid"
+    for rid in reqs:
+        t = prior.find(rid)
+        if (
+            t is None
+            or t["kind"] != "Requirement"
+            or h(t["space"]) != h(record["space"])
+            or rid not in state.accepted
+        ):
+            return "EvaluationInvalid"
+        if not _uses(record, rid):
+            return "EvaluationInvalid"
     return None
 
 

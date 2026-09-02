@@ -31,6 +31,27 @@ spec change since 0.3: spec version 0.4.
   `rules init`) now carries the schema; rules from earlier versions stay
   valid and reject a Requirement as `UnknownSchema` until the schema is
   added.
+- **The extended `Evaluation`: `bellbook.evaluation.v2` and
+  `bellbook.evaluation.attested.v1`** (RFC-0003 section 4.3, SPEC section
+  2; #89). `bellbook.evaluation.v1` is frozen as it was; the extended
+  shape is a new schema name because it adds required fields and a
+  vocabulary. It carries the v1 judgment plus `evaluator: DeciderBinding
+  {id, version, procedure_hash, input_hash}` (who decided, with what
+  exact procedure, over what input - the one vocabulary a future
+  `PolicyDecision` reuses), `basis: recomputed | declared` (declared,
+  never inferred), `evidence: [ArtifactRef]` (what was judged), and
+  `requirements: [RecordId]` (accepted Requirements it speaks to, each
+  mirrored by a `Use` ref so a retracted requirement taints the
+  evaluations that judged against it). Outcomes are fail-closed: `passed
+  | failed | scored | blocked | insufficient | stale | not_run`, and only
+  `passed` passes. Binding failures, an unordered `requirements` list, or
+  an empty `evaluator.id` reject with `EvaluationInvalid`; malformed
+  evidence with `ArtifactRefInvalid`. The attested schema has base
+  evidence `Verified` and must carry a signature from an author with
+  pinned keys, exactly like `result.external_receipt.v1`: a signature
+  never promotes a class, the schema does. Selections and the named
+  query set accept either shape; `evidence` reports the fail-closed
+  outcome labels.
 - **First-class artifact identity: `ArtifactRef`** (RFC-0003 section
   4.2, SPEC section 2; #108). `{scheme, digest, name}`: a scheme token, a
   lowercase-hex content digest of the length the scheme dictates

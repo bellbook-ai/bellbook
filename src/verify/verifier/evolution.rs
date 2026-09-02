@@ -175,21 +175,94 @@ pub(super) fn check_candidate(
 pub(super) fn check_evaluation(
     record: &Record,
     prior: &Prior<'_>,
-    _rules: &VerifierRules,
+    rules: &VerifierRules,
     state: &State,
 ) -> Option<ReasonCode> {
+    // Spec 0.4: the extended shape and its attested variant take their own
+    // path; `bellbook.evaluation.v1` is frozen at the 0.3 rules.
+    if record.schema == schema_id(SCHEMA_EVALUATION_V2)
+        || record.schema == schema_id(SCHEMA_EVALUATION_ATTESTED)
+    {
+        return check_evaluation_v2(record, prior, rules, state);
+    }
+
     let data: EvaluationData = dec!(&record.data, EvaluationData);
 
     if let Err(reason) = resolve_candidate(data.candidate, record, prior, state) {
         return Some(reason);
     }
 
-    let uses_candidate = record
+    if !uses(record, data.candidate) {
+        return Some(ReasonCode::EvaluationInvalid);
+    }
+
+    None
+}
+
+/// Whether the record carries a `Use` ref to `target`.
+fn uses(record: &Record, target: RecordId) -> bool {
+    record
         .refs
         .iter()
-        .any(|r| r.type_ == RefType::Use && r.target == data.candidate);
-    if !uses_candidate {
+        .any(|r| r.type_ == RefType::Use && r.target == target)
+}
+
+/// Extended `Evaluation` rules (spec 0.4, RFC-0003 section 4.3): the v1
+/// subject rules, a non-empty decider identity, well-formed evidence, and
+/// requirement bindings that resolve to accepted Requirements in the same
+/// space and are each mirrored by a `Use` ref (so a retracted requirement
+/// taints the evaluations that judged against it). The attested schema is
+/// `Verified` evidence, which is earned, never asserted: it must carry a
+/// signature (verified by the generic checks) from an author with pinned
+/// keys, exactly as `result.external_receipt.v1` must.
+fn check_evaluation_v2(
+    record: &Record,
+    prior: &Prior<'_>,
+    rules: &VerifierRules,
+    state: &State,
+) -> Option<ReasonCode> {
+    let data: EvaluationDataV2 = dec!(&record.data, EvaluationDataV2);
+
+    if record.schema == schema_id(SCHEMA_EVALUATION_ATTESTED) {
+        if record.author.signature.is_none() {
+            return Some(ReasonCode::SignatureMissing);
+        }
+        if !rules.author_keys.contains_key(&record.author.id) {
+            return Some(ReasonCode::SignatureInvalid);
+        }
+    }
+
+    if let Err(reason) = resolve_candidate(data.candidate, record, prior, state) {
+        return Some(reason);
+    }
+    if !uses(record, data.candidate) {
         return Some(ReasonCode::EvaluationInvalid);
+    }
+
+    if data.evaluator.id.is_empty() {
+        return Some(ReasonCode::EvaluationInvalid);
+    }
+
+    if !artifact_refs_well_formed(&data.evidence) {
+        return Some(ReasonCode::ArtifactRefInvalid);
+    }
+
+    // requirements: strictly increasing (sorted, deduplicated), each an
+    // accepted Requirement in this space, each Used.
+    if !data.requirements.windows(2).all(|w| w[0] < w[1]) {
+        return Some(ReasonCode::EvaluationInvalid);
+    }
+    for rid in &data.requirements {
+        match prior.find(*rid) {
+            Some(t)
+                if t.kind == Kind::Requirement
+                    && t.space == record.space
+                    && state.accepted_records.contains(&t.id) => {}
+            _ => return Some(ReasonCode::EvaluationInvalid),
+        }
+        if !uses(record, *rid) {
+            return Some(ReasonCode::EvaluationInvalid);
+        }
     }
 
     None
@@ -237,8 +310,11 @@ pub(super) fn check_selection(
             if let Some(t) = prior.find(r.target) {
                 if t.kind == Kind::Evaluation && state.accepted_records.contains(&t.id) {
                     used_evaluations += 1;
-                    let ev: EvaluationData = dec!(&t.data, EvaluationData);
-                    if !considered.contains(&ev.candidate) {
+                    // Either evaluation shape (v1, or the 0.4 v2/attested).
+                    let Some((subject, _, _)) = evaluation_summary(&t.schema, &t.data) else {
+                        return Some(ReasonCode::InvalidPayload);
+                    };
+                    if !considered.contains(&subject) {
                         return Some(ReasonCode::SelectionInvalid);
                     }
                 }
