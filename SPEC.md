@@ -1,12 +1,15 @@
 # Bellbook specification
 
-**Spec version: 0.3 (first published as `bellbook` 0.3.0; also implemented by
-0.4.0 and later).** The previous epoch
-is 0.2; its artifacts remain valid under v0.2 rules forever, and the
-published 0.2.x release is their validator (§14). This document is
+**Spec version: 0.4 (in development on this branch; first released as
+`bellbook` 0.8.0).** The previous epochs are 0.3 (crates 0.3.0 through
+0.7.0) and 0.2 (crate 0.2.0); their artifacts remain valid under their
+own rules forever. A 0.4 validator replays a 0.3 receipt under the 0.3
+schema set and reaches the identical decision; the published 0.2.x
+release is the validator for 0.2 artifacts (§14). This document is
 versioned independently of the `bellbook` crate; the crate's CHANGELOG
 states which spec version each release implements (see §14). The v0.3
-design notes are in [`spec/v0.3-delta.md`](spec/v0.3-delta.md); this
+design notes are in [`spec/v0.3-delta.md`](spec/v0.3-delta.md) and the
+v0.4 design in [RFC-0003](docs/rfcs/0003-requirement-binding.md); this
 document is the normative description of what the implementation does.
 
 This document is **normative**: conformance is defined by this
@@ -246,8 +249,11 @@ Records may carry a detached **Ed25519** (RFC 8032) signature in
   `{"domain":"bellbook.record-signature.v0.3","record":<record form>}`,
   where `<record form>` is the record with `id` and `author.signature`
   omitted and the whole envelope is serialized as JCS. The explicit protocol
-  and spec-epoch domain prevents a signature made for another protocol or
-  Bellbook epoch from being replayed as a v0.3 record. After signing, the
+  and signing-form domain prevents a signature made for another protocol or
+  another Bellbook signing form from being replayed as a current-epoch
+  record. The domain names the signing form, which was introduced in 0.3
+  and is unchanged in 0.4 (§14), so it reads `v0.3` in both epochs. After
+  signing, the
   record id is computed from the canonical id form (§3), which includes the completed
   signature. This avoids a circular dependency while ensuring signature
   removal or substitution changes the record id and every dependent ref and
