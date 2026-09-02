@@ -52,14 +52,19 @@ USAGE:
     bellbook rules init    --author <id>:<role> ... [--admin <id>] ... [--reaffirmer <id>] ...
                            [--max-context <n>] [--out <file>]
     bellbook export        --log <dir> --rules <file> [--out <file>]
+                           [--profile <id> ...]
 
 COMMANDS:
     validate    Verify a receipt offline: ids (RFC 8785 canonical form),
                 gap-free logical time, verdict re-derivation, signatures,
                 evidence derivation, taint, and the standing section.
+                Every profile the receipt declares is evaluated and
+                reported alongside the verdict, never trusted;
                 --require-profile evaluates a named profile (currently
-                bellbook-core-v1) and reports it alongside the verdict;
-                a receipt that validates but does not conform exits 3.
+                bellbook-core-v1) the receipt did not declare. A receipt
+                that validates but does not conform to a declared or
+                required profile exits 3, as does a declaration whose
+                version or hash is not the profile this binary evaluated.
     candidate   Record a Candidate (a proposed source state).
     eval        Record an Evaluation of a candidate.
     select      Record a Selection over candidates (or a reaffirmation).
@@ -77,7 +82,8 @@ COMMANDS:
                 actor to retract records it did not author; --reaffirmer
                 restricts reaffirming selections to the listed actors.
     export      Bundle a log directory into a portable receipt (the input
-                `bellbook validate` verifies).
+                `bellbook validate` verifies). --profile declares a profile
+                the receipt claims; every validator re-checks the claim.
 
 EXIT CODES:
     0 clean/success   1 invalid   2 tainted   3 profile not met   64 usage
@@ -357,14 +363,13 @@ fn cmd_validate(rest: &[String]) -> ExitCode {
     }
 
     // Verdict first: an Invalid receipt is 1 whatever was requested.
-    // A receipt that validates but misses a required profile is 3 - a
-    // distinct answer from "valid" so a caller cannot mistake one for the
-    // other. Unknown profile ids count as not met: the caller asked for a
-    // guarantee this validator cannot evaluate.
-    let profile_missed = report
-        .profiles
-        .iter()
-        .any(|p| p.status != ProfileStatus::Conformant);
+    // A receipt that validates but misses a declared or required profile is
+    // 3 - a distinct answer from "valid" so a caller cannot mistake one for
+    // the other. Unknown profile ids count as not met (a guarantee this
+    // validator cannot evaluate), and so does a declaration naming a
+    // version or hash other than the profile evaluated here: the claim the
+    // receipt made is not the one that was checked.
+    let profile_missed = report.profiles.iter().any(|p| !p.met());
     match report.status {
         ValidationStatus::Invalid => ExitCode::from(1),
         _ if profile_missed => ExitCode::from(3),
@@ -602,11 +607,20 @@ mod persist_cmds {
     /// Bundle a log directory into a portable receipt. `open` rebuilds and
     /// re-verifies state from the committed records, so a log that does not
     /// verify under the given rules is refused before anything is written.
+    /// `--profile <id>` (repeatable) declares a profile the receipt claims;
+    /// the declaration is not evaluated here - every validator re-checks it
+    /// - so the export succeeds even if the claim turns out false.
     pub fn export(rest: &[String]) -> Result<ExitCode, String> {
-        let p = parse(rest, &["log", "rules", "out"], &[], &[])?;
+        let p = parse(rest, &["log", "rules", "out"], &["profile"], &[])?;
         let rules = load_rules(&p)?;
         let (writer, _state) = open(&p, &rules)?;
+        let declared: Vec<&str> = p
+            .multis
+            .get("profile")
+            .map(|ids| ids.iter().map(String::as_str).collect())
+            .unwrap_or_default();
         let bytes = Receipt::new(writer.records(), &rules)
+            .with_declared_profiles(&declared)?
             .to_bytes()
             .map_err(|e| format!("cannot serialize receipt: {e}"))?;
         match p.singles.get("out") {

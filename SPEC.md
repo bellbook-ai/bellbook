@@ -1087,9 +1087,16 @@ third party validates offline, without trusting the producer.
 
 ```
 Receipt {
-  spec_version: string          // e.g. "0.3"
+  spec_version: string          // e.g. "0.4"
+  profiles:     [ProfileRef]    // declared claims (spec 0.4; omitted when empty)
   rules:        VerifierRules   // what the log was committed under
   records:      [Record]        // full sequence from genesis
+}
+
+ProfileRef {
+  id:      string               // e.g. "bellbook-core-v1"
+  version: u32                  // the profile document version claimed
+  hash:    Hash256              // the producer's hash of the clause table
 }
 ```
 
@@ -1124,12 +1131,38 @@ same records is nonconforming, which the conformance corpus detects the same
 way it detects taint disagreement.
 
 Receipt decoding is strict for this version. Unknown fields in the
-receipt, rule document, record envelope, author, signature, ref, or typed
-payload are structural failures, as are duplicate logical keys in rule
-maps and pair-encoded maps. This prevents extension-looking data that the
-validator did not actually enforce and gives every conforming validator
-one interpretation of the same wire document. Future extensions require
-a new spec or schema version rather than silently ignored fields.
+receipt, rule document, record envelope, author, signature, ref, profile
+declaration, or typed payload are structural failures, as are duplicate
+logical keys in rule maps and pair-encoded maps. This prevents
+extension-looking data that the validator did not actually enforce and
+gives every conforming validator one interpretation of the same wire
+document. Future extensions require a new spec or schema version rather
+than silently ignored fields.
+
+**Profile declarations** (spec 0.4). `profiles` lists the profiles
+(§12.2) the producer claims the receipt conforms to. A declaration is a
+claim and is never trusted: a validator evaluates every declared profile
+itself, in declaration order, from its own clause table, and reports each
+result alongside the verdict whether or not anything was requested. Each
+result records that it was `declared` and whether the declaration
+`matches` - the declared `version` and `hash` name the clause table the
+validator applied. A declared profile the validator does not know is
+reported `Unknown`, never an error. A profile the caller requires but the
+receipt did not declare is evaluated after the declared ones, marked not
+declared; a required id the receipt also declares is evaluated once, as
+declared. Declarations are structural in three ways only: a receipt of an
+epoch before 0.4 that carries a non-empty list is Invalid (the field did
+not exist in that epoch's strict decoding), an empty id is Invalid, and a
+repeated id is Invalid. The list is omitted from the canonical wire form
+when empty, so a receipt that declares nothing is byte-identical to one
+written before the field existed. The version and hash inside a
+declaration are never structural: a stale or forged hash yields a
+`Conformant`-or-not evaluation with `matches: false`, and the reported
+`hash` is always the one the validator evaluated. A profile is **met**
+when it is `Conformant` and, if declared, the declaration matches; a
+conformant evaluation under a declaration that named some other revision
+is not met, because the claim the receipt made is not the one that was
+checked.
 
 **"Clean" is relative to the embedded rules.** Under default rules no
 signatures are required and no evidence thresholds are set, so Clean
@@ -1156,8 +1189,11 @@ The reference CLI wraps this for auditors with no Rust knowledge:
 `bellbook validate <file>` prints the human-readable report;
 `--json` prints the same report as JSON; `--max-size <bytes>` bounds the
 file size before it is read (default 64 MiB, `0` = unlimited) - the CLI
-is the trust boundary for untrusted receipts, so the bound lives there.
-Exit codes: 0 clean, 1 invalid, 2 valid-but-tainted.
+is the trust boundary for untrusted receipts, so the bound lives there;
+`--require-profile <id>` evaluates a profile the receipt did not declare.
+`bellbook export --profile <id>` declares a profile in the exported
+receipt without evaluating it. Exit codes: 0 clean, 1 invalid, 2
+valid-but-tainted, 3 valid but a declared or required profile is not met.
 
 ### 12.1 Future profile design principles (non-normative)
 
@@ -1212,8 +1248,10 @@ bellbook-core-v1` evaluates it, the clause table and its hash are
 published in `spec/profiles/bellbook-core-v1/profile.json` with vectors
 in `cases.json` beside it, and the profile document is
 [docs/profiles/bellbook-core-v1.md](docs/profiles/bellbook-core-v1.md).
-Nothing else in this list is implemented until the release named beside
-it.
+Receipt profile declarations are implemented in epoch 0.4 as §12 above
+describes, and the profile vectors carry declaration cases (matching,
+stale hash, wrong version, unknown id, and a false claim). Nothing else in
+this list is implemented until the release named beside it.
 
 ### 12.3 Conformance
 

@@ -53,6 +53,11 @@ AUTHOR_REQUIRED = frozenset({"id", "type"})
 SIGNATURE_FIELDS = frozenset({"key_id", "sig"})
 REF_FIELDS = frozenset({"type", "target"})
 RECEIPT_FIELDS = frozenset({"spec_version", "rules", "records"})
+# `profiles` (spec 0.4) is additive and omitted from the wire form when empty.
+RECEIPT_ALLOWED = RECEIPT_FIELDS | {"profiles"}
+PROFILE_REF_FIELDS = frozenset({"id", "version", "hash"})
+# The first epoch whose receipts may declare profiles (SPEC section 12).
+PROFILE_DECLARATIONS_SINCE = "0.4"
 
 
 class DecodeError(Exception):
@@ -276,18 +281,55 @@ def decode_receipt(text: str) -> dict:
         obj = json.loads(text, object_pairs_hook=_no_duplicate_keys)
     except json.JSONDecodeError as e:
         raise DecodeError(f"unparseable receipt: {e}") from e
-    receipt = _require_exact_object(obj, RECEIPT_FIELDS, RECEIPT_FIELDS, "receipt")
+    receipt = _require_exact_object(obj, RECEIPT_ALLOWED, RECEIPT_FIELDS, "receipt")
     if receipt["spec_version"] not in SUPPORTED_SPEC_VERSIONS:
         raise DecodeError(
             f"unsupported spec version {receipt['spec_version']!r} "
             f"(this validator implements {SPEC_VERSION!r} and validates "
             f"{', '.join(SUPPORTED_SPEC_VERSIONS)})"
         )
+    decode_declarations(receipt)
     if not isinstance(receipt["records"], list):
         raise DecodeError("records must be an array")
     for r in receipt["records"]:
         decode_record(r)
     return receipt
+
+
+def decode_declarations(receipt: dict) -> list[dict]:
+    """The receipt's profile declarations (SPEC section 12), strictly decoded:
+    each is `{id: str, version: u32, hash: 32 bytes}`; a non-empty list is
+    allowed only from spec 0.4 on; ids are non-empty and unique. The version
+    and hash are claims compared during profile evaluation, never rejected
+    here. Returns the (possibly empty) list."""
+    profiles = receipt.get("profiles", [])
+    if not isinstance(profiles, list):
+        raise DecodeError("profiles must be an array")
+    decls = []
+    for p in profiles:
+        d = _require_exact_object(p, PROFILE_REF_FIELDS, PROFILE_REF_FIELDS, "profile declaration")
+        if not isinstance(d["id"], str):
+            raise DecodeError("profile declaration id must be a string")
+        if not _is_int(d["version"]) or d["version"] < 0 or d["version"] > 0xFFFF_FFFF:
+            raise DecodeError("profile declaration version must be a u32")
+        bytes32(d["hash"])
+        decls.append(d)
+    if not decls:
+        return decls
+    order = SUPPORTED_SPEC_VERSIONS
+    if order.index(receipt["spec_version"]) < order.index(PROFILE_DECLARATIONS_SINCE):
+        raise DecodeError(
+            f"profile declarations require spec {PROFILE_DECLARATIONS_SINCE} or later "
+            f"(receipt declares {receipt['spec_version']!r})"
+        )
+    seen: set[str] = set()
+    for idx, d in enumerate(decls):
+        if d["id"] == "":
+            raise DecodeError(f"profile declaration {idx} has an empty id")
+        if d["id"] in seen:
+            raise DecodeError(f"profile {d['id']!r} is declared more than once")
+        seen.add(d["id"])
+    return decls
 
 
 # ---------------------------------------------------------------------------

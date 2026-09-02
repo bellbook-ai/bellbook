@@ -64,12 +64,30 @@ the old rules stays valid under them and stays NonConformant here. That is
 correct - the baseline is a statement about the rules a history was
 committed under, not something applied afterwards.
 
+## Declaring
+
+A receipt can carry the claim itself (spec 0.4, SPEC section 12):
+
+```sh
+bellbook export --log ./log --rules rules.json --profile bellbook-core-v1 --out receipt.json
+```
+
+The receipt then names the profile with the version and clause-table hash
+this implementation knows. Exporting does not evaluate the claim; every
+validator does, unasked, and reports whether the declaration names the
+table it applied. A false claim is reported `NonConformant` with the
+declaration matching; a declaration with a stale or altered hash is
+reported with its evaluation and `declaration_matches: false`, and does not
+count as met either way.
+
 ## Checking
 
 ```sh
 bellbook validate receipt.json --require-profile bellbook-core-v1
 # exit 0 Clean and conformant; 2 Tainted and conformant;
 # 3 validates but does not conform (or unknown profile); 1 Invalid
+# A receipt that declares the profile needs no --require-profile: the
+# declaration is evaluated and the same exit codes apply to it.
 ```
 
 ```python

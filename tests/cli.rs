@@ -1548,3 +1548,159 @@ fn unknown_profile_counts_as_not_met() {
         .unwrap();
     assert_eq!(out.status.code(), Some(64));
 }
+
+// --- export --profile: receipt profile declarations (spec 0.4, SPEC 12) ---
+
+#[test]
+fn export_declares_a_profile_and_validate_checks_the_claim_unasked() {
+    // A generated rule set conforms, so the declaration is a true claim:
+    // `validate` with no --require-profile evaluates it and exits 0.
+    let dir = tempfile::tempdir().unwrap();
+    let rules = dir.path().join("rules.json");
+    let out = bellbook()
+        .args(["rules", "init", "--author", "agent:provider", "--out"])
+        .arg(&rules)
+        .output()
+        .unwrap();
+    assert!(out.status.success());
+    let env = Env {
+        log: dir.path().join("log"),
+        rules,
+        _dir: dir,
+    };
+    let _c0 = add_root(&env, TREE_A);
+    let receipt = env._dir.path().join("r.json");
+    let out = run(
+        &env,
+        &[
+            "export",
+            "--profile",
+            "bellbook-core-v1",
+            "--out",
+            receipt.to_str().unwrap(),
+        ],
+    );
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let v: Value = serde_json::from_slice(&std::fs::read(&receipt).unwrap()).unwrap();
+    assert_eq!(v["profiles"][0]["id"], "bellbook-core-v1");
+    assert_eq!(v["profiles"][0]["version"], 1);
+    assert_eq!(v["profiles"][0]["hash"].as_array().unwrap().len(), 32);
+
+    let out = bellbook()
+        .args(["validate", "--json"])
+        .arg(&receipt)
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(0));
+    let v: Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(v["status"], "Clean");
+    assert_eq!(v["profiles"][0]["id"], "bellbook-core-v1");
+    assert_eq!(v["profiles"][0]["status"], "Conformant");
+    assert_eq!(v["profiles"][0]["declared"], true);
+    assert_eq!(v["profiles"][0]["declaration_matches"], true);
+
+    // Requiring the declared profile evaluates it once, as declared.
+    let out = bellbook()
+        .args(["validate", "--require-profile", "bellbook-core-v1"])
+        .arg(&receipt)
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(0));
+    let text = String::from_utf8_lossy(&out.stdout).to_string();
+    assert!(
+        text.contains("profile bellbook-core-v1: CONFORMANT (declared, declaration matches)"),
+        "{text}"
+    );
+    assert_eq!(text.matches("profile bellbook-core-v1:").count(), 1);
+}
+
+#[test]
+fn a_false_declaration_exits_3_without_being_asked_and_a_tampered_one_is_a_mismatch() {
+    // Hand-written rules without thresholds: the log is Clean, the receipt
+    // claims the baseline, and the claim is false. The validator says so
+    // with exit 3 even though nobody passed --require-profile.
+    let env = setup(); // rules_json() has no thresholds
+    let _c0 = add_root(&env, TREE_A);
+    let receipt = env._dir.path().join("r.json");
+    let out = run(
+        &env,
+        &[
+            "export",
+            "--profile",
+            "bellbook-core-v1",
+            "--out",
+            receipt.to_str().unwrap(),
+        ],
+    );
+    assert!(out.status.success(), "export never evaluates the claim");
+
+    let out = bellbook().arg("validate").arg(&receipt).output().unwrap();
+    assert_eq!(out.status.code(), Some(3));
+    let text = String::from_utf8_lossy(&out.stdout).to_string();
+    assert!(text.contains("status:          CLEAN"), "{text}");
+    assert!(
+        text.contains("profile bellbook-core-v1: NON-CONFORMANT (declared, declaration matches)"),
+        "{text}"
+    );
+
+    // Tamper with the declared hash: the evaluation still runs against the
+    // profile this binary knows, and the declaration is reported false.
+    let mut v: Value = serde_json::from_slice(&std::fs::read(&receipt).unwrap()).unwrap();
+    v["profiles"][0]["hash"] = serde_json::json!(vec![7u8; 32]);
+    let tampered = env._dir.path().join("t.json");
+    std::fs::write(&tampered, serde_json::to_vec(&v).unwrap()).unwrap();
+    let out = bellbook()
+        .args(["validate", "--json"])
+        .arg(&tampered)
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(3));
+    let v: Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(v["status"], "Clean");
+    assert_eq!(v["profiles"][0]["declared"], true);
+    assert_eq!(v["profiles"][0]["declaration_matches"], false);
+
+    // A declaration on a 0.3 receipt is structural: exit 1, nothing evaluated.
+    let mut v: Value = serde_json::from_slice(&std::fs::read(&receipt).unwrap()).unwrap();
+    v["spec_version"] = serde_json::json!("0.3");
+    let relabeled = env._dir.path().join("v03.json");
+    std::fs::write(&relabeled, serde_json::to_vec(&v).unwrap()).unwrap();
+    let out = bellbook()
+        .args(["validate", "--json"])
+        .arg(&relabeled)
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(1));
+    let v: Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(v["status"], "Invalid");
+    assert!(v["problem"]
+        .as_str()
+        .unwrap()
+        .contains("profile declarations require spec 0.4"));
+    assert_eq!(v["profiles"].as_array().unwrap().len(), 0);
+}
+
+#[test]
+fn export_refuses_a_profile_it_cannot_declare() {
+    let env = setup();
+    let _c0 = add_root(&env, TREE_A);
+    let out = run(&env, &["export", "--profile", "made-up-v1"]);
+    assert_eq!(out.status.code(), Some(65));
+    assert!(String::from_utf8_lossy(&out.stderr).contains("unknown profile"));
+    let out = run(
+        &env,
+        &[
+            "export",
+            "--profile",
+            "bellbook-core-v1",
+            "--profile",
+            "bellbook-core-v1",
+        ],
+    );
+    assert_eq!(out.status.code(), Some(65));
+    assert!(String::from_utf8_lossy(&out.stderr).contains("more than once"));
+}

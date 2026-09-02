@@ -110,8 +110,11 @@ def test_published_profile_vectors_match_reference():
     for case in doc["cases"]:
         data = json.dumps(case["receipt"]).encode()
         report = bellbook.validate(data, require_profile=CORE_V1)
-        (p,) = report.profiles
-        assert p["hash"] == expected_hash, case["name"]
-        assert p["status"] == case["expect"]["status"], case["name"]
-        flags = [{"id": c["id"], "passed": c["passed"]} for c in p["clauses"]]
-        assert flags == case["expect"]["clauses"], case["name"]
+        expected = case["expect"]["profiles"]
+        assert [p["id"] for p in report.profiles] == [e["id"] for e in expected], case["name"]
+        for p, e in zip(report.profiles, expected):
+            assert p["status"] == e["status"], case["name"]
+            if p["status"] != "Unknown":
+                assert p["hash"] == expected_hash, case["name"]
+            flags = [{"id": c["id"], "passed": c["passed"]} for c in p["clauses"]]
+            assert flags == e["clauses"], case["name"]

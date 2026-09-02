@@ -46,6 +46,33 @@ pub enum ProfileStatus {
     Unknown,
 }
 
+/// A receipt's declaration that it claims a profile (SPEC §12, spec 0.4):
+/// the profile id, the profile document version, and the hash of the clause
+/// table the producer evaluated against. A declaration is a claim, never
+/// trusted: a validator evaluates every declared profile itself and reports
+/// whether the declaration names the table it applied
+/// (`ProfileResult::declaration_matches`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ProfileRef {
+    /// The stable profile id, e.g. `"bellbook-core-v1"`.
+    pub id: String,
+    /// The profile document version the producer claims.
+    pub version: u32,
+    /// The producer's hash of the profile's canonical clause table.
+    pub hash: Hash256,
+}
+
+/// The declaration a producer makes for a profile this validator knows:
+/// its id, current version, and clause-table hash. `None` for an unknown id.
+pub fn profile_ref(id: &str) -> Option<ProfileRef> {
+    profile_table(id).map(|t| ProfileRef {
+        hash: profile_hash(&t),
+        id: t.id,
+        version: t.version,
+    })
+}
+
 /// One clause of a profile, evaluated.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -72,6 +99,26 @@ pub struct ProfileResult {
     pub status: ProfileStatus,
     /// Per-clause results, in profile order; empty for an unknown profile.
     pub clauses: Vec<ClauseResult>,
+    /// `true` when the receipt declared this profile (`Receipt::profiles`),
+    /// `false` when the caller required it without a declaration.
+    #[serde(default)]
+    pub declared: bool,
+    /// For a declared profile this validator knows: whether the declaration's
+    /// version and hash name the clause table that was evaluated. `None` when
+    /// the profile was not declared, or is unknown to this validator.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub declaration_matches: Option<bool>,
+}
+
+impl ProfileResult {
+    /// Whether the profile counts as met: `Conformant`, and if declared, a
+    /// declaration that names the evaluated table. A `NonConformant` or
+    /// `Unknown` result is not met; neither is a conformant evaluation under
+    /// a declaration that claimed some other revision of the profile, since
+    /// the receipt's claim was not the one verified.
+    pub fn met(&self) -> bool {
+        self.status == ProfileStatus::Conformant && self.declaration_matches != Some(false)
+    }
 }
 
 /// One row of a profile's clause table: the normative statement a clause
@@ -159,8 +206,49 @@ pub fn evaluate_profile(id: &str, receipt: &Receipt, report: &Report) -> Profile
             hash: [0u8; 32],
             status: ProfileStatus::Unknown,
             clauses: Vec::new(),
+            declared: false,
+            declaration_matches: None,
         },
     }
+}
+
+/// Evaluate a profile the receipt declares. The declaration is not trusted:
+/// the profile is evaluated exactly as [`evaluate_profile`] does, and the
+/// result additionally records whether the declared version and hash name
+/// the clause table this validator applied. An unknown id is `Unknown` with
+/// no comparison to make.
+pub fn evaluate_declared(decl: &ProfileRef, receipt: &Receipt, report: &Report) -> ProfileResult {
+    let mut result = evaluate_profile(&decl.id, receipt, report);
+    result.declared = true;
+    if let Some(table) = profile_table(&decl.id) {
+        result.declaration_matches =
+            Some(decl.version == table.version && decl.hash == result.hash);
+    }
+    result
+}
+
+/// Every profile result a validation reports: each profile the receipt
+/// declares, in declaration order, then each `required` id the receipt did
+/// not declare, in request order. A required id the receipt also declares is
+/// evaluated once, as declared. `report` must be the result of validating
+/// `receipt` (SPEC §12.2).
+pub fn evaluate_profiles(
+    receipt: &Receipt,
+    report: &Report,
+    required: &[&str],
+) -> Vec<ProfileResult> {
+    let mut out: Vec<ProfileResult> = receipt
+        .profiles
+        .iter()
+        .map(|decl| evaluate_declared(decl, receipt, report))
+        .collect();
+    for id in required {
+        if out.iter().any(|p| p.id == *id) {
+            continue;
+        }
+        out.push(evaluate_profile(id, receipt, report));
+    }
+    out
 }
 
 fn evaluate_core_v1(receipt: &Receipt, report: &Report) -> ProfileResult {
@@ -270,6 +358,8 @@ fn evaluate_core_v1(receipt: &Receipt, report: &Report) -> ProfileResult {
         hash: profile_hash(&core_v1_table()),
         status,
         clauses,
+        declared: false,
+        declaration_matches: None,
     }
 }
 

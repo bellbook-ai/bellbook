@@ -398,35 +398,66 @@ def run_profile_cases() -> tuple[int, list[str]]:
     assertions = 1
     statuses: dict[str, int] = {}
     failing_clauses: set[str] = set()
+    situations: set[tuple[bool, bool | None]] = set()
+    tables = {doc["profile"]: table}
     for c in cases:
         rc = c["receipt"]
         records = rc["records"]
         with _quiet_native_stderr():
-            report = bv.validate_receipt(records, rc["rules"])
-        got = bp.evaluate(doc["profile"], rc["rules"], records, report, table)
-        expect = c["expect"]
+            report = bv.validate_receipt(records, rc["rules"], rc["spec_version"])
+        # Every declared profile (never trusted), then the required baseline
+        # if the receipt did not declare it - the order the reference reports.
+        got_all = bp.evaluate_receipt(rc, records, report, [doc["profile"]], tables)
+        expect_all = c["expect"]["profiles"]
         check(
-            got["status"] == expect["status"],
-            f"profile case `{c['name']}`: status {got['status']} differs from {expect['status']}",
+            [g["id"] for g in got_all] == [e["id"] for e in expect_all],
+            f"profile case `{c['name']}`: reported profiles differ",
         )
-        check(got["hash"] == declared, f"profile case `{c['name']}`: hash differs")
-        got_flags = [(k["id"], k["passed"]) for k in got["clauses"]]
-        exp_flags = [(k["id"], k["passed"]) for k in expect["clauses"]]
-        check(
-            got_flags == exp_flags,
-            f"profile case `{c['name']}`: clause results differ:\n  got:    {got_flags}\n  expect: {exp_flags}",
-        )
-        assertions += 3
-        statuses[got["status"]] = statuses.get(got["status"], 0) + 1
-        failing_clauses.update(k["id"] for k in got["clauses"] if not k["passed"])
-    # Coverage: both outcomes appear, and every failable clause has a
-    # rejecting vector (B5 and B6 are reporting clauses and always hold).
-    check("Conformant" in statuses and "NonConformant" in statuses, "profile corpus covers one outcome only")
+        assertions += 1
+        for got, expect in zip(got_all, expect_all):
+            check(
+                got["status"] == expect["status"],
+                f"profile case `{c['name']}`: {got['id']} status {got['status']} differs from {expect['status']}",
+            )
+            expect_hash = bytes(32) if expect["status"] == "Unknown" else declared
+            check(got["hash"] == expect_hash, f"profile case `{c['name']}`: {got['id']} hash differs")
+            check(
+                got["declared"] == expect["declared"]
+                and got["declaration_matches"] == expect.get("declaration_matches"),
+                f"profile case `{c['name']}`: {got['id']} declaration report differs "
+                f"(got {got['declared']}/{got['declaration_matches']}, "
+                f"expect {expect['declared']}/{expect.get('declaration_matches')})",
+            )
+            got_flags = [(k["id"], k["passed"]) for k in got["clauses"]]
+            exp_flags = [(k["id"], k["passed"]) for k in expect["clauses"]]
+            check(
+                got_flags == exp_flags,
+                f"profile case `{c['name']}`: clause results differ:\n  got:    {got_flags}\n  expect: {exp_flags}",
+            )
+            assertions += 4
+            statuses[got["status"]] = statuses.get(got["status"], 0) + 1
+            failing_clauses.update(k["id"] for k in got["clauses"] if not k["passed"])
+            situations.add((got["declared"], got["declaration_matches"]))
+    # Coverage: every outcome appears, every failable clause has a rejecting
+    # vector (B5 and B6 are reporting clauses and always hold), and every
+    # declaration situation is exercised: required, declared and matching,
+    # declared with a mismatch, declared but unknown.
+    check(
+        {"Conformant", "NonConformant", "Unknown"} <= set(statuses),
+        "profile corpus does not cover every outcome",
+    )
     missing = {"B1", "B2", "B3", "B4"} - failing_clauses
     check(not missing, f"profile corpus has no rejecting vector for: {sorted(missing)}")
+    wanted = {(False, None), (True, True), (True, False), (True, None)}
+    check(
+        wanted <= situations,
+        f"profile corpus misses declaration situations: {sorted(wanted - situations, key=str)}",
+    )
     notes = [
         "outcomes: " + ", ".join(f"{k}={statuses[k]}" for k in sorted(statuses)),
         "rejecting vectors cover clauses: " + ", ".join(sorted(failing_clauses)),
+        "declarations: evaluated from the receipt, never trusted; matching, "
+        "mismatched, and unknown declarations all reproduced",
     ]
     return assertions, notes
 

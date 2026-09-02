@@ -278,10 +278,214 @@ fn report_with_profiles_round_trips_and_old_reports_still_parse() {
     v.as_object_mut().unwrap().remove("profiles");
     let old: Report = serde_json::from_value(v).unwrap();
     assert!(old.profiles.is_empty());
+    // A 0.7.0 profile result has no declaration fields: it parses as a
+    // required (undeclared) evaluation.
+    let mut v: serde_json::Value = serde_json::from_str(&json).unwrap();
+    let p = v["profiles"][0].as_object_mut().unwrap();
+    p.remove("declared");
+    p.remove("declaration_matches");
+    let old: Report = serde_json::from_value(v).unwrap();
+    assert!(!old.profiles[0].declared);
+    assert_eq!(old.profiles[0].declaration_matches, None);
     // The human rendering names the profile and every clause.
     let text = r.to_string();
     assert!(text.contains("profile bellbook-core-v1: CONFORMANT"));
     for id in ["B1", "B2", "B3", "B4", "B5", "B6"] {
         assert!(text.contains(&format!("ok   {id}:")), "{text}");
     }
+}
+
+// --- receipt profile declarations (spec 0.4, SPEC 12) ---
+
+fn declaring(bytes: &[u8], ids: &[&str]) -> Receipt {
+    Receipt::from_bytes(bytes)
+        .unwrap()
+        .with_declared_profiles(ids)
+        .unwrap()
+}
+
+#[test]
+fn a_declared_profile_is_evaluated_by_plain_validate_and_never_trusted() {
+    let rules = baseline_rules();
+    let receipt = declaring(&receipt_under(&rules), &[BELLBOOK_CORE_V1]);
+    assert_eq!(
+        receipt.profiles,
+        vec![profile_ref(BELLBOOK_CORE_V1).unwrap()]
+    );
+    assert_eq!(receipt.profiles[0].version, core_v1_table().version);
+    assert_eq!(receipt.profiles[0].hash, profile_hash(&core_v1_table()));
+    let bytes = receipt.to_bytes().unwrap();
+
+    // No profile request: the declaration alone makes the validator evaluate.
+    let r = validate(&bytes);
+    assert_eq!(r.status, ValidationStatus::Clean);
+    assert_eq!(r.profiles.len(), 1);
+    let p = &r.profiles[0];
+    assert_eq!(p.id, BELLBOOK_CORE_V1);
+    assert_eq!(p.status, ProfileStatus::Conformant);
+    assert!(p.declared);
+    assert_eq!(p.declaration_matches, Some(true));
+    assert!(p.met());
+    assert!(r
+        .to_string()
+        .contains("profile bellbook-core-v1: CONFORMANT (declared, declaration matches)"));
+
+    // Requiring the declared id evaluates it once, as declared.
+    let with = validate_with_profiles(&bytes, &ValidationLimits::default(), &[BELLBOOK_CORE_V1]);
+    assert_eq!(with.profiles, r.profiles);
+
+    // A false claim: rules without thresholds declaring the baseline. The
+    // declaration is honest about which table it names, and the evaluation
+    // still says NonConformant - the verdict stays Clean.
+    let loose = VerifierRules::new(SPACE, 200)
+        .with_author_role("agent", AuthorType::Provider)
+        .with_author_role("evaluator", AuthorType::Provider);
+    let bytes = declaring(&receipt_under(&loose), &[BELLBOOK_CORE_V1])
+        .to_bytes()
+        .unwrap();
+    let r = validate(&bytes);
+    assert_eq!(r.status, ValidationStatus::Clean);
+    let p = &r.profiles[0];
+    assert_eq!(p.status, ProfileStatus::NonConformant);
+    assert!(p.declared);
+    assert_eq!(p.declaration_matches, Some(true));
+    assert!(!p.met());
+    assert!(!clause(p, "B3").passed);
+}
+
+#[test]
+fn a_declaration_naming_another_revision_is_a_mismatch_and_not_met() {
+    let rules = baseline_rules();
+    let mut receipt = Receipt::from_bytes(&receipt_under(&rules)).unwrap();
+    let real = profile_hash(&core_v1_table());
+
+    // Wrong hash: the evaluation runs against this validator's table, whose
+    // hash is what the result carries; the declaration is reported false.
+    receipt.profiles = vec![ProfileRef {
+        id: BELLBOOK_CORE_V1.into(),
+        version: 1,
+        hash: [0xAB; 32],
+    }];
+    let r = validate(&receipt.to_bytes().unwrap());
+    assert_eq!(r.status, ValidationStatus::Clean, "verdict unaffected");
+    let p = &r.profiles[0];
+    assert_eq!(p.status, ProfileStatus::Conformant);
+    assert_eq!(p.hash, real, "the evaluated hash, not the declared one");
+    assert_eq!(p.declaration_matches, Some(false));
+    assert!(!p.met());
+    assert!(r.to_string().contains("(declared, DECLARATION MISMATCH)"));
+
+    // Right hash, wrong version: still a mismatch.
+    receipt.profiles = vec![ProfileRef {
+        id: BELLBOOK_CORE_V1.into(),
+        version: 2,
+        hash: real,
+    }];
+    let r = validate(&receipt.to_bytes().unwrap());
+    assert_eq!(r.profiles[0].declaration_matches, Some(false));
+    assert!(!r.profiles[0].met());
+
+    // An unknown declared profile is reported Unknown with nothing to
+    // compare; a required profile the receipt did not declare follows it.
+    receipt.profiles = vec![ProfileRef {
+        id: "made-up-v1".into(),
+        version: 1,
+        hash: [0u8; 32],
+    }];
+    let r = validate_with_profiles(
+        &receipt.to_bytes().unwrap(),
+        &ValidationLimits::default(),
+        &[BELLBOOK_CORE_V1],
+    );
+    assert_eq!(r.profiles.len(), 2);
+    assert_eq!(r.profiles[0].status, ProfileStatus::Unknown);
+    assert!(r.profiles[0].declared);
+    assert_eq!(r.profiles[0].declaration_matches, None);
+    assert!(!r.profiles[0].met());
+    assert_eq!(r.profiles[1].status, ProfileStatus::Conformant);
+    assert!(!r.profiles[1].declared);
+    assert_eq!(r.profiles[1].declaration_matches, None);
+    assert!(r.profiles[1].met());
+    let text = r.to_string();
+    assert!(
+        text.contains("profile made-up-v1: UNKNOWN (declared)"),
+        "{text}"
+    );
+    assert!(
+        text.contains("profile bellbook-core-v1: CONFORMANT (required)"),
+        "{text}"
+    );
+}
+
+#[test]
+fn declarations_are_structural_on_an_earlier_epoch_or_when_malformed() {
+    let rules = baseline_rules();
+    let receipt = declaring(&receipt_under(&rules), &[BELLBOOK_CORE_V1]);
+    let value = || serde_json::to_value(&receipt).unwrap();
+
+    // Declarations are a 0.4 field: a 0.3 receipt carrying one is Invalid
+    // before replay, with nothing evaluated.
+    let mut v = value();
+    v["spec_version"] = "0.3".into();
+    let r = validate(&serde_json::to_vec(&v).unwrap());
+    assert_eq!(r.status, ValidationStatus::Invalid);
+    assert!(r
+        .problem
+        .as_deref()
+        .unwrap()
+        .contains("profile declarations require spec 0.4"));
+    assert!(r.profiles.is_empty());
+
+    // An empty list is omitted from the wire form and is not a declaration,
+    // so a 0.3 receipt written with `"profiles": []` still validates.
+    let mut v = value();
+    v["spec_version"] = "0.3".into();
+    v["profiles"] = serde_json::json!([]);
+    assert!(validate(&serde_json::to_vec(&v).unwrap()).problem.is_none());
+    let plain = Receipt::new(&[], &rules).to_bytes().unwrap();
+    assert!(!String::from_utf8_lossy(&plain).contains("\"profiles\""));
+
+    // Duplicate id.
+    let mut v = value();
+    let first = v["profiles"][0].clone();
+    v["profiles"].as_array_mut().unwrap().push(first);
+    let r = validate(&serde_json::to_vec(&v).unwrap());
+    assert!(r
+        .problem
+        .as_deref()
+        .unwrap()
+        .contains("declared more than once"));
+
+    // Empty id.
+    let mut v = value();
+    v["profiles"][0]["id"] = "".into();
+    let r = validate(&serde_json::to_vec(&v).unwrap());
+    assert!(r.problem.as_deref().unwrap().contains("has an empty id"));
+
+    // Strict decoding covers the declaration object too.
+    let mut v = value();
+    v["profiles"][0]["extra"] = true.into();
+    let r = validate(&serde_json::to_vec(&v).unwrap());
+    assert!(r
+        .problem
+        .as_deref()
+        .unwrap()
+        .contains("unparseable receipt"));
+    let mut v = value();
+    v["profiles"][0]["hash"] = serde_json::json!([1, 2, 3]);
+    let r = validate(&serde_json::to_vec(&v).unwrap());
+    assert!(r
+        .problem
+        .as_deref()
+        .unwrap()
+        .contains("unparseable receipt"));
+
+    // The builder refuses what it cannot declare honestly.
+    assert!(Receipt::new(&[], &rules)
+        .with_declared_profiles(&["no-such-profile-v9"])
+        .is_err());
+    assert!(Receipt::new(&[], &rules)
+        .with_declared_profiles(&[BELLBOOK_CORE_V1, BELLBOOK_CORE_V1])
+        .is_err());
+    assert!(profile_ref("no-such-profile-v9").is_none());
 }
