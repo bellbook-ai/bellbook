@@ -1,8 +1,8 @@
 """The published profiles across the FFI boundary: `validate(...,
 require_profile=...)` carries the profile result, `default_rules` emits a
-baseline-conformant rule set, and every published profile vector (both
-`bellbook-core-v1` and `delivery-receipt-v1`) re-derives identically through
-the wheel. A profile result is a report alongside the verdict, never a change
+baseline-conformant rule set, and every published profile vector
+(`bellbook-core-v1`, `delivery-receipt-v1`, and `bellbook-core-signed-v1`)
+re-derives identically through the wheel. A profile result is a report alongside the verdict, never a change
 to it."""
 
 import json
@@ -17,9 +17,11 @@ ROOT = pathlib.Path(__file__).resolve().parents[3]
 PROFILES = ROOT / "spec" / "profiles"
 CORE_V1 = "bellbook-core-v1"
 DELIVERY_V1 = "delivery-receipt-v1"
+SIGNED_V1 = "bellbook-core-signed-v1"
 FAILABLE = {
     CORE_V1: {"B1", "B2", "B3", "B4"},
     DELIVERY_V1: {f"D{i}" for i in range(8)},
+    SIGNED_V1: {"S0", "S1", "S2", "S3"},
 }
 BASELINE = {"Candidate": "Reported", "Evaluation": "Reported", "Selection": "Inferred"}
 
@@ -95,13 +97,16 @@ def test_require_profile_type_is_checked():
         bellbook.validate(b"x", require_profile=7)
 
 
-@pytest.mark.parametrize("profile_id", [CORE_V1, DELIVERY_V1])
+@pytest.mark.parametrize("profile_id", [CORE_V1, DELIVERY_V1, SIGNED_V1])
 def test_published_profile_vectors_match_reference(profile_id):
     """Every vector in spec/profiles/<profile>/cases.json yields the stored
     status, declaration flags, per-clause flags, and profile hash through the
     wheel. The delivery vectors carry the fraud battery: one rejecting case
     per clause, including a claim over a failed evaluation with every digest
-    consistent and a passing evaluation reattached to another candidate."""
+    consistent and a passing evaluation reattached to another candidate. The
+    signed vectors carry real Ed25519 signatures under deterministic test
+    keys, one rejecting case per clause, and a stripped-signature receipt
+    (Invalid; every clause fails)."""
     doc = json.loads((PROFILES / profile_id / "cases.json").read_text())
     assert doc["profile"] == profile_id
     expected_hash = bytes(doc["hash"]).hex()
