@@ -13,7 +13,8 @@ to cross-check the specification.)
 
 ## Status
 
-Validation (with the `bellbook-core-v1` baseline profile check), reading,
+Validation (with the `bellbook-core-v1` baseline and `delivery-receipt-v1`
+profile checks), reading,
 writing, and the read-side query set (issue #13, RFC-0002, RFC-0003).
 
 ## Validate
@@ -60,8 +61,14 @@ declared version and hash name the clause table that was evaluated; `None`
 for an undeclared or unknown profile), and `p["met"]` (Conformant and, if
 declared, matching). A declaration is never trusted. A profile result is a
 report alongside the verdict: it never changes `status` or `reason`. The
-profile itself is documented in
-[docs/profiles/bellbook-core-v1.md](../../docs/profiles/bellbook-core-v1.md).
+profiles themselves are documented in
+[docs/profiles/bellbook-core-v1.md](../../docs/profiles/bellbook-core-v1.md)
+and
+[docs/profiles/delivery-receipt-v1.md](../../docs/profiles/delivery-receipt-v1.md);
+`require_profile="delivery-receipt-v1"` reports the eight delivery clauses
+D0 through D7, and the
+[delivery-receipt quickstart](../../docs/quickstart-delivery-receipt.md)
+walks the whole flow from Python.
 
 ## Read
 
@@ -176,8 +183,9 @@ written.
   it). `provenance` is `"user_authored"` or `"derived"`, defaults from the
   author's role (user -> user_authored, provider or system -> derived), and
   a value the role cannot carry raises `ValueError` before the write.
-- `receipt(profiles=None)` - `profiles=["bellbook-core-v1"]` declares the
-  profiles the receipt claims (spec 0.4). A declaration is never trusted:
+- `receipt(profiles=None)` - `profiles=["bellbook-core-v1",
+  "delivery-receipt-v1"]` declares the profiles the receipt claims (spec
+  0.4). A declaration is never trusted:
   every validator evaluates it unasked and reports `declared`,
   `declaration_matches`, and `met` beside the result.
 

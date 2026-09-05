@@ -1,7 +1,8 @@
-"""`bellbook-core-v1` across the FFI boundary: `validate(..., require_profile=...)`
-carries the profile result, `default_rules` emits a baseline-conformant rule
-set, and every published profile vector re-derives identically through the
-wheel. A profile result is a report alongside the verdict, never a change
+"""The published profiles across the FFI boundary: `validate(...,
+require_profile=...)` carries the profile result, `default_rules` emits a
+baseline-conformant rule set, and every published profile vector (both
+`bellbook-core-v1` and `delivery-receipt-v1`) re-derives identically through
+the wheel. A profile result is a report alongside the verdict, never a change
 to it."""
 
 import json
@@ -13,8 +14,13 @@ import bellbook
 
 # repo root: bindings/python/tests/ -> bindings/python -> bindings -> root
 ROOT = pathlib.Path(__file__).resolve().parents[3]
-CASES = ROOT / "spec" / "profiles" / "bellbook-core-v1" / "cases.json"
+PROFILES = ROOT / "spec" / "profiles"
 CORE_V1 = "bellbook-core-v1"
+DELIVERY_V1 = "delivery-receipt-v1"
+FAILABLE = {
+    CORE_V1: {"B1", "B2", "B3", "B4"},
+    DELIVERY_V1: {f"D{i}" for i in range(8)},
+}
 BASELINE = {"Candidate": "Reported", "Evaluation": "Reported", "Selection": "Inferred"}
 
 
@@ -89,11 +95,15 @@ def test_require_profile_type_is_checked():
         bellbook.validate(b"x", require_profile=7)
 
 
-def test_published_profile_vectors_match_reference():
-    """Every vector in spec/profiles/bellbook-core-v1/cases.json yields the
-    stored status, per-clause flags, and profile hash through the wheel."""
-    doc = json.loads(CASES.read_text())
-    assert doc["profile"] == CORE_V1
+@pytest.mark.parametrize("profile_id", [CORE_V1, DELIVERY_V1])
+def test_published_profile_vectors_match_reference(profile_id):
+    """Every vector in spec/profiles/<profile>/cases.json yields the stored
+    status, declaration flags, per-clause flags, and profile hash through the
+    wheel. The delivery vectors carry the fraud battery: one rejecting case
+    per clause, including a claim over a failed evaluation with every digest
+    consistent and a passing evaluation reattached to another candidate."""
+    doc = json.loads((PROFILES / profile_id / "cases.json").read_text())
+    assert doc["profile"] == profile_id
     expected_hash = bytes(doc["hash"]).hex()
     assert len(doc["cases"]) >= 7
     # The bindings track the *published* core. Between a spec-epoch bump on
@@ -107,14 +117,22 @@ def test_published_profile_vectors_match_reference():
     probe = bellbook.validate(json.dumps(doc["cases"][0]["receipt"]).encode())
     if probe.problem:
         pytest.skip(f"vectors are from a newer spec epoch than the pinned core: {probe.problem}")
+    failing = set()
     for case in doc["cases"]:
         data = json.dumps(case["receipt"]).encode()
-        report = bellbook.validate(data, require_profile=CORE_V1)
+        report = bellbook.validate(data, require_profile=profile_id)
         expected = case["expect"]["profiles"]
         assert [p["id"] for p in report.profiles] == [e["id"] for e in expected], case["name"]
         for p, e in zip(report.profiles, expected):
             assert p["status"] == e["status"], case["name"]
-            if p["status"] != "Unknown":
+            assert p["declared"] == e["declared"], case["name"]
+            assert p["declaration_matches"] == e.get("declaration_matches"), case["name"]
+            if p["id"] == profile_id and p["status"] != "Unknown":
                 assert p["hash"] == expected_hash, case["name"]
             flags = [{"id": c["id"], "passed": c["passed"]} for c in p["clauses"]]
             assert flags == e["clauses"], case["name"]
+            if p["id"] == profile_id:
+                failing.update(c["id"] for c in p["clauses"] if not c["passed"])
+    # Every clause that can fail does fail somewhere in its own vector set
+    # (B5 and B6 report the rule shape and the binding modes; they never fail).
+    assert failing == FAILABLE[profile_id], (profile_id, sorted(failing))

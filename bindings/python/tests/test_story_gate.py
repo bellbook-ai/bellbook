@@ -87,12 +87,14 @@ def test_broken_benchmark_story_runs_from_python_alone(tmp_path):
     assert report.standing["restorations"] == {s0.id: [s1.id]}
 
 def test_requirement_binding_story_from_python_alone(tmp_path):
-    """The v0.8.0 gate, Python half (spec 0.4): request, requirements, a
-    candidate bound to artifacts, extended evaluations bound to the
-    requirements, a selection, a receipt that declares the baseline profile,
-    validated Clean and Conformant with the declaration checked unasked; the
-    query surface shows the bindings; then the taint a retracted requirement
-    spreads. Behavioral equivalence with the CLI story in tests/cli.rs."""
+    """The v0.8.0 and v0.9.0 gates, Python half (spec 0.4): request,
+    requirements, a candidate bound to artifacts, extended evaluations bound
+    to the requirements with the full decider binding, a selection that is a
+    delivery claim, a receipt that declares both published profiles,
+    validated Clean with both Conformant and both declarations checked
+    unasked; the query surface shows the bindings; then the taint a retracted
+    requirement spreads. Behavioral equivalence with the CLI story in
+    tests/cli.rs."""
     tree = "4b825dc642cb6eb9a060e54bf8d69288fbee4904"
     digest = "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08"
     rules = bellbook.default_rules(
@@ -127,10 +129,13 @@ def test_requirement_binding_story_from_python_alone(tmp_path):
         evaluator_version="1.4.0",
         basis="recomputed",
         procedure_hash=digest,
+        input_hash=digest,
         requirements=[r1.id],
         artifacts=[f"git-tree-sha1:{tree}"],
     )
-    # A fail-closed outcome is recorded as exactly what it is.
+    # A fail-closed outcome is recorded as exactly what it is. It judges an
+    # informational requirement, so the claim survives it; like every
+    # evaluation a claim uses, it carries the decider binding and evidence.
     e1 = w.evaluate(
         author="evaluator",
         candidate=c0.id,
@@ -138,7 +143,10 @@ def test_requirement_binding_story_from_python_alone(tmp_path):
         not_run=True,
         evaluator="linter",
         basis="declared",
+        procedure_hash=digest,
+        input_hash=digest,
         requirements=[r2.id],
+        artifacts=[f"git-tree-sha1:{tree}"],
     )
     s0 = w.select(
         author="agent",
@@ -150,19 +158,25 @@ def test_requirement_binding_story_from_python_alone(tmp_path):
     for commit in (req, r1, r2, c0, e0, e1, s0):
         assert commit.accepted, commit.reason
 
-    receipt = w.receipt(profiles=["bellbook-core-v1"])
+    both = ["bellbook-core-v1", "delivery-receipt-v1"]
+    receipt = w.receipt(profiles=both)
     report = bellbook.validate(receipt)
     assert report.status == "clean", report.problem or report.reason
     assert report.record_count == 14
-    (p,) = report.profiles
-    assert p["id"] == "bellbook-core-v1"
-    assert p["status"] == "Conformant"
-    assert p["declared"] is True
-    assert p["declaration_matches"] is True
-    assert p["met"] is True
-    # Requiring the declared profile evaluates it once, as declared.
-    again = bellbook.validate(receipt, require_profile="bellbook-core-v1")
-    assert [q["id"] for q in again.profiles] == ["bellbook-core-v1"]
+    assert [p["id"] for p in report.profiles] == both
+    for p in report.profiles:
+        assert p["status"] == "Conformant", (p["id"], p["clauses"])
+        assert p["declared"] is True
+        assert p["declaration_matches"] is True
+        assert p["met"] is True
+    delivery = report.profiles[1]
+    assert [c["id"] for c in delivery["clauses"]] == [f"D{i}" for i in range(8)]
+    assert all(c["passed"] for c in delivery["clauses"])
+    assert s0.id[:12] in delivery["clauses"][0]["detail"]
+    assert "profile delivery-receipt-v1: CONFORMANT" in str(report)
+    # Requiring the declared profiles evaluates each once, as declared.
+    again = bellbook.validate(receipt, require_profile=both)
+    assert [q["id"] for q in again.profiles] == both
 
     # The payloads round-trip the new fields.
     parsed = bellbook.read(receipt)
@@ -191,7 +205,7 @@ def test_requirement_binding_story_from_python_alone(tmp_path):
         assert ev[0]["node"]["requirements"] == [r1.id]
         assert ev[0]["node"]["artifacts"][0]["digest"] == tree
         assert ev[1]["node"]["requirements"] == [r2.id]
-        assert "artifacts" not in ev[1]["node"]
+        assert ev[1]["node"]["artifacts"][0]["digest"] == tree
 
     # Retracting the requirement taints the evaluation that judged against
     # it and the selection that rested on that evaluation.
