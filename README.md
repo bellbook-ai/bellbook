@@ -319,12 +319,13 @@ receipt that can declare the profiles it claims. See
 
 ## Status
 
-**The published release is 0.9.0, implementing spec v0.4 (RFC-0003:
+**The published release is 0.10.0, implementing spec v0.4 (RFC-0003:
 requirement binding - the `Requirement` record, first-class artifact
 identity, the extended `Evaluation`, and receipt profile declarations -
 on top of the v0.3 evolution semantics: Candidate, Evaluation, and
 Selection records with replay-derived lineage standing) and publishing
-both profiles, `bellbook-core-v1` and `delivery-receipt-v1`.** SPEC.md is the
+three profiles, `bellbook-core-v1`, `delivery-receipt-v1`, and
+`bellbook-core-signed-v1`.** SPEC.md is the
 authority for what each version means (v0.3 design notes in
 [`spec/v0.3-delta.md`](spec/v0.3-delta.md); v0.4 design in
 [RFC-0003](docs/rfcs/0003-requirement-binding.md)). Earlier epochs stay
@@ -332,7 +333,9 @@ valid: a 0.4 validator replays a v0.3 receipt under the v0.3 schema set
 and reaches the identical decision (the v0.3 vectors and corpus are
 byte-frozen and re-checked in CI, including under the published 0.7.0
 binary), and 0.2.0 implementing spec v0.2 stays published and frozen as
-the validator for v0.2 artifacts.
+the validator for v0.2 artifacts. What 1.0 promises about the wire
+format, the crate, the CLI, and the Python package, and how anything
+promised can change, is [docs/STABILITY.md](docs/STABILITY.md).
 
 It ships exactly what is implemented and tested today: the
 content-addressed (JCS-canonical) record model, the deterministic verifier
