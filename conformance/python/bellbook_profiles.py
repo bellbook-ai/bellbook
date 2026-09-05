@@ -410,6 +410,122 @@ def evaluate_delivery_v1(
     return result(clauses)
 
 
+# ---------------------------------------------------------------------------
+# bellbook-core-signed-v1 (RFC-0003 section 4.5): the signed tier
+# ---------------------------------------------------------------------------
+
+SIGNED_V1 = "bellbook-core-signed-v1"
+SIGNED_CLAUSES = ["S0", "S1", "S2", "S3"]
+SIGNED_KINDS = ["Candidate", "Evaluation", "Selection", "Retraction", "Requirement"]
+
+
+def evaluate_signed_v1(
+    rules_wire: dict,
+    records: list[dict],
+    report: dict,
+    table: dict,
+    declarations: list[dict],
+    tables: dict[str, dict],
+) -> dict:
+    """Evaluate `bellbook-core-signed-v1` clauses S0-S3: the baseline is met,
+    the rules demand a signature on every evolution kind, every author of an
+    accepted evolution record is key-pinned, and every evaluation a selection
+    uses carries the attested schema. Fail-closed; an Invalid receipt fails
+    every clause."""
+
+    def result(clauses: list[dict]) -> dict:
+        return {
+            "id": SIGNED_V1,
+            "hash": profile_hash(table),
+            "status": "Conformant" if all(c["passed"] for c in clauses) else "NonConformant",
+            "clauses": clauses,
+            "declared": False,
+            "declaration_matches": None,
+        }
+
+    if report["status"] == "Invalid":
+        return result([_clause(cid, False, "receipt is Invalid") for cid in SIGNED_CLAUSES])
+    accepted = bv.build_state_unchecked(records).accepted
+    by_id = {bv.h(r["id"]): r for r in records}
+
+    # S0: the baseline, declared or evaluated as the fallback (as D6 does).
+    core_decl = next((d for d in declarations if d["id"] == CORE_V1), None)
+    if core_decl is not None:
+        core = evaluate_declared(core_decl, rules_wire, records, report, tables)
+    else:
+        core = evaluate(CORE_V1, rules_wire, records, report, tables.get(CORE_V1))
+    if core["declared"] and core["declaration_matches"] is True:
+        suffix = " (declared, declaration matches)"
+    elif core["declared"] and core["declaration_matches"] is False:
+        suffix = " (declared, DECLARATION MISMATCH)"
+    elif core["declared"]:
+        suffix = " (declared)"
+    else:
+        suffix = " (not declared; evaluated as the fallback)"
+    s0 = _clause("S0", met(core), f"{CORE_V1}: {core['status']}{suffix}")
+
+    # S1: the rules demand a signature on every evolution kind.
+    required = set(rules_wire["signature_required_kinds"])
+    missing = [k for k in SIGNED_KINDS if k not in required]
+    s1 = _clause(
+        "S1",
+        not missing,
+        "signatures required for Candidate, Evaluation, Selection, Retraction, Requirement"
+        if not missing
+        else f"signature not required for {', '.join(missing)}",
+    )
+
+    # S2: every author of an accepted evolution record is key-pinned.
+    keys = rules_wire["author_keys"]
+    pinned: set[str] = set()
+    unpinned: dict[str, set[str]] = {}
+    for r in records:
+        if r["kind"] not in SIGNED_KINDS or bv.h(r["id"]) not in accepted:
+            continue
+        author = r["author"]["id"]
+        if author in keys:
+            pinned.add(author)
+        else:
+            unpinned.setdefault(author, set()).add(r["kind"])
+    if unpinned:
+        detail = "unpinned: " + ", ".join(
+            f"{a!r} ({', '.join(sorted(ks))})" for a, ks in sorted(unpinned.items())
+        )
+    else:
+        detail = f"{len(pinned)} pinned author(s) of evolution records: [{', '.join(sorted(pinned))}]"
+    s2 = _clause("S2", not unpinned, detail)
+
+    # S3: every evaluation a selection uses carries the attested schema.
+    attested = bv.schema_id_hex(bv.SCHEMA_EVALUATION_ATTESTED)
+    used_total = 0
+    not_attested: set[str] = set()
+    for r in records:
+        if r["kind"] != "Selection" or bv.h(r["id"]) not in accepted:
+            continue
+        outcome = bv.payload(r)["outcome"]
+        if not (isinstance(outcome, dict) and "selected" in outcome):
+            continue
+        for ref in r["refs"]:
+            if ref["type"] != "Use":
+                continue
+            t = by_id.get(bv.h(ref["target"]))
+            if t is None or t["kind"] != "Evaluation" or bv.h(t["id"]) not in accepted:
+                continue
+            used_total += 1
+            if bv.h(t["schema"]) != attested:
+                not_attested.add(_short(bv.h(t["id"])))
+    if not_attested:
+        detail = (
+            f"not attested: {len(not_attested)} of {used_total} used evaluation(s): "
+            f"[{', '.join(sorted(not_attested))}]"
+        )
+    else:
+        detail = f"{used_total} evaluation(s) used by selections, all attested"
+    s3 = _clause("S3", not not_attested, detail)
+
+    return result([s0, s1, s2, s3])
+
+
 def evaluate(
     profile_id: str,
     rules_wire: dict,
@@ -427,6 +543,10 @@ def evaluate(
         return evaluate_core_v1(rules_wire, records, report, table)
     if profile_id == DELIVERY_V1:
         return evaluate_delivery_v1(
+            rules_wire, records, report, table, declarations or [], tables or {}
+        )
+    if profile_id == SIGNED_V1:
+        return evaluate_signed_v1(
             rules_wire, records, report, table, declarations or [], tables or {}
         )
     return {

@@ -1240,8 +1240,9 @@ what could not be checked. [RFC-0003](docs/rfcs/0003-requirement-binding.md)
 - **`delivery-receipt-v1`** (crate 0.9.0, shipped): the grammar of a
   delivery claim - requirement, evidence, evaluator decision, artifact
   identity, capability profile - with its own fraud-rejection vectors.
-- **`bellbook-core-signed-v1`** (crate 1.0.0): the signed tier above the
-  baseline.
+- **`bellbook-core-signed-v1`** (crate 0.10.0): the signed tier above the
+  baseline - signatures required on every evolution kind, every such
+  author key-pinned, every evaluation a selection rests on attested.
 
 The baseline is implemented: `bellbook validate --require-profile
 bellbook-core-v1` evaluates it, the clause table and its hash are
@@ -1267,6 +1268,16 @@ clause table and hash are published in
 `spec/profiles/delivery-receipt-v1/profile.json` with the fraud battery in
 `cases.json` beside it, and the profile document is
 [docs/profiles/delivery-receipt-v1.md](docs/profiles/delivery-receipt-v1.md).
+`bellbook-core-signed-v1` is implemented: clauses S0 through S3 - the
+baseline is met (declared and matching, or evaluated as the fallback);
+`signature_required_kinds` includes Candidate, Evaluation, Selection,
+Retraction, and Requirement; `author_keys` pins every author of an
+accepted record of those kinds; every evaluation an accepted `Selected`
+Selection uses carries `bellbook.evaluation.attested.v1` - with its clause
+table and hash in `spec/profiles/bellbook-core-signed-v1/profile.json`,
+vectors carrying real Ed25519 signatures in `cases.json` beside it, and
+the profile document
+[docs/profiles/bellbook-core-signed-v1.md](docs/profiles/bellbook-core-signed-v1.md).
 Nothing else in this list is implemented until the release named beside
 it.
 

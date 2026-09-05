@@ -7,10 +7,33 @@ and releases follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
-Three small acts from the first-party half of field test 3
-(`docs/field-tests/ft3-delivery-receipt-canary.md`). No wire change.
+The signed tier, and three small acts from the first-party half of field
+test 3 (`docs/field-tests/ft3-delivery-receipt-canary.md`). No wire
+change; core conformance is byte-unchanged.
 
 ### Added
+
+- **The `bellbook-core-signed-v1` profile** (RFC-0003 section 4.5, SPEC
+  section 12.2; #113). The signed tier above the baseline, four clauses,
+  every one fail-closed: S0 the baseline is met (declared and matching, or
+  evaluated as the fallback); S1 `signature_required_kinds` includes
+  Candidate, Evaluation, Selection, Retraction, and Requirement; S2
+  `author_keys` pins every author of an accepted record of those kinds; S3
+  every evaluation an accepted `Selected` Selection uses carries
+  `bellbook.evaluation.attested.v1`. A baseline-conformant receipt reaches
+  the tier by adding signatures and switching evaluation schema ids; no
+  payload changes shape. `--require-profile bellbook-core-signed-v1` and
+  `export --profile bellbook-core-signed-v1` work on every surface. The
+  clause table and hash are published in
+  `spec/profiles/bellbook-core-signed-v1/profile.json`; `cases.json` beside
+  it carries the tier met in five honest shapes (including a delivery claim
+  judged under the signed tier and a Tainted history with a signed
+  retraction), one rejecting case per clause, a stale declaration, and a
+  receipt with a stripped signature (Invalid; every clause fails). Every
+  record a pinned author wrote carries a real Ed25519 signature under a
+  deterministic test key, which the independent Python validator verifies;
+  it implements every clause from scratch and agrees on every vector.
+  Profile document: `docs/profiles/bellbook-core-signed-v1.md`.
 
 - `conformance/python/validate_receipt.py`: the independent validator's
   one-receipt entry point for a skeptic - structural decode, replay, every

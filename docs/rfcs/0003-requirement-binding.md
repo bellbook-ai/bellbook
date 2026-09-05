@@ -438,8 +438,13 @@ gated stages stay gated.
 |---|---|---|
 | v0.7.0 | 0.3 | This RFC accepted; `bellbook-core-v1`; validator-side `--require-profile`; VISION and SPEC §12.2 reconciled |
 | v0.8.0 | **0.4** | `Requirement`, `ArtifactRef`, extended `Evaluation`, attested schema, receipt `profiles`; corpus and validator parity; surfaces |
-| v0.9.0 | 0.4 | `delivery-receipt-v1` with its fraud battery; quickstart; field test 3 (cutover) |
-| v1.0.0 | 0.4 | `bellbook-core-signed-v1`; soak; security review; freeze |
+| v0.9.0 | 0.4 | `delivery-receipt-v1` with its fraud battery; quickstart; field test 3 (first-party half; the cutover follows the adopter's integration) |
+| v0.10.0 | 0.4 | `bellbook-core-signed-v1` with its vectors; signing surfaces; the API audit and stability document, built during the soak |
+| v1.0.0 | 0.4 | soak complete (30 days, the adopter on 0.x with epoch 0.4 unchanged); security review; freeze |
+
+(Re-sequenced 2026-09-05: the signed tier does not depend on soak evidence
+and ships as 0.10.0 while the soak runs; 1.0.0 is the freeze, tagged only
+after the soak and the review.)
 
 ## 10. Resolved design decisions (at acceptance, 2026-09-02)
 
@@ -478,6 +483,15 @@ gated stages stay gated.
    as delivery claims for one request, the profile evaluates the latest
    sound one and reports the earlier ones as superseded (recorded at
    acceptance; not a draft question).
+9. **The signed tier's scope, fixed at implementation (2026-09-05).**
+   "Everything in the baseline" is an explicit clause, S0, evaluated as
+   `delivery-receipt-v1` D6 evaluates the baseline (declared and matching,
+   or the fallback). S2 counts the authors of *accepted* evolution records,
+   as B2 and B6 count accepted records. S3 judges the evaluations `Use`d by
+   any accepted `Selected` Selection, so the tier is meaningful without a
+   delivery claim; evaluations no selection uses may carry any schema.
+   Fail-closed: an Invalid receipt fails every clause; a Tainted one may
+   conform.
 
 ### 10.1 Evaluation log
 
