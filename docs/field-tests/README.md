@@ -22,3 +22,8 @@ is the recorded measurement, linked from that RFC's evaluation section.
 - [`ft2-read-side.md`](ft2-read-side.md) - the RFC-0002 named query set on
   published 0.6.0, over a real best-of-N on `eightbells-canary`. Records
   RFC-0002 section 8, validation criterion 1.
+- [`ft3-delivery-receipt-canary.md`](ft3-delivery-receipt-canary.md) - the
+  `delivery-receipt-v1` profile on published 0.9.0, first-party half: a real
+  delivery on the `eightbells-canary` baseline, a skeptic holding only the
+  receipt and the artifacts it names, and three attacks. Rehearses the
+  adopter cutover (#135); RFC-0003 criterion 1 stays open until that runs.

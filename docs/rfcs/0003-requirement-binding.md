@@ -494,3 +494,15 @@ gated stages stay gated.
   scratch. Both run in CI on every commit. Criterion 1 (the adopter's real
   receipt, field test 3) and criterion 3 (a third party) remain open for
   the 90-day window, which opens when 0.9.0 is published.
+- **2026-09-05 - first-party half of field test 3 run; criterion 1 still
+  open.** A real delivery on the `eightbells-canary` baseline was recorded
+  through the published 0.9.0 wheel and checked from outside with the
+  published CLI and the independent validator, holding only the receipt and
+  the artifacts it names; the two canonical forgeries and an artifact swap
+  were rejected on every surface
+  ([`docs/field-tests/ft3-delivery-receipt-canary.md`](../field-tests/ft3-delivery-receipt-canary.md)).
+  No adopter, no replaced format, so criterion 1 is not claimed; the run
+  fixes the procedure the cutover (#135) follows. Frictions: three small
+  acts (a one-receipt entry point for the independent validator, `met` in
+  the CLI JSON, a D2 detail wording), one documentation boundary
+  (`input_hash` conventions), two observations.
