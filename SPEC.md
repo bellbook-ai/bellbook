@@ -1237,9 +1237,9 @@ what could not be checked. [RFC-0003](docs/rfcs/0003-requirement-binding.md)
   artifact identity (`ArtifactRef`), the extended `Evaluation` with the
   shared decider-binding vocabulary, the attested evaluation schema, and
   receipt profile declarations (`profiles: [ProfileRef]`).
-- **`delivery-receipt-v1`** (crate 0.9.0): the grammar of a delivery claim
-  - requirement, evidence, evaluator decision, artifact identity,
-  capability profile - with its own fraud-rejection vectors.
+- **`delivery-receipt-v1`** (crate 0.9.0, shipped): the grammar of a
+  delivery claim - requirement, evidence, evaluator decision, artifact
+  identity, capability profile - with its own fraud-rejection vectors.
 - **`bellbook-core-signed-v1`** (crate 1.0.0): the signed tier above the
   baseline.
 
@@ -1250,8 +1250,25 @@ in `cases.json` beside it, and the profile document is
 [docs/profiles/bellbook-core-v1.md](docs/profiles/bellbook-core-v1.md).
 Receipt profile declarations are implemented in epoch 0.4 as §12 above
 describes, and the profile vectors carry declaration cases (matching,
-stale hash, wrong version, unknown id, and a false claim). Nothing else in
-this list is implemented until the release named beside it.
+stale hash, wrong version, unknown id, and a false claim).
+`delivery-receipt-v1` is implemented: a delivery claim is an accepted
+`Selected` Selection whose `Use`d extended evaluations bind to requirements
+of exactly one Request (the request is determined, never declared; the
+latest sound claim per request is evaluated and earlier ones reported
+superseded), and the profile checks clauses D0 through D7 - a claim
+exists; every required requirement is covered by a passing evaluation at
+the head; no required-bound evaluation is non-passing; every evaluation
+judges the one chosen candidate with non-empty evidence that the candidate
+or an accepted Result in the thread carries; producer and evaluator are
+distinct; the decider binding is complete, with the weakest basis
+reported; the baseline profile is met (declared and matching, or evaluated
+as the fallback); and the claim is sound, untainted, and unretracted. Its
+clause table and hash are published in
+`spec/profiles/delivery-receipt-v1/profile.json` with the fraud battery in
+`cases.json` beside it, and the profile document is
+[docs/profiles/delivery-receipt-v1.md](docs/profiles/delivery-receipt-v1.md).
+Nothing else in this list is implemented until the release named beside
+it.
 
 ### 12.3 Conformance
 

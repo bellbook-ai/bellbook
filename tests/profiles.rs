@@ -256,7 +256,12 @@ fn profile_hash_is_the_canonical_clause_table() {
     assert_eq!(profile_hash(&t), profile_hash(&core_v1_table()));
     assert_eq!(profile_table(BELLBOOK_CORE_V1).unwrap(), t);
     assert!(profile_table("nope").is_none());
-    assert_eq!(known_profiles(), &[BELLBOOK_CORE_V1]);
+    assert_eq!(known_profiles(), &[BELLBOOK_CORE_V1, DELIVERY_RECEIPT_V1]);
+    assert_eq!(
+        profile_table(DELIVERY_RECEIPT_V1).unwrap(),
+        delivery_v1_table()
+    );
+    assert_eq!(profile_ref(DELIVERY_RECEIPT_V1).unwrap().version, 1);
     let mut changed = t.clone();
     changed.clauses[0].statement.push('.');
     assert_ne!(profile_hash(&changed), profile_hash(&t));

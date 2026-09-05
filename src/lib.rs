@@ -139,9 +139,9 @@ pub use checkpoint::{
 #[cfg(feature = "persist")]
 pub use log::writer::{BatchAppend, LogWriter, DEFAULT_MAX_LOG_BYTES, EMPTY_HEAD};
 pub use profiles::{
-    core_v1_table, evaluate_declared, evaluate_profile, evaluate_profiles, known_profiles,
-    profile_hash, profile_ref, profile_table, Clause, ClauseResult, ProfileRef, ProfileResult,
-    ProfileStatus, ProfileTable, BELLBOOK_CORE_V1,
+    core_v1_table, delivery_v1_table, evaluate_declared, evaluate_profile, evaluate_profiles,
+    known_profiles, profile_hash, profile_ref, profile_table, Clause, ClauseResult, ProfileRef,
+    ProfileResult, ProfileStatus, ProfileTable, BELLBOOK_CORE_V1, DELIVERY_RECEIPT_V1,
 };
 pub use receipt::{
     validate, validate_with_limits, validate_with_profiles, Receipt, Report, ValidationLimits,

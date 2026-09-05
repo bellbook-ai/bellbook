@@ -17,6 +17,15 @@
 //! than the schema base classes, a declared context bound) and requires no
 //! signatures - a baseline nobody can meet compares nothing. The signed
 //! tier is a separate profile (RFC-0003 section 4.5).
+//!
+//! The second, [`DELIVERY_RECEIPT_V1`], is the grammar of a delivery claim
+//! over the spec 0.4 records (RFC-0003 section 4.6): coverage of the
+//! required requirements, truthful completion, binding equality between
+//! evidence and the claimed candidate, producer/evaluator separation, the
+//! decider binding, the named capability profile, and standing - with a
+//! fraud battery of its own vectors.
+
+mod delivery_v1;
 
 use serde::{Deserialize, Serialize};
 
@@ -30,9 +39,17 @@ use crate::record::record::decode;
 /// Stable id of the content-addressed baseline profile.
 pub const BELLBOOK_CORE_V1: &str = "bellbook-core-v1";
 
+/// Stable id of the delivery-receipt profile (RFC-0003 section 4.6).
+pub const DELIVERY_RECEIPT_V1: &str = "delivery-receipt-v1";
+
 /// Every profile id this validator knows how to evaluate.
 pub fn known_profiles() -> &'static [&'static str] {
-    &[BELLBOOK_CORE_V1]
+    &[BELLBOOK_CORE_V1, DELIVERY_RECEIPT_V1]
+}
+
+/// The clause table of `delivery-receipt-v1`; see [`delivery_v1`].
+pub fn delivery_v1_table() -> ProfileTable {
+    delivery_v1::table()
 }
 
 /// Outcome of evaluating one profile over one receipt.
@@ -184,6 +201,7 @@ pub fn core_v1_table() -> ProfileTable {
 pub fn profile_table(id: &str) -> Option<ProfileTable> {
     match id {
         BELLBOOK_CORE_V1 => Some(core_v1_table()),
+        DELIVERY_RECEIPT_V1 => Some(delivery_v1::table()),
         _ => None,
     }
 }
@@ -201,6 +219,7 @@ pub fn profile_hash(table: &ProfileTable) -> Hash256 {
 pub fn evaluate_profile(id: &str, receipt: &Receipt, report: &Report) -> ProfileResult {
     match id {
         BELLBOOK_CORE_V1 => evaluate_core_v1(receipt, report),
+        DELIVERY_RECEIPT_V1 => delivery_v1::evaluate(receipt, report),
         _ => ProfileResult {
             id: id.to_string(),
             hash: [0u8; 32],

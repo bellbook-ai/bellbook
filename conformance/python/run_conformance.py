@@ -380,14 +380,36 @@ def run_query_cases(corpus: pathlib.Path, spec_version: str) -> tuple[int, list[
     return assertions, notes
 
 
-def run_profile_cases() -> tuple[int, list[str]]:
-    """bellbook-core-v1 (RFC-0003 section 4.5): recompute the profile hash
-    from the published clause table, then re-derive every stored profile
-    result - status and per-clause pass flags - from the stored receipt with
-    the from-scratch implementation in `bellbook_profiles.py`."""
-    pdir = ROOT / "spec" / "profiles" / "bellbook-core-v1"
+# The published profiles (RFC-0003 section 4.5) and what each vector set must
+# cover: the outcomes that appear, the clauses that have a rejecting vector
+# (reporting clauses always hold and are excluded), and whether the set
+# exercises every declaration situation.
+PROFILES = {
+    "bellbook-core-v1": {
+        "outcomes": {"Conformant", "NonConformant", "Unknown"},
+        "failable": {"B1", "B2", "B3", "B4"},
+        "declaration_situations": True,
+    },
+    "delivery-receipt-v1": {
+        "outcomes": {"Conformant", "NonConformant"},
+        "failable": {"D0", "D1", "D2", "D3", "D4", "D5", "D6", "D7"},
+        "declaration_situations": False,
+    },
+}
+
+
+def run_profile_cases(profile_id: str) -> tuple[int, list[str]]:
+    """One published profile (RFC-0003 section 4.5): recompute the profile
+    hash from its published clause table, then re-derive every stored profile
+    result - status, hash, declaration fields, and per-clause pass flags -
+    from the stored receipt with the from-scratch implementation in
+    `bellbook_profiles.py`. Every profile's table is loaded, since a profile
+    may consult another (delivery-receipt-v1 D6 evaluates the baseline)."""
+    coverage = PROFILES[profile_id]
+    pdir = ROOT / "spec" / "profiles" / profile_id
     table = load(pdir / "profile.json")
     doc = load(pdir / "cases.json")
+    check(doc["profile"] == profile_id, f"{profile_id}: cases.json names another profile")
     cases = doc["cases"]
     check(len(cases) > 0, "profile cases.json is empty")
     declared = bb.bytes32(doc["hash"])
@@ -399,7 +421,7 @@ def run_profile_cases() -> tuple[int, list[str]]:
     statuses: dict[str, int] = {}
     failing_clauses: set[str] = set()
     situations: set[tuple[bool, bool | None]] = set()
-    tables = {doc["profile"]: table}
+    tables = {p: load(ROOT / "spec" / "profiles" / p / "profile.json") for p in PROFILES}
     for c in cases:
         rc = c["receipt"]
         records = rc["records"]
@@ -419,7 +441,10 @@ def run_profile_cases() -> tuple[int, list[str]]:
                 got["status"] == expect["status"],
                 f"profile case `{c['name']}`: {got['id']} status {got['status']} differs from {expect['status']}",
             )
-            expect_hash = bytes(32) if expect["status"] == "Unknown" else declared
+            if expect["status"] == "Unknown":
+                expect_hash = bytes(32)
+            else:
+                expect_hash = bp.profile_hash(tables[got["id"]])
             check(got["hash"] == expect_hash, f"profile case `{c['name']}`: {got['id']} hash differs")
             check(
                 got["declared"] == expect["declared"]
@@ -435,30 +460,38 @@ def run_profile_cases() -> tuple[int, list[str]]:
                 f"profile case `{c['name']}`: clause results differ:\n  got:    {got_flags}\n  expect: {exp_flags}",
             )
             assertions += 4
+            # Coverage is counted over every result the set reports (an
+            # Unknown comes from a declared id no validator knows), and the
+            # rejecting clauses over this profile's own.
             statuses[got["status"]] = statuses.get(got["status"], 0) + 1
-            failing_clauses.update(k["id"] for k in got["clauses"] if not k["passed"])
+            failing_clauses.update(
+                k["id"] for k in got["clauses"] if not k["passed"] and k["id"] in coverage["failable"]
+            )
             situations.add((got["declared"], got["declaration_matches"]))
     # Coverage: every outcome appears, every failable clause has a rejecting
-    # vector (B5 and B6 are reporting clauses and always hold), and every
-    # declaration situation is exercised: required, declared and matching,
-    # declared with a mismatch, declared but unknown.
+    # vector, and (for the baseline) every declaration situation is
+    # exercised: required, declared and matching, declared with a mismatch,
+    # declared but unknown.
     check(
-        {"Conformant", "NonConformant", "Unknown"} <= set(statuses),
-        "profile corpus does not cover every outcome",
+        coverage["outcomes"] <= set(statuses),
+        f"{profile_id}: profile corpus does not cover every outcome",
     )
-    missing = {"B1", "B2", "B3", "B4"} - failing_clauses
-    check(not missing, f"profile corpus has no rejecting vector for: {sorted(missing)}")
-    wanted = {(False, None), (True, True), (True, False), (True, None)}
-    check(
-        wanted <= situations,
-        f"profile corpus misses declaration situations: {sorted(wanted - situations, key=str)}",
-    )
+    missing = coverage["failable"] - failing_clauses
+    check(not missing, f"{profile_id}: no rejecting vector for: {sorted(missing)}")
     notes = [
         "outcomes: " + ", ".join(f"{k}={statuses[k]}" for k in sorted(statuses)),
         "rejecting vectors cover clauses: " + ", ".join(sorted(failing_clauses)),
-        "declarations: evaluated from the receipt, never trusted; matching, "
-        "mismatched, and unknown declarations all reproduced",
     ]
+    if coverage["declaration_situations"]:
+        wanted = {(False, None), (True, True), (True, False), (True, None)}
+        check(
+            wanted <= situations,
+            f"profile corpus misses declaration situations: {sorted(wanted - situations, key=str)}",
+        )
+        notes.append(
+            "declarations: evaluated from the receipt, never trusted; matching, "
+            "mismatched, and unknown declarations all reproduced"
+        )
     return assertions, notes
 
 
@@ -482,7 +515,8 @@ def main() -> int:
                 functools.partial(run_query_cases, corpus, spec_version),
             ),
         ]
-    sections.append(("profile cases (bellbook-core-v1)", run_profile_cases))
+    for profile_id in PROFILES:
+        sections.append((f"profile cases ({profile_id})", functools.partial(run_profile_cases, profile_id)))
     total = 0
     all_notes: list[tuple[str, list[str]]] = []
     try:
@@ -502,7 +536,8 @@ def main() -> int:
     print("canonicalization, record ids, head/rules hashes, strict decoding,")
     print("structural log integrity, and the full verdict rule battery")
     print("(per-record verdicts, retraction, and taint), the RFC-0002")
-    print("named query set, and the bellbook-core-v1 profile, across the")
+    print("named query set, and the published profiles (bellbook-core-v1,")
+    print("delivery-receipt-v1 with its fraud battery), across the")
     print("vectors and the entire conformance corpus of every supported")
     print("epoch (" + ", ".join(v for v, _, _ in EPOCHS) + ").")
     return 0
