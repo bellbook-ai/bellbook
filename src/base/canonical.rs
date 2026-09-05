@@ -7,11 +7,19 @@
 //! implementation in any language computes byte-identical output - and
 //! therefore identical record ids - from the same data.
 //!
-//! Conformance limits (both are errors, never silent precision loss):
+//! Conformance limits (all are errors, never silent precision loss):
 //! - Integers must stay within the I-JSON safe range (|n| ≤ 2^53 − 1),
 //!   because JCS numbers are IEEE-754 doubles.
+//! - A double with 2^53 ≤ |f| < 1e21 is refused for the same reason: it is
+//!   integer-valued and ECMAScript prints it as a plain integer literal, which
+//!   on the wire is the unsafe integer above. Refusing both keeps the canonical
+//!   form a fixed point under re-parsing.
 //! - Non-finite floats cannot occur in `serde_json::Value` and are rejected
 //!   defensively.
+//!
+//! Parsing must be correctly rounded (serde_json's `float_roundtrip`): the
+//! canonical form of a double depends on the double alone, never on the
+//! spelling it arrived in, and a best-effort parser can land one ulp off.
 
 /// Serialize maps whose keys are not strings (tuple or hash keys) as a
 /// sequence of `[key, value]` pairs. JSON object keys must be strings, so
@@ -185,6 +193,10 @@ use serde_json::{Map, Number, Value};
 /// (2^53 − 1); the I-JSON safe range JCS numbers must stay within.
 const MAX_SAFE_INTEGER: u64 = 9_007_199_254_740_991;
 
+/// Below this magnitude ECMAScript prints an integer-valued double as a plain
+/// integer literal; from here on it uses exponent form (`1e+21`).
+const INTEGER_LITERAL_LIMIT: f64 = 1e21;
+
 /// Serialize a value to RFC 8785 (JCS) canonical JSON bytes.
 pub fn canonical_json<T: Serialize>(value: &T) -> Result<Vec<u8>, serde_json::Error> {
     let v = serde_json::to_value(value)?;
@@ -269,6 +281,17 @@ fn write_number(n: &Number, out: &mut Vec<u8>) -> Result<(), serde_json::Error> 
         if !f.is_finite() {
             return Err(serde_json::Error::custom("non-finite number in JCS input"));
         }
+        // Every double at or above 2^53 is integer-valued, and below 1e21
+        // ECMAScript prints it as a plain integer literal. On the wire that
+        // literal is indistinguishable from an integer outside the I-JSON safe
+        // range, which the branches above refuse; refusing the double too keeps
+        // the rule one rule and the canonical form a fixed point (a re-parse of
+        // the output would otherwise land in the refused integer branch).
+        if f.abs() > MAX_SAFE_INTEGER as f64 && f.abs() < INTEGER_LITERAL_LIMIT {
+            return Err(serde_json::Error::custom(format!(
+                "number {f} would serialize as an integer outside the I-JSON safe range required by JCS"
+            )));
+        }
         let mut buf = ryu_js::Buffer::new();
         out.extend_from_slice(buf.format_finite(f).as_bytes());
     } else {
@@ -344,7 +367,10 @@ mod tests {
     }
 
     /// ECMAScript number serialization cases from RFC 8785 Appendix B
-    /// (representable subset) plus integer boundaries.
+    /// (the subset Bellbook admits: Appendix B's `1e+20`, `9007199254740994`,
+    /// and `999999999999999700000` are integer-valued doubles above 2^53 and
+    /// below 1e21, refused as the unsafe integers they are on the wire; see
+    /// `test_unsafe_integer_rejected`) plus integer boundaries.
     #[test]
     fn test_rfc8785_numbers() {
         for (input, expected) in [
@@ -354,12 +380,14 @@ mod tests {
             (-1.0, "-1"),
             (0.5, "0.5"),
             (1e+21, "1e+21"),
-            (1e+20, "100000000000000000000"),
+            (-1e+21, "-1e+21"),
+            (1.5e+300, "1.5e+300"),
             (5e-324, "5e-324"),
-            (9007199254740994.0, "9007199254740994"),
-            (999999999999999700000.0, "999999999999999700000"),
+            (9007199254740991.0, "9007199254740991"),
+            (-9007199254740991.0, "-9007199254740991"),
             (0.000001, "0.000001"),
             (0.0000001, "1e-7"),
+            (333333333.3333333, "333333333.3333333"),
         ] {
             assert_eq!(jcs_str(&json!(input)), expected, "for {input}");
         }
@@ -374,6 +402,49 @@ mod tests {
         assert!(canonical_json(&json!(9007199254740992u64)).is_err());
         assert!(canonical_json(&json!(u64::MAX)).is_err());
         assert!(canonical_json(&json!(-9007199254740992i64)).is_err());
+        // Integer-valued doubles that ECMAScript would print as integer
+        // literals outside the safe range are the same thing on the wire and
+        // are refused too (found by the seeded harness once it carried large
+        // exponents: `1e16` canonicalized to `10000000000000000`, whose
+        // re-parse is a refused integer, so the form was not a fixed point).
+        for f in [
+            9007199254740992.0f64,
+            -9007199254740992.0,
+            9007199254740994.0,
+            1e16,
+            1e+20,
+            999999999999999700000.0,
+            -1e20,
+        ] {
+            assert!(canonical_json(&json!(f)).is_err(), "{f}");
+        }
+        // The boundary on each side is admitted: exponent form from 1e21 up,
+        // and every double up to the last safe integer.
+        assert_eq!(jcs_str(&json!(1e21)), "1e+21");
+        assert_eq!(jcs_str(&json!(9007199254740991.0f64)), "9007199254740991");
+    }
+
+    /// A number's canonical form depends only on the double it denotes, never
+    /// on the textual form it arrived in. serde_json's default float parser
+    /// is best-effort and landed `411E44` one ulp off the nearest double, so
+    /// the same value canonicalized two ways depending on spelling and
+    /// re-canonicalizing the output changed it (libFuzzer finding, 2026-08-31).
+    /// The `float_roundtrip` feature makes parsing correctly rounded; this
+    /// pins that.
+    #[test]
+    fn test_number_canonical_form_is_independent_of_spelling() {
+        for text in [
+            "411E44", "4.11e46", "4.11E+46", "41.1e45", "0.411e47", "4110e43",
+        ] {
+            let v: Value = serde_json::from_str(text).unwrap();
+            assert_eq!(jcs_str(&v), "4.11e+46", "for {text}");
+            let re: Value = serde_json::from_str(&jcs_str(&v)).unwrap();
+            assert_eq!(jcs_str(&re), "4.11e+46", "re-canonicalizing {text}");
+        }
+        // The parsed double is the correctly rounded one std produces.
+        let sj: f64 = serde_json::from_str("411E44").unwrap();
+        let std: f64 = "411E44".parse().unwrap();
+        assert_eq!(sj.to_bits(), std.to_bits());
     }
 
     /// Property names sort by UTF-16 code units, not UTF-8 bytes: a

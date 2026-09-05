@@ -57,8 +57,19 @@ two levels (issue #65):
   `.github/workflows/fuzz.yml`) explores the same entry points more deeply. A
   crash or a violated invariant there is a security finding, reported as above.
 
-**External security review.** An independent review of the kernel and
-verification path is planned; its acceptance gate is **zero unresolved
-blocker-severity findings**, and its findings will be published. This gap is
-tracked openly in issue #65 rather than implied done - Bellbook does not claim
-assurance it has not earned.
+**Security review, and what 1.0 ships on.** 1.0 does not ship on an external
+security review, and its release notes say so: nothing outside the project
+depends on Bellbook enough yet to justify funding one, and Bellbook does not
+claim assurance it has not earned. What gates 1.0 instead (RFC-0003 decision
+10, issue #114):
+
+1. an internal adversarial review of the trust boundary above, published in
+   this repository with every finding and its resolution;
+2. the coverage-guided fuzz targets clean over a stated budget on the release
+   commit, with every earlier finding kept as a regression seed in the
+   per-push harness;
+3. zero unresolved findings of any severity from either.
+
+The external review stays open in issue #75 and is commissioned when an
+adopter's dependence justifies it; its acceptance gate is **zero unresolved
+blocker-severity findings**, and its findings will be published.

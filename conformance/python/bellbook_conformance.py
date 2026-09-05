@@ -118,13 +118,16 @@ def _jcs_string(s: str) -> str:
 def jcs(value: Any) -> str:
     """Return the RFC 8785 canonical JSON text for `value`.
 
-    Bellbook records contain only objects, arrays, strings, booleans, null, and
+    Bellbook's own fields are objects, arrays, strings, booleans, null, and
     integers within the I-JSON safe range (byte arrays are arrays of 0..=255,
-    times/turns are unsigned ints), so JCS's floating-point number rules never
-    engage; a float is rejected rather than silently formatted. String escaping
-    and UTF-16 key ordering are implemented explicitly (see `_jcs_string` and the
-    dict branch) so nothing about the canonical form is inherited from
-    `json.dumps`.
+    times/turns are unsigned ints). The one place a non-integer number reaches
+    the wire is the free-form `Action.params`, so finite doubles are formatted
+    as ECMAScript Number::toString per RFC 8785 section 3.2.2.3 (see
+    `_jcs_float`); before 2026-09-05 this function refused every float, which
+    made a receipt with a double in `params` undecodable here while the
+    reference accepted it. String escaping and UTF-16 key ordering are
+    implemented explicitly (see `_jcs_string` and the dict branch) so nothing
+    about the canonical form is inherited from `json.dumps`.
     """
     if value is True:
         return "true"
@@ -139,7 +142,7 @@ def jcs(value: Any) -> str:
             raise DecodeError(f"integer {value} exceeds the I-JSON safe range required by JCS")
         return str(value)
     if isinstance(value, float):
-        raise DecodeError("floating-point numbers are not part of the wire format")
+        return _jcs_float(value)
     if isinstance(value, str):
         return _jcs_string(value)
     if isinstance(value, list):
@@ -149,6 +152,50 @@ def jcs(value: Any) -> str:
         items = sorted(value.items(), key=lambda kv: kv[0].encode("utf-16-be"))
         return "{" + ",".join(_jcs_string(k) + ":" + jcs(v) for k, v in items) + "}"
     raise DecodeError(f"value of type {type(value).__name__} is not JSON")
+
+
+def _jcs_float(value: float) -> str:
+    """ECMAScript Number::toString for a finite double (RFC 8785 section 3.2.2.3).
+
+    `repr` yields the shortest digit string that round-trips to the same double;
+    ECMA-262 fixes how those digits are laid out: plain digits when the decimal
+    point falls within 21 places, a leading `0.` down to 1e-7, and `d.ddde+X` /
+    `d.ddde-X` beyond either edge. Negative zero is `0`. Written from the
+    standard, not from the reference implementation, so the two are compared,
+    not copied.
+    """
+    from decimal import Decimal
+
+    if value != value or value in (float("inf"), float("-inf")):
+        raise DecodeError("non-finite number in JCS input")
+    if value == 0.0:
+        return "0"
+    # An integer-valued double that ECMAScript would print as a plain integer
+    # literal outside the I-JSON safe range is, on the wire, that unsafe
+    # integer; refuse it for the same reason the int branch does. (Doubles at
+    # or above 1e21 print in exponent form and are fine.)
+    if MAX_SAFE_INTEGER < abs(value) < 1e21:
+        raise DecodeError(
+            f"number {value!r} would serialize as an integer outside the I-JSON safe range required by JCS"
+        )
+    sign, digit_tuple, exponent = Decimal(repr(value)).as_tuple()
+    digits = "".join(str(d) for d in digit_tuple).lstrip("0") or "0"
+    stripped = digits.rstrip("0") or "0"
+    exponent += len(digits) - len(stripped)
+    digits = stripped
+    k = len(digits)
+    n = exponent + k  # value = 0.<digits> * 10^n
+    if k <= n <= 21:
+        body = digits + "0" * (n - k)
+    elif 0 < n <= 21:
+        body = digits[:n] + "." + digits[n:]
+    elif -6 < n <= 0:
+        body = "0." + "0" * (-n) + digits
+    else:
+        e = n - 1
+        mantissa = digits if k == 1 else digits[0] + "." + digits[1:]
+        body = f"{mantissa}e{'+' if e >= 0 else '-'}{abs(e)}"
+    return ("-" if sign else "") + body
 
 
 def canonical_bytes(value: Any) -> bytes:

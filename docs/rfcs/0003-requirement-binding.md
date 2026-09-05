@@ -440,11 +440,12 @@ gated stages stay gated.
 | v0.8.0 | **0.4** | `Requirement`, `ArtifactRef`, extended `Evaluation`, attested schema, receipt `profiles`; corpus and validator parity; surfaces |
 | v0.9.0 | 0.4 | `delivery-receipt-v1` with its fraud battery; quickstart; field test 3 (first-party half; the cutover follows the adopter's integration) |
 | v0.10.0 | 0.4 | `bellbook-core-signed-v1` with its vectors; signing surfaces; the API audit and stability document, built during the soak |
-| v1.0.0 | 0.4 | soak complete (30 days, the adopter on 0.x with epoch 0.4 unchanged); security review; freeze |
+| v1.0.0 | 0.4 | soak complete (30 days, the adopter on 0.x with epoch 0.4 unchanged); the trust boundary reviewed as SECURITY.md gates it (decision 10); freeze |
 
 (Re-sequenced 2026-09-05: the signed tier does not depend on soak evidence
 and ships as 0.10.0 while the soak runs; 1.0.0 is the freeze, tagged only
-after the soak and the review.)
+after the soak and the review. The review gate was re-scoped the same day,
+decision 10.)
 
 ## 10. Resolved design decisions (at acceptance, 2026-09-02)
 
@@ -492,6 +493,21 @@ after the soak and the review.)
    delivery claim; evaluations no selection uses may carry any schema.
    Fail-closed: an Invalid receipt fails every clause; a Tainted one may
    conform.
+10. **The security review gate, re-scoped (2026-09-05).** 1.0 was gated on
+    an external security review of the kernel and verification path (#75).
+    Nothing outside the project depends on Bellbook yet, and the maintainer
+    will not fund a review of unused code; the gate is replaced, not
+    dropped. 1.0 ships on an internal adversarial review of the SPEC section
+    13 trust boundary published in the repository, the coverage-guided fuzz
+    targets clean over a stated budget on the release commit, and zero
+    unresolved findings, as SECURITY.md states; STABILITY.md and the 1.0
+    release notes say plainly that 1.0 shipped without an external review.
+    The external review stays open and is commissioned when an adopter's
+    dependence justifies it. Recorded here because it changes a
+    pre-registered gate. The first act under the re-scoped gate was reading
+    the fuzz workflow's two red runs, which had stood since 2026-08-24; they
+    carried a real canonicalization finding, fixed in the same change
+    (CHANGELOG, Unreleased).
 
 ### 10.1 Evaluation log
 

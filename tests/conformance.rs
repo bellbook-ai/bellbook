@@ -1079,6 +1079,39 @@ fn build_record_cases() -> Vec<RecordCase> {
         },
     ));
     cases.push(record_case(
+        "accept-action-float-params",
+        "An Action whose free-form params carry IEEE-754 doubles: the only place a \
+         non-integer number reaches the wire. JCS formats them as ECMAScript \
+         Number::toString (shortest round-trip digits; exponent form outside \
+         [1e-7, 1e21)), and the id depends only on the double, never on the \
+         spelling the host wrote (411E44 and 4.11e46 are the same record). Every \
+         implementation must format these identically or every id differs.",
+        base_rules(),
+        |w, r, s| {
+            let (rid, cid) = setup_request_cap(w, r, s, "tool", CapabilityMode::Auto);
+            let mut data = action_data(rid, "tool", SCOPE);
+            data.params = serde_json::from_str(
+                r#"{"temperature":0.7,"top_p":0.000001,"epsilon":1e-7,"weight":411E44,
+                    "big":1e21,"half":0.5,"neg":-1.5,"zero":-0.0,"whole":3.0,
+                    "tiny":5e-324,"n":42}"#,
+            )
+            .unwrap();
+            let data = encode(&data).unwrap();
+            cand(Proposal {
+                space: SPACE,
+                thread: THREAD,
+                author: provider_author(),
+                kind: Kind::Action,
+                schema: schema_id(SCHEMA_ACTION),
+                data,
+                refs: vec![Ref {
+                    type_: RefType::Require,
+                    target: cid,
+                }],
+            })
+        },
+    ));
+    cases.push(record_case(
         "accept-result",
         "An Executor reports a Result for an accepted Action.",
         base_rules(),
