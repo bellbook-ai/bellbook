@@ -1240,7 +1240,7 @@ what could not be checked. [RFC-0003](docs/rfcs/0003-requirement-binding.md)
 - **`delivery-receipt-v1`** (crate 0.9.0, shipped): the grammar of a
   delivery claim - requirement, evidence, evaluator decision, artifact
   identity, capability profile - with its own fraud-rejection vectors.
-- **`bellbook-core-signed-v1`** (crate 0.10.0): the signed tier above the
+- **`bellbook-core-signed-v1`** (crate 0.10.0, shipped): the signed tier above the
   baseline - signatures required on every evolution kind, every such
   author key-pinned, every evaluation a selection rests on attested.
 

@@ -6,7 +6,7 @@
 # CI and `cargo package` are unaffected (the root crate excludes `bindings/`).
 [package]
 name = "bellbook-python"
-version = "0.9.0"
+version = "0.10.0"
 edition = "2021"
 # pyo3 0.29 requires Rust 1.83. This is the bindings crate's own MSRV and does
 # not affect the library crate (a separate workspace), whose MSRV job is

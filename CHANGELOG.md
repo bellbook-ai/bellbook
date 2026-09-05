@@ -5,11 +5,20 @@ All notable changes to Bellbook are documented in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and releases follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.10.0] - 2026-09-05
 
-The signed tier, and three small acts from the first-party half of field
-test 3 (`docs/field-tests/ft3-delivery-receipt-canary.md`). No wire
-change; core conformance is byte-unchanged.
+The signed tier. No core or wire change: every record, canonical form,
+signing form, schema, and verdict rule is byte-for-byte that of 0.9.0,
+and core conformance and the earlier profiles' vectors are unchanged. What
+is new is the third published profile, `bellbook-core-signed-v1`, the
+surfaces that reach it from the CLI and Python without touching Rust, the
+stability document that says what 1.0 will promise, and three small acts
+from the first-party half of field test 3
+(`docs/field-tests/ft3-delivery-receipt-canary.md`). This is the line the
+1.0 soak runs on: 1.0.0 is the freeze, tagged after the soak and the
+security review, not a feature release. The Python package gains the
+signed tier's surface right after the core publish (the bindings track the
+published crate).
 
 ### Added
 
@@ -48,6 +57,18 @@ change; core conformance is byte-unchanged.
   listed actors write, and `evaluate(..., attested=True)` selects the
   attested schema. Both story gates record a receipt declaring all three
   profiles and assert every one met.
+- **`docs/STABILITY.md`**: what 1.0 promises (spec epoch 0.4 frozen and
+  forward-valid receipts; the profile triple immutable; the crate's public
+  items, the CLI grammar and JSON, and the Python surface under semantic
+  versioning; MSRV policy), what it does not (capture completeness,
+  confidentiality, what a profile does not check, performance, internals,
+  message text), the deprecation period for each surface, and the support
+  policy. The 0.10.x line already behaves this way; 1.0.0 is tagged when
+  the release gates hold. The public API audit that accompanies it: every
+  public item of the crate is documented, nothing is deprecated, and
+  `cargo semver-checks` against the published 0.9.0 (the bump treated as
+  minor, 196 checks) reports no breaking change - 0.10.0 is additive over
+  0.9.0.
 
 - `conformance/python/validate_receipt.py`: the independent validator's
   one-receipt entry point for a skeptic - structural decode, replay, every
