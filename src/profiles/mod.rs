@@ -47,7 +47,8 @@ pub fn known_profiles() -> &'static [&'static str] {
     &[BELLBOOK_CORE_V1, DELIVERY_RECEIPT_V1]
 }
 
-/// The clause table of `delivery-receipt-v1`; see [`delivery_v1`].
+/// The clause table of `delivery-receipt-v1` (clauses D0 through D7; see
+/// `docs/profiles/delivery-receipt-v1.md`).
 pub fn delivery_v1_table() -> ProfileTable {
     delivery_v1::table()
 }
