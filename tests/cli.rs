@@ -1516,6 +1516,8 @@ fn non_conformant_receipt_exits_3_and_verdict_is_reported() {
     assert_eq!(v["status"], "Clean");
     assert_eq!(v["profiles"][0]["id"], "bellbook-core-v1");
     assert_eq!(v["profiles"][0]["status"], "NonConformant");
+    // `met` is the one-word answer the exit code is derived from.
+    assert_eq!(v["profiles"][0]["met"], false);
     let b3 = v["profiles"][0]["clauses"]
         .as_array()
         .unwrap()
@@ -1602,6 +1604,7 @@ fn export_declares_a_profile_and_validate_checks_the_claim_unasked() {
     assert_eq!(v["profiles"][0]["status"], "Conformant");
     assert_eq!(v["profiles"][0]["declared"], true);
     assert_eq!(v["profiles"][0]["declaration_matches"], true);
+    assert_eq!(v["profiles"][0]["met"], true);
 
     // Requiring the declared profile evaluates it once, as declared.
     let out = bellbook()

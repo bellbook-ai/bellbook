@@ -5,6 +5,32 @@ All notable changes to Bellbook are documented in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and releases follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+Three small acts from the first-party half of field test 3
+(`docs/field-tests/ft3-delivery-receipt-canary.md`). No wire change.
+
+### Added
+
+- `conformance/python/validate_receipt.py`: the independent validator's
+  one-receipt entry point for a skeptic - structural decode, replay, every
+  declared profile and any `--require-profile` id, with `bellbook
+  validate`'s exit codes; standard library only, and it refuses to run with
+  the `bellbook` package imported.
+- `bellbook validate --json` reports `met` on every profile entry, the
+  field the exit code is derived from, for parity with the Python
+  surface's `Report.profiles`.
+
+### Changed
+
+- The `delivery-receipt-v1` D2 detail line names the claim's used
+  evaluations ("every used evaluation of a required requirement passed"),
+  matching the clause's stated scope. Detail text only; no clause, vector,
+  or hash changes.
+- The profile document says what D5 does not prescribe: how
+  `procedure_hash` and `input_hash` are computed is the evaluator's
+  published convention, and names the simplest checkable one.
+
 ## [0.9.0] - 2026-09-05
 
 The delivery receipt. No core or wire change: every record, canonical

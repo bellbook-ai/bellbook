@@ -63,6 +63,17 @@ Evidence references are compared by scheme and digest; the optional name is
 never identity. `required: false` requirements are informational: an
 evaluation of one may carry any outcome and they never count for D1 or D2.
 
+D5 requires the decider binding to be present; it does not, and cannot,
+prescribe how `procedure_hash` and `input_hash` are computed. Those are the
+evaluator's conventions, and a skeptic can check them only if the evaluator
+publishes them. The simplest checkable convention, and the one the field
+test used, is `procedure_hash` = SHA-256 of the procedure's own bytes and
+`input_hash` = SHA-256 of exactly the evidence the evaluation cites, so
+that a skeptic holding the evidence and the procedure can recompute both
+and re-run the procedure. An evaluator whose input is wider than the cited
+evidence (a tree plus a configuration, an environment) should say what the
+hash covers.
+
 ## The fraud battery
 
 The vectors in `cases.json` pair each honest shape with the ways a claim
