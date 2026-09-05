@@ -16,8 +16,14 @@ states a fixed seed corpus does not.
   return a self-consistent report.
 - **`receipt_parse`** - a receipt that parses must survive a canonical
   round-trip (serialize, re-parse) unchanged.
-- **`canonical_json`** - RFC 8785 canonicalization must be total and idempotent
-  over any parseable JSON value.
+- **`canonical_json`** - RFC 8785 canonicalization over any parseable JSON
+  value must never panic; where it produces output, re-canonicalizing that
+  output reproduces it byte-for-byte; where it refuses (an integer outside the
+  I-JSON safe range is an error, never silent rounding), the refusal is
+  deterministic. Its two findings so far (2026-08-24, 2026-08-31: a refused
+  integer the old harness miscounted as a crash, and serde_json's
+  best-effort float parsing landing `411E44` one ulp off) are regression seeds
+  in `tests/fuzz_trust_boundary.rs`.
 
 ## Running
 

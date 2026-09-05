@@ -299,7 +299,18 @@ approval-binding (D3, D4, D5) in §4.1 and §7.1, and standing (D6, D7) in
 - Integers must stay within the I-JSON safe range (|n| ≤ 2^53 − 1); the
   serializer errors rather than lose precision. Hash-valued fields
   serialize as JSON arrays of 32 byte values; payload `data` serializes as
-  a JSON array of byte values.
+  a JSON array of byte values. Every typed field is an integer; the one
+  free-form field, `Action.params`, may carry IEEE-754 doubles, which
+  serialize as ECMAScript `Number::toString` (RFC 8785 section 3.2.2.3) and
+  whose canonical form depends only on the double denoted, never on the
+  spelling a host wrote. A conforming implementation therefore parses
+  numbers correctly rounded; a best-effort parser can land one ulp off and
+  derive a different id from the same value (the epoch 0.4 corpus case
+  `accept-action-float-params` checks this). A double with
+  2^53 ≤ |f| < 1e21 is refused like the unsafe integer it prints as: every
+  such double is integer-valued and ECMAScript writes it as a plain integer
+  literal, so on the wire the two are one thing, and admitting the double
+  would make the canonical form fail to re-parse as itself.
 - **Canonical payloads:** a record's `data` MUST be exactly the JCS
   canonical serialization of its schema's payload type. The verifier
   decodes the payload and re-encodes it canonically; any byte difference

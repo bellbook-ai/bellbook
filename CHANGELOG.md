@@ -5,6 +5,56 @@ All notable changes to Bellbook are documented in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and releases follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- **Number canonicalization was not idempotent.** Found by the weekly
+  libFuzzer run (2026-08-24 and 2026-08-31; the workflow had been red since
+  and nobody had read it). serde_json's default float parser is
+  best-effort and parsed `411E44` one ulp off the nearest double, so the
+  canonical form of that value depended on the spelling it arrived in
+  (`4.1100000000000004e+46` from `411E44`, `4.11e+46` from its own canonical
+  output), and a record carrying it failed its own payload check at commit.
+  Doubles reach the wire only through `Action.params`. The crate now enables
+  serde_json's `float_roundtrip` feature (correctly rounded parsing); a unit
+  test pins that six spellings of the value canonicalize identically, and
+  both libFuzzer inputs are regression seeds in
+  `tests/fuzz_trust_boundary.rs`. Any committed record whose params carried
+  a double the old parser mis-rounded gets a different id under correct
+  parsing; no committed vector, corpus case, or receipt did.
+- **The independent Python validator refused every floating-point number**
+  as "not part of the wire format", so a receipt whose `Action.params`
+  carried a double was Clean under the reference and undecodable under the
+  validator. It now formats finite doubles as ECMAScript `Number::toString`,
+  written from RFC 8785 section 3.2.2.3 and checked against the RFC's
+  examples, and the epoch 0.4 corpus gains `accept-action-float-params` so
+  both implementations are held to the same bytes.
+- The `canonical_json` fuzz target and the seeded harness treated a refused
+  out-of-range integer as a crash. Refusal is the contract (an error, never
+  silent rounding), so both now require the refusal to be deterministic
+  instead.
+- **Integer-valued doubles between 2^53 and 1e21 are now refused**, as the
+  unsafe integers they print as. Surfaced by the seeded harness once it
+  carried large exponents: `1e16` canonicalized to `10000000000000000`,
+  whose re-parse is a refused integer, so the canonical form was not a
+  fixed point and the reference disagreed with the independent validator
+  (which already refused the literal). Both implementations now apply one
+  rule at one boundary; doubles from 1e21 up print in exponent form and are
+  unaffected. RFC 8785 Appendix B's `1e+20`, `9007199254740994`, and
+  `999999999999999700000` cases are therefore refused by Bellbook, and
+  SPEC section 3 and the canonicalization module say why.
+
+### Changed
+
+- **The 1.0 security gate is re-scoped** (RFC-0003 decision 10; #114, #75).
+  1.0 does not ship on an external security review; it ships on an internal
+  adversarial review of the trust boundary published in the repository, the
+  fuzz targets clean over a stated budget on the release commit, and zero
+  unresolved findings. SECURITY.md and STABILITY.md say so, and the 1.0
+  release notes will. The external review stays open for when an adopter's
+  dependence justifies it.
+
 ## [0.10.0] - 2026-09-05
 
 The signed tier. No core or wire change: every record, canonical form,

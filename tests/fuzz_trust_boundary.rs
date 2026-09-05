@@ -183,25 +183,71 @@ fn validate_never_panics_and_reports_are_consistent() {
     }
 }
 
+/// The canonicalization contract over one parseable input: never panic; if
+/// output is produced it is a fixed point (canonicalizing the canonical form
+/// reproduces it byte-for-byte); if the value is refused (an integer outside
+/// the I-JSON safe range is an error, never silent rounding) the refusal is
+/// deterministic. The libFuzzer target `fuzz/fuzz_targets/canonical_json.rs`
+/// asserts the same contract with coverage guidance.
+fn check_canonical(data: &[u8]) {
+    let Ok(value) = serde_json::from_slice::<serde_json::Value>(data) else {
+        return;
+    };
+    match canonical_json(&value) {
+        Ok(once) => {
+            let reparsed: serde_json::Value =
+                serde_json::from_slice(&once).expect("canonical output is valid JSON");
+            let twice = canonical_json(&reparsed).expect("re-canonicalizing a canonical form");
+            assert_eq!(
+                once,
+                twice,
+                "canonical form is not idempotent for {}",
+                String::from_utf8_lossy(data)
+            );
+        }
+        Err(_) => {
+            let again: serde_json::Value = serde_json::from_slice(data).unwrap();
+            assert!(
+                canonical_json(&again).is_err(),
+                "a refusal must be deterministic for {}",
+                String::from_utf8_lossy(data)
+            );
+        }
+    }
+}
+
 #[test]
 fn canonical_json_is_total_and_idempotent() {
-    // Over any parseable JSON value, canonicalization must not panic and must
-    // be a fixed point: canonicalizing the canonical form reproduces it.
     let mut rng = Rng(0xCA_0217_0A15_F00D);
     let mut corpus: Vec<Vec<u8>> = seeds();
     corpus.push(br#"{"b":1,"a":[3,2,1],"z":{"y":true,"x":null}}"#.to_vec());
     corpus.push(br#"[{"k":"\u00e9"},1.5,-0,"","longer string value"]"#.to_vec());
+    // Numbers near the edges the libFuzzer target found: large exponents and
+    // integers around the I-JSON safe range.
+    corpus.push(br#"[411E44,1e23,9007199254740991,9007199254740993,-0.0,1e-7]"#.to_vec());
 
     for _ in 0..8_000 {
         let seed = &corpus[rng.below(corpus.len())];
         let data = mutate(seed, &mut rng);
-        let Ok(value) = serde_json::from_slice::<serde_json::Value>(&data) else {
-            continue;
-        };
-        let once = canonical_json(&value).expect("canonicalizing a parsed value");
-        let reparsed: serde_json::Value =
-            serde_json::from_slice(&once).expect("canonical output is valid JSON");
-        let twice = canonical_json(&reparsed).expect("re-canonicalizing");
-        assert_eq!(once, twice, "canonical form is not idempotent");
+        check_canonical(&data);
     }
+}
+
+/// The two inputs the weekly libFuzzer run produced (2026-08-24 and
+/// 2026-08-31), kept as regression seeds. `2230002230003330000` is an
+/// integer above 2^53 - 1: the contract is a stable refusal, which the old
+/// harness wrongly treated as a crash. `411E44` exposed serde_json's
+/// best-effort float parsing landing one ulp off the nearest double, so the
+/// canonical form was `4.1100000000000004e+46` on the first pass and
+/// `4.11e+46` on the second; correctly rounded parsing (`float_roundtrip`)
+/// fixes it, and this pins both.
+#[test]
+fn canonical_json_libfuzzer_findings_stay_fixed() {
+    check_canonical(b"2230002230003330000");
+    assert!(canonical_json(&serde_json::json!(2230002230003330000u64)).is_err());
+
+    check_canonical(b"411E44");
+    let v: serde_json::Value = serde_json::from_slice(b"411E44").unwrap();
+    assert_eq!(canonical_json(&v).unwrap(), b"4.11e+46");
+    check_canonical(br#"{"score":411E44,"n":[2230002230003330000]}"#);
 }

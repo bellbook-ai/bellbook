@@ -76,11 +76,15 @@ corpus, all independently:
   serialization. Envelope enums (kind, author type, evidence, ref types) are
   validated structurally before any rule runs, so an unknown variant is a clean
   rejection, matching the reference's typed decode.
-- **Numbers.** Canonicalization is integer-only (inherited from the JCS module),
-  matching the wire format's typed payloads. The one free-form field,
-  `ActionData.params` (`serde_json::Value`), is accepted as-is; a floating-point
-  number inside it would be rejected here rather than canonicalized, so it is out
-  of scope. No corpus case exercises it.
+- **Numbers.** Every typed field is an integer within the I-JSON safe range;
+  the one free-form field, `ActionData.params` (`serde_json::Value`), may carry
+  IEEE-754 doubles, and those are formatted as ECMAScript `Number::toString`
+  (RFC 8785 section 3.2.2.3) by `_jcs_float`, written from the standard and
+  checked against the RFC's examples. Until 2026-09-05 this module refused
+  every float, so a receipt with a double in `params` was Clean under the
+  reference and undecodable here; the corpus case `accept-action-float-params`
+  now holds both implementations to the same bytes. Python's `json` parses
+  numbers correctly rounded, which the id derivation depends on.
 - **Checkpoints** are a host-side acceleration and never travel in a receipt, so
   the checkpoint replay path is out of scope here (receipts always verify from
   genesis).
