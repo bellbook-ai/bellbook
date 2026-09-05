@@ -319,11 +319,12 @@ receipt that can declare the profiles it claims. See
 
 ## Status
 
-**The published release is 0.8.0, implementing spec v0.4 (RFC-0003:
+**The published release is 0.9.0, implementing spec v0.4 (RFC-0003:
 requirement binding - the `Requirement` record, first-class artifact
 identity, the extended `Evaluation`, and receipt profile declarations -
 on top of the v0.3 evolution semantics: Candidate, Evaluation, and
-Selection records with replay-derived lineage standing).** SPEC.md is the
+Selection records with replay-derived lineage standing) and publishing
+both profiles, `bellbook-core-v1` and `delivery-receipt-v1`.** SPEC.md is the
 authority for what each version means (v0.3 design notes in
 [`spec/v0.3-delta.md`](spec/v0.3-delta.md); v0.4 design in
 [RFC-0003](docs/rfcs/0003-requirement-binding.md)). Earlier epochs stay
@@ -346,8 +347,9 @@ battery, and the
 replay-derived standing section, derived state with incremental/full-build
 equivalence, checkpoints, the crash-safe writer with idempotent
 compare-and-append, and portable receipts with the offline `bellbook
-validate` CLI (including the `bellbook-core-v1` baseline profile check,
-with declared profiles evaluated unasked), the
+validate` CLI (including the `bellbook-core-v1` baseline and
+`delivery-receipt-v1` profile checks, with declared profiles evaluated
+unasked), the
 `request`/`requirement`/`candidate`/`eval`/`select`/`retract`/`lineage`
 recording commands, the read-side `query` command (the RFC-0002 named set: descent,
 descendants, siblings, frontier, standing, evidence, selected - over a log
