@@ -227,7 +227,10 @@ producer claims a verifier cannot check against intent
 
 New here? [**Quickstart: a verifiable receipt from a best-of-N harness**](docs/quickstart-best-of-n.md)
 takes you from a best-of-N loop to a portable receipt in a few minutes, with
-both the CLI and the Python package side by side.
+both the CLI and the Python package side by side. Delivering work?
+[**Quickstart: a delivery receipt a skeptic can check**](docs/quickstart-delivery-receipt.md)
+records what was required, what was produced, and who judged it, and shows
+the claim rejected on replay when the checks did not pass.
 
 The same binary records the v0.3 evolution kinds against a persistent log,
 then bundles the log into a receipt - the whole record -> receipt -> validate
