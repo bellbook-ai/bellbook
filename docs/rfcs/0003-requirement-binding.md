@@ -481,5 +481,16 @@ gated stages stay gated.
 
 ### 10.1 Evaluation log
 
-(Empty at acceptance. Criterion results are recorded here as they occur,
-as RFC-0002 section 8.1 does.)
+(Criterion results are recorded here as they occur, as RFC-0002 section
+8.1 does.)
+
+- **2026-09-05 - validation criterion 2 met.** `delivery-receipt-v1`
+  shipped with its own vector set (`spec/profiles/delivery-receipt-v1/`):
+  every clause D1 through D7 has a rejecting vector, and the two canonical
+  forgeries - a claim over a failed evaluation with every digest consistent
+  (D1, D2), and a passing evaluation reattached to another candidate (D3) -
+  are rejected on replay by the reference implementation and by the
+  independent Python validator, which implements every clause from
+  scratch. Both run in CI on every commit. Criterion 1 (the adopter's real
+  receipt, field test 3) and criterion 3 (a third party) remain open for
+  the 90-day window, which opens when 0.9.0 is published.

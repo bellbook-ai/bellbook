@@ -33,9 +33,19 @@ and releases follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   canonical forgeries (a claim over a failed evaluation with every digest
   consistent; a passing evaluation reattached to another candidate). The
   independent Python validator implements every clause from scratch and
-  agrees on every vector; the CLI and Python story gates now export a
-  receipt declaring both profiles and assert both are met. Core
+  agrees on every vector; the CLI story gate now exports a receipt
+  declaring both profiles and asserts both are met, and the Python gate
+  does the same once the bindings pin the published 0.9 crate. Core
   conformance is byte-unchanged.
+- **Quickstart: a delivery receipt a skeptic can check**
+  (`docs/quickstart-delivery-receipt.md`; #112). Request, requirements,
+  a bound candidate, evaluations by a distinct evaluator, and the claim,
+  on both surfaces; what the skeptic runs holding only the receipt; the
+  fraud demonstration (a claim over an honestly recorded failed
+  evaluation validates Clean and is rejected by the profile on D1 and
+  D2); and how a requirement added after the claim withdraws it until
+  re-claimed. RFC-0003 section 10.1 records validation criterion 2 (the
+  fraud battery holds in both implementations) as met.
 
 ## [0.8.0] - 2026-09-02
 
