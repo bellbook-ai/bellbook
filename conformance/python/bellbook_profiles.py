@@ -298,7 +298,7 @@ def evaluate_delivery_v1(
         if non_passing:
             note("D2", False, f"{tag}: non-passing {', '.join(non_passing)}")
         else:
-            note("D2", True, f"{tag}: every required-bound evaluation passed")
+            note("D2", True, f"{tag}: every used evaluation of a required requirement passed")
 
         # D3: one candidate, judged by every evaluation, evidence on record.
         notes = []

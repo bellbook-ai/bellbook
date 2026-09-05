@@ -325,7 +325,9 @@ pub fn evaluate(receipt: &Receipt, report: &Report) -> ProfileResult {
             }
         }
         if non_passing.is_empty() {
-            d2.1.push(format!("{tag}: every required-bound evaluation passed"));
+            d2.1.push(format!(
+                "{tag}: every used evaluation of a required requirement passed"
+            ));
         } else {
             d2.0 = false;
             d2.1.push(format!("{tag}: non-passing {}", non_passing.join(", ")));

@@ -94,6 +94,20 @@ python3 conformance/python/run_conformance.py
 Exit code 0 means every independent check agreed with the reference; non-zero
 prints the first disagreement. CI runs this on every push and pull request.
 
+To validate one receipt of your own with this implementation, as a skeptic
+who does not want to trust the reference:
+
+```
+python3 conformance/python/validate_receipt.py receipt.json
+python3 conformance/python/validate_receipt.py receipt.json --require-profile delivery-receipt-v1 --json
+```
+
+It prints what `bellbook validate` prints (status, reason, every declared
+profile and any required one, clause by clause) and exits the same way: 0
+Clean and every profile met, 1 Invalid, 2 Tainted, 3 a profile not met. It
+imports nothing from the `bellbook` package and refuses to run if that
+package is loaded.
+
 ## Files
 
 - `bellbook_conformance.py` - the wire validator: JCS canonicalization, ids,
@@ -102,3 +116,5 @@ prints the first disagreement. CI runs this on every push and pull request.
   retraction + taint state machine, and whole-log replay.
 - `run_conformance.py` - the runner: drives both against the vectors and the
   corpus and asserts agreement.
+- `validate_receipt.py` - the one-receipt entry point: validates a receipt
+  you hold, profiles included, with the reference's exit codes.

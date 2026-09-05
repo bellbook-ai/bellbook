@@ -377,7 +377,21 @@ fn cmd_validate(rest: &[String]) -> ExitCode {
     let report = validate_with_profiles(&bytes, &limits, &profiles);
 
     if json {
-        match serde_json::to_string_pretty(&report) {
+        // The report's own shape, plus `met` on every profile entry: the
+        // one-word answer the exit code is derived from, so a JSON consumer
+        // need not recombine status and declaration_matches (the Python
+        // surface reports the same field).
+        let rendered = serde_json::to_value(&report).map(|mut v| {
+            if let Some(entries) = v.get_mut("profiles").and_then(|p| p.as_array_mut()) {
+                for (entry, profile) in entries.iter_mut().zip(&report.profiles) {
+                    if let Some(obj) = entry.as_object_mut() {
+                        obj.insert("met".to_string(), serde_json::Value::Bool(profile.met()));
+                    }
+                }
+            }
+            v
+        });
+        match rendered.and_then(|v| serde_json::to_string_pretty(&v)) {
             Ok(s) => println!("{s}"),
             Err(e) => {
                 eprintln!("cannot serialize report: {e}");
