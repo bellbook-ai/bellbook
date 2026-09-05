@@ -5,7 +5,18 @@ All notable changes to Bellbook are documented in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and releases follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.9.0] - 2026-09-05
+
+The delivery receipt. No core or wire change: every record, canonical
+form, signing form, schema, and verdict rule is byte-for-byte that of
+0.8.0, and core conformance (`spec/conformance`, the 0.3 and 0.4 vector
+files) is unchanged. What is new is the second published profile,
+`delivery-receipt-v1`: the grammar of a delivery claim over the spec 0.4
+records, with its own vector set and a fraud battery that both
+implementations reject on replay, and the quickstart that takes a
+delivery loop to a receipt a skeptic can check. The Python package gains
+the profile's surface right after the core publish (the bindings track
+the published crate).
 
 ### Added
 
