@@ -17,6 +17,10 @@ on:
 
 permissions:
   contents: read
+  # A crash or violated invariant is a security finding (SECURITY.md); the
+  # failure step below files it as an issue so it is seen where work is
+  # tracked, not only in the Actions log.
+  issues: write
 
 jobs:
   fuzz:
@@ -45,3 +49,27 @@ jobs:
           name: fuzz-artifacts-${{ matrix.target }}
           path: fuzz/artifacts
           if-no-files-found: ignore
+      - name: File the finding as an issue
+        if: failure()
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          TARGET: ${{ matrix.target }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          SHA: ${{ github.sha }}
+        run: |
+          title="fuzz: ${TARGET} target failed on ${SHA:0:7}"
+          if gh issue list --state open --search "in:title \"${title}\"" --json number --jq 'length' | grep -qv '^0$'; then
+            echo "open issue already filed for this commit and target"; exit 0
+          fi
+          gh label create security --description "A finding against the trust boundary (SECURITY.md)" --color B60205 --force
+          gh issue create --title "$title" --label security --body "$(cat <<EOF
+          The coverage-guided fuzz target \`${TARGET}\` crashed or violated an invariant on \`${SHA}\`.
+
+          Run: ${RUN_URL}
+          Reproducer: the \`fuzz-artifacts-${TARGET}\` artifact on that run; reproduce with
+          \`cd fuzz && cargo +nightly fuzz run ${TARGET} artifacts/${TARGET}/<crash-file>\`.
+
+          Per SECURITY.md a fuzz finding is a security finding: root-cause it, fix it, and keep the input as a regression seed in \`tests/fuzz_trust_boundary.rs\`. Record it in \`docs/SECURITY-REVIEW.md\` section 4.
+          EOF
+          )"

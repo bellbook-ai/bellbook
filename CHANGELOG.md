@@ -7,11 +7,25 @@ and releases follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- **`docs/SECURITY-REVIEW.md`**: the internal adversarial review of the
+  trust boundary, gate item 1 of the 1.0 security gate. Nine surfaces
+  (canonicalization and ids, the canonical-payload rule, replay, the
+  governance rules, retraction and standing, signatures and key pinning,
+  receipt parsing and limits, profiles, the log and its recovery), each
+  with the claim, the attacker's moves, what enforces it, the named
+  evidence, findings, and residual risk; the findings log (F1 through F4,
+  all resolved); the fuzz budget at this review; and what the review cannot
+  claim. Re-dated at the 1.0.0 release commit.
+- The Fuzz workflow files a `security`-labelled issue when a target
+  crashes or violates an invariant, with the run, the reproducer artifact,
+  and the reproduce command, so a finding is seen where work is tracked.
+
 ### Fixed
 
 - **Number canonicalization was not idempotent.** Found by the weekly
-  libFuzzer run (2026-08-24 and 2026-08-31; the workflow had been red since
-  and nobody had read it). serde_json's default float parser is
+  libFuzzer run (2026-08-24 and 2026-08-31). serde_json's default float parser is
   best-effort and parsed `411E44` one ulp off the nearest double, so the
   canonical form of that value depended on the spelling it arrived in
   (`4.1100000000000004e+46` from `411E44`, `4.11e+46` from its own canonical

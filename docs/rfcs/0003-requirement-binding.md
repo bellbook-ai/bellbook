@@ -505,9 +505,10 @@ decision 10.)
     The external review stays open and is commissioned when an adopter's
     dependence justifies it. Recorded here because it changes a
     pre-registered gate. The first act under the re-scoped gate was reading
-    the fuzz workflow's two red runs, which had stood since 2026-08-24; they
+    the fuzz workflow's two red runs (2026-08-24 and 2026-08-31); they
     carried a real canonicalization finding, fixed in the same change
-    (CHANGELOG, Unreleased).
+    (CHANGELOG, Unreleased). The review itself is
+    `docs/SECURITY-REVIEW.md`.
 
 ### 10.1 Evaluation log
 

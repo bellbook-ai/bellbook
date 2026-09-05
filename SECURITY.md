@@ -64,7 +64,9 @@ claim assurance it has not earned. What gates 1.0 instead (RFC-0003 decision
 10, issue #114):
 
 1. an internal adversarial review of the trust boundary above, published in
-   this repository with every finding and its resolution;
+   this repository with every finding and its resolution
+   ([docs/SECURITY-REVIEW.md](docs/SECURITY-REVIEW.md), re-dated at the
+   release commit);
 2. the coverage-guided fuzz targets clean over a stated budget on the release
    commit, with every earlier finding kept as a regression seed in the
    per-push harness;

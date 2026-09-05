@@ -9,8 +9,9 @@ use and review, so 1.0.0 is tagged only after the gates in the release
 issue hold: an adopter in production on the 0.x line for a 30-day soak with
 no breaking change needed, spec epoch 0.4 unchanged through it, the trust
 boundary reviewed as SECURITY.md gates it (an internal adversarial review
-published in this repository, the coverage-guided fuzz targets clean over a
-stated budget on the release commit, no unresolved finding), and the public
+published in this repository as [SECURITY-REVIEW.md](SECURITY-REVIEW.md),
+the coverage-guided fuzz targets clean over a stated budget on the release
+commit, no unresolved finding), and the public
 surface below audited. 1.0 does not ship on an external security review,
 and its release notes will say so: nothing outside the project depends on
 Bellbook enough yet to justify one, and Bellbook does not claim assurance it
