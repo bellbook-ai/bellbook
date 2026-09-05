@@ -319,7 +319,7 @@ receipt that can declare the profiles it claims. See
 
 ## Status
 
-**The published release is 0.10.0, implementing spec v0.4 (RFC-0003:
+**The published release is 0.11.0, implementing spec v0.4 (RFC-0003:
 requirement binding - the `Requirement` record, first-class artifact
 identity, the extended `Evaluation`, and receipt profile declarations -
 on top of the v0.3 evolution semantics: Candidate, Evaluation, and

@@ -16,7 +16,7 @@ surface below audited. 1.0 does not ship on an external security review,
 and its release notes will say so: nothing outside the project depends on
 Bellbook enough yet to justify one, and Bellbook does not claim assurance it
 has not earned. Until then this document describes what 1.0 *will* promise,
-and the 0.10.x line already behaves this way.
+and the 0.11.x line already behaves this way.
 
 ## Versioning
 

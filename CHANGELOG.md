@@ -5,7 +5,20 @@ All notable changes to Bellbook are documented in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and releases follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.11.0] - 2026-09-05
+
+Number canonicalization. No API change (`cargo semver-checks` against
+0.10.0: 196 checks pass), no CLI or Python surface change, and spec epoch
+0.4 unchanged: SPEC section 3 gained the number rules that close a corner
+where the two implementations had disagreed, so there was no agreed
+decision to preserve. What changes is a validator decision: a record whose
+`Action.params` carries a double may reach a different verdict than under
+0.10.0 (see Fixed), which is why this is a minor release and not a patch
+under the rules `docs/STABILITY.md` states. No committed vector, corpus
+case, or receipt was affected. Also in this release: the 1.0 security gate
+re-scoped, the internal adversarial review published, and the Fuzz workflow
+filing its findings as issues. The Python package gains the parser fix at
+the pin bump right after the core publish.
 
 ### Added
 
