@@ -34,6 +34,20 @@ change; core conformance is byte-unchanged.
   deterministic test key, which the independent Python validator verifies;
   it implements every clause from scratch and agrees on every vector.
   Profile document: `docs/profiles/bellbook-core-signed-v1.md`.
+- **Signing surfaces**, so the signed tier is reachable without touching
+  Rust. CLI: `rules init --signed` requires a signature on the five
+  evolution kinds and `--author-key <id>:<pubkey-hex>` (repeatable) pins an
+  actor's key; every recording command takes `--sign-key <file>` (the
+  Ed25519 secret as 64 hex characters or 32 raw bytes) and signs the record
+  before it is committed; `eval add --attested` writes
+  `bellbook.evaluation.attested.v1` (refused without `--sign-key`);
+  `key public --secret <file>` prints the public key to pin. Key generation
+  and storage stay with the host; the CLI never prints a secret. Python:
+  `default_rules(..., signed=True, author_keys={actor: [pubkey_hex]})`,
+  `Writer(log_dir, rules, signers={actor: secret})` signs every record the
+  listed actors write, and `evaluate(..., attested=True)` selects the
+  attested schema. Both story gates record a receipt declaring all three
+  profiles and assert every one met.
 
 - `conformance/python/validate_receipt.py`: the independent validator's
   one-receipt entry point for a skeptic - structural decode, replay, every

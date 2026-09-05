@@ -9,11 +9,13 @@
 //! - `bellbook.read(data: bytes) -> Receipt` parses a receipt for inspection
 //!   (records, kinds, authors, evidence, refs, payloads). Reading does not
 //!   verify; call `validate` for the decision.
-//! - `bellbook.Writer(log_dir, rules)` records evolution to a persistent,
-//!   single-writer log: `request`, `requirement`, `candidate`, `evaluate`,
-//!   `select`, and `retract` each commit one record and return a
+//! - `bellbook.Writer(log_dir, rules, signers=None)` records evolution to a
+//!   persistent, single-writer log: `request`, `requirement`, `candidate`,
+//!   `evaluate`, `select`, and `retract` each commit one record and return a
 //!   [`Commit`]. The writer holds the same exclusive lock and runs the same
-//!   replay-on-commit the Rust `LogWriter` does. Export the log with
+//!   replay-on-commit the Rust `LogWriter` does, and signs every record a
+//!   listed actor writes (the signed tier: `default_rules(signed=True,
+//!   author_keys=...)`, `evaluate(attested=True)`). Export the log with
 //!   `writer.receipt()` (optionally declaring profiles) and feed it straight
 //!   back to `validate`.
 //! - The RFC-0002 named query set - `descent`, `descendants`, `siblings`,
@@ -31,19 +33,52 @@ use bellbook_core::{
     artifact_ref_well_formed, decode, default_space, encode, hex_decode, hex_encode,
     manifest_from_dir, manifest_hash, schema_id, validate_with_profiles, verify_and_build_state,
     ArtifactRef, Author, AuthorType, Basis, BindingMode, CandidateBasis, CandidateData,
-    DeciderBinding, EvaluationData, EvaluationDataV2, EvaluationOutcome, EvaluationOutcomeV2,
-    GitSource, Kind, LogWriter, Proposal, Provenance, Queries, Receipt as CoreReceipt,
-    Record as CoreRecord, RecordId, Ref, RefType, Report as CoreReport, RequestData,
-    RequirementData, RetractionData, ScoredValue, SelectionData, SelectionOutcome, SourceAlgo,
-    SourceBinding, State, ValidationLimits, ValidationStatus, VerdictResult, VerifierRules,
-    SCHEMA_CANDIDATE, SCHEMA_EVALUATION, SCHEMA_EVALUATION_V2, SCHEMA_REQUEST, SCHEMA_REQUIREMENT,
-    SCHEMA_RETRACTION, SCHEMA_SELECTION,
+    DeciderBinding, Ed25519Signer, EvaluationData, EvaluationDataV2, EvaluationOutcome,
+    EvaluationOutcomeV2, GitSource, Kind, LogWriter, Proposal, Provenance, Queries,
+    Receipt as CoreReceipt, Record as CoreRecord, RecordId, Ref, RefType, Report as CoreReport,
+    RequestData, RequirementData, RetractionData, ScoredValue, SelectionData, SelectionOutcome,
+    SourceAlgo, SourceBinding, State, ValidationLimits, ValidationStatus, VerdictResult,
+    VerifierRules, SCHEMA_CANDIDATE, SCHEMA_EVALUATION, SCHEMA_EVALUATION_ATTESTED,
+    SCHEMA_EVALUATION_V2, SCHEMA_REQUEST, SCHEMA_REQUIREMENT, SCHEMA_RETRACTION, SCHEMA_SELECTION,
 };
 use pyo3::exceptions::{PyRuntimeError, PyValueError};
 use pyo3::prelude::*;
 use pyo3::types::{PyBytes, PyDict};
 use std::collections::BTreeMap;
 use std::path::Path;
+
+/// The evolution kinds the signed tier (`bellbook-core-signed-v1`, S1)
+/// requires signatures for. Listed here because the bindings track the
+/// published core.
+const SIGNED_TIER_KINDS: [Kind; 5] = [
+    Kind::Candidate,
+    Kind::Evaluation,
+    Kind::Selection,
+    Kind::Retraction,
+    Kind::Requirement,
+];
+
+/// A 32-byte Ed25519 secret from a Python value: 64 hex characters or 32
+/// raw bytes.
+fn parse_secret(who: &str, value: &Bound<'_, PyAny>) -> PyResult<Ed25519Signer> {
+    if let Ok(s) = value.extract::<String>() {
+        let bytes = hex_decode(s.trim()).ok_or_else(|| {
+            PyValueError::new_err(format!(
+                "signer for {who:?}: expected 64 hex characters or 32 bytes"
+            ))
+        })?;
+        return Ok(Ed25519Signer::from_secret_bytes(&bytes));
+    }
+    if let Ok(b) = value.extract::<Vec<u8>>() {
+        let bytes: [u8; 32] = b.as_slice().try_into().map_err(|_| {
+            PyValueError::new_err(format!("signer for {who:?}: expected exactly 32 bytes"))
+        })?;
+        return Ok(Ed25519Signer::from_secret_bytes(&bytes));
+    }
+    Err(PyValueError::new_err(format!(
+        "signer for {who:?}: expected a hex string or bytes"
+    )))
+}
 
 /// The result of validating a receipt. A read-only view over the crate's
 /// `Report`; every field is re-derived by validation, never trusted from the
@@ -527,12 +562,15 @@ fn parse_role(s: &str) -> PyResult<AuthorType> {
 /// w = bellbook.Writer("./log", rules)
 /// ```
 #[pyfunction]
-#[pyo3(signature = (authors, max_context=200, admins=None, reaffirmers=None))]
+#[pyo3(signature = (authors, max_context=200, admins=None, reaffirmers=None, signed=false,
+    author_keys=None))]
 fn default_rules(
     authors: BTreeMap<String, String>,
     max_context: u32,
     admins: Option<Vec<String>>,
     reaffirmers: Option<Vec<String>>,
+    signed: bool,
+    author_keys: Option<BTreeMap<String, Vec<String>>>,
 ) -> PyResult<String> {
     if authors.is_empty() {
         return Err(PyValueError::new_err(
@@ -562,6 +600,40 @@ fn default_rules(
     }
     for id in reaffirmers.iter().flatten() {
         rules.reaffirmation_actors.insert(id.clone().into());
+    }
+    // The signed tier's rule shape (bellbook-core-signed-v1 S1 and S2):
+    // `signed=True` requires a signature on every evolution kind;
+    // `author_keys` pins the Ed25519 public keys (64 hex characters each)
+    // an actor may sign with. A pinned actor's records always require a
+    // signature, whatever the kind.
+    if signed {
+        for kind in SIGNED_TIER_KINDS {
+            rules.signature_required_kinds.insert(kind);
+        }
+    }
+    for (id, keys) in author_keys.iter().flatten() {
+        if !authors.contains_key(id) {
+            return Err(PyValueError::new_err(format!(
+                "author_keys entry {id:?} has no author binding; add it to authors"
+            )));
+        }
+        if keys.is_empty() {
+            return Err(PyValueError::new_err(format!(
+                "author_keys entry {id:?} lists no keys"
+            )));
+        }
+        for hex in keys {
+            let key = hex_decode(hex.trim()).ok_or_else(|| {
+                PyValueError::new_err(format!(
+                    "author_keys entry {id:?}: a public key must be 64 lowercase hex characters"
+                ))
+            })?;
+            rules
+                .author_keys
+                .entry(id.clone().into())
+                .or_default()
+                .insert(key);
+        }
     }
     serde_json::to_string(&rules)
         .map_err(|e| PyRuntimeError::new_err(format!("cannot serialize rules: {e}")))
@@ -700,6 +772,8 @@ struct Writer {
     inner: LogWriter,
     rules: VerifierRules,
     state: State,
+    /// Actor id -> the signer for every record that actor writes.
+    signers: BTreeMap<String, Ed25519Signer>,
 }
 
 impl Writer {
@@ -737,10 +811,16 @@ impl Writer {
             data,
             refs,
         };
-        let (id, verdict) = self
-            .inner
-            .commit(proposal, &self.rules, &mut self.state)
-            .map_err(|e| PyRuntimeError::new_err(format!("commit failed: {e}")))?;
+        // A listed actor's records are signed before they are committed; the
+        // signature covers the signing form and is bound into the record id.
+        let (id, verdict) = match self.signers.get(&proposal.author.id) {
+            Some(signer) => {
+                self.inner
+                    .commit_signed(proposal, &self.rules, &mut self.state, signer)
+            }
+            None => self.inner.commit(proposal, &self.rules, &mut self.state),
+        }
+        .map_err(|e| PyRuntimeError::new_err(format!("commit failed: {e}")))?;
         let accepted = verdict.result == VerdictResult::Accept;
         Ok(Commit {
             id: hex_encode(&id),
@@ -756,11 +836,30 @@ impl Writer {
     /// Open (or create) the log at `log_dir` under `rules` (a JSON string).
     /// Rebuilds and re-verifies state from the committed records; raises if the
     /// existing log does not verify, or if another writer holds the lock.
+    ///
+    /// `signers` maps an actor id to the Ed25519 secret (64 hex characters or
+    /// 32 bytes) that signs every record the actor writes; an actor with no
+    /// signer writes unsigned. Key generation and storage are the host's;
+    /// the secret is held only for the writer's lifetime and never exposed.
+    /// Every listed actor must be registered in the rules' `author_roles`.
     #[new]
-    #[pyo3(signature = (log_dir, rules))]
-    fn new(log_dir: &str, rules: &str) -> PyResult<Self> {
+    #[pyo3(signature = (log_dir, rules, signers=None))]
+    fn new(
+        log_dir: &str,
+        rules: &str,
+        signers: Option<BTreeMap<String, Bound<'_, PyAny>>>,
+    ) -> PyResult<Self> {
         let rules: VerifierRules = serde_json::from_str(rules)
             .map_err(|e| PyValueError::new_err(format!("invalid rules JSON: {e}")))?;
+        let mut parsed_signers = BTreeMap::new();
+        for (who, secret) in signers.iter().flatten() {
+            if !rules.author_roles.contains_key(who.as_str()) {
+                return Err(PyValueError::new_err(format!(
+                    "signer {who:?} is not registered in the rules' author_roles"
+                )));
+            }
+            parsed_signers.insert(who.clone(), parse_secret(who, secret)?);
+        }
         let inner = LogWriter::open(Path::new(log_dir), &rules)
             .map_err(|e| PyRuntimeError::new_err(format!("cannot open log: {e}")))?;
         let state = verify_and_build_state(inner.records(), &rules).map_err(|_| {
@@ -770,6 +869,7 @@ impl Writer {
             inner,
             rules,
             state,
+            signers: parsed_signers,
         })
     }
 
@@ -1067,7 +1167,7 @@ impl Writer {
         score=None, scale=None, procedure=None, uses=None, blocked=false,
         insufficient=false, stale=false, not_run=false, evaluator=None,
         evaluator_version=None, procedure_hash=None, input_hash=None, basis=None,
-        requirements=None, artifacts=None))]
+        requirements=None, artifacts=None, attested=false))]
     #[allow(clippy::too_many_arguments)]
     fn evaluate(
         &mut self,
@@ -1091,9 +1191,20 @@ impl Writer {
         basis: Option<&str>,
         requirements: Option<Vec<String>>,
         artifacts: Option<Vec<Bound<'_, PyAny>>>,
+        attested: bool,
     ) -> PyResult<Commit> {
         let author = self.resolve_author(author)?;
         let candidate = parse_id(candidate)?;
+        // The attested schema (base class Verified) is admitted only under a
+        // signature from an author with pinned keys: refuse an unsigned one
+        // before anything is written. Whether the key is pinned is the
+        // verifier's decision, recorded as the verdict.
+        if attested && !self.signers.contains_key(&author.id) {
+            return Err(PyValueError::new_err(format!(
+                "attested=True requires a signer for {:?}: pass signers={{...}} to Writer",
+                author.id
+            )));
+        }
 
         // Exactly one outcome.
         let unit: Vec<&str> = [
@@ -1234,7 +1345,17 @@ impl Writer {
                 evidence: parse_artifacts(artifacts)?.unwrap_or_default(),
                 requirements: requirement_ids,
             })?;
-            (SCHEMA_EVALUATION_V2, data)
+            // Same payload; the schema id is the only difference, and it is
+            // what moves the base class from Reported to Verified.
+            if attested {
+                (SCHEMA_EVALUATION_ATTESTED, data)
+            } else {
+                (SCHEMA_EVALUATION_V2, data)
+            }
+        } else if attested {
+            return Err(PyValueError::new_err(
+                "attested=True requires the extended shape: give evaluator and basis",
+            ));
         } else {
             let outcome = match outcome_v2 {
                 EvaluationOutcomeV2::Passed => EvaluationOutcome::Passed,
