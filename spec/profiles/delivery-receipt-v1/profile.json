@@ -1,0 +1,38 @@
+{
+  "id": "delivery-receipt-v1",
+  "version": 1,
+  "clauses": [
+    {
+      "id": "D0",
+      "statement": "At least one delivery claim exists: an accepted Selection with outcome Selected whose Used evaluations bind to requirements of exactly one Request. For each request the latest sound claim is evaluated; earlier ones are reported superseded."
+    },
+    {
+      "id": "D1",
+      "statement": "Every accepted, unretracted Requirement with required true under the claim's request, as of the receipt head, has at least one evaluation among the claim's Used evaluations that references it with outcome passed."
+    },
+    {
+      "id": "D2",
+      "statement": "No evaluation among the claim's Used evaluations that references a required requirement has an outcome other than passed."
+    },
+    {
+      "id": "D3",
+      "statement": "The claim chooses exactly one candidate; every evaluation it uses judges that candidate, carries a non-empty evidence set, and every evidence reference appears in the candidate's artifacts or in the artifacts of an accepted Result in the same thread."
+    },
+    {
+      "id": "D4",
+      "statement": "The author of every evaluation the claim uses is a different actor from the author of the claimed candidate."
+    },
+    {
+      "id": "D5",
+      "statement": "Every evaluation the claim uses carries evaluator.id, evaluator.procedure_hash, evaluator.input_hash, and a declared basis; the weakest basis in the claim is reported."
+    },
+    {
+      "id": "D6",
+      "statement": "The receipt conforms to bellbook-core-v1 (or a stronger tier), and if it declares that profile the declaration names the evaluated table."
+    },
+    {
+      "id": "D7",
+      "statement": "The claim's Selection is sound, untainted, and unretracted at the receipt head."
+    }
+  ]
+}

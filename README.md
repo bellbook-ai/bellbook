@@ -364,22 +364,25 @@ verdict, standing section, and query answer across the corpus, agreeing
 with this reference on every case - including the deliberately malformed and forged
 inputs it must reject.
 
-The repository also publishes the **`bellbook-core-v1` baseline profile**
-(`spec/profiles/bellbook-core-v1/`: the content-addressed clause table
-and its vectors, run by `tests/profile_vectors.rs` and re-derived by the
-Python validator), the shared minimum rule shape for comparing receipts
-across organizations, evaluated on request and reported alongside the
-verdict ([docs/profiles/bellbook-core-v1.md](docs/profiles/bellbook-core-v1.md)).
+The repository also publishes two **profiles**, each a content-addressed
+clause table with its own vectors under `spec/profiles/`, re-derived by
+the Python validator and reported alongside the verdict, never changing
+it: **`bellbook-core-v1`**, the shared minimum rule shape for comparing
+receipts across organizations
+([docs/profiles/bellbook-core-v1.md](docs/profiles/bellbook-core-v1.md)),
+and **`delivery-receipt-v1`**, the grammar of a delivery claim - every
+required requirement judged passed by a distinct, fully bound evaluator
+over evidence the record carries for the claimed candidate, under the
+baseline, standing at the head - with a fraud battery of one rejecting
+vector per clause
+([docs/profiles/delivery-receipt-v1.md](docs/profiles/delivery-receipt-v1.md)).
 
 Open work, **not implemented** (sequenced in
 [RFC-0003](docs/rfcs/0003-requirement-binding.md) and SPEC §12.2):
 
-1. **`delivery-receipt-v1`** - the grammar of a delivery claim over the
-   v0.4 records (requirement, evidence, evaluator decision, artifact
-   identity, capability profile), with its own fraud-rejection vectors.
-2. **`bellbook-core-signed-v1`** - the signed tier above the baseline:
+1. **`bellbook-core-signed-v1`** - the signed tier above the baseline:
    required signatures and pinned keys.
-3. **`PolicyDecision` record + `bellbook-policy-enforced-v1` profile** -
+2. **`PolicyDecision` record + `bellbook-policy-enforced-v1` profile** -
    first-class capture of external policy-engine permit/deny decisions,
    kept strictly separate from Bellbook's own Verdicts, followed by a
    reference adapter for an open-source authorization engine (see

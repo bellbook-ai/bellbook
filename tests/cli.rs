@@ -1841,6 +1841,8 @@ fn requirement_binding_story_from_the_cli_alone() {
             "recomputed",
             "--procedure-hash",
             DIGEST64,
+            "--input-hash",
+            DIGEST64,
             "--requirement",
             &r1,
             "--artifact",
@@ -1865,8 +1867,14 @@ fn requirement_binding_story_from_the_cli_alone() {
             "linter",
             "--basis",
             "declared",
+            "--procedure-hash",
+            DIGEST64,
+            "--input-hash",
+            DIGEST64,
             "--requirement",
             &r2,
+            "--artifact",
+            &format!("git-tree-sha1:{TREE_A}"),
             "--json",
         ],
     ));
@@ -1889,6 +1897,10 @@ fn requirement_binding_story_from_the_cli_alone() {
         ],
     ));
 
+    // The receipt declares the baseline and the delivery profile; both are
+    // checked unasked. The story is a delivery claim: the required
+    // requirement is covered by a passing, fully bound evaluation over the
+    // candidate's own tree, the informational one may be not-run.
     let receipt = env._dir.path().join("r.json");
     let out = run(
         &env,
@@ -1896,6 +1908,7 @@ fn requirement_binding_story_from_the_cli_alone() {
             "export",
             "--profile",
             "bellbook-core-v1",
+            "delivery-receipt-v1",
             "--out",
             receipt.to_str().unwrap(),
         ],
@@ -1914,7 +1927,15 @@ fn requirement_binding_story_from_the_cli_alone() {
     );
     let v: Value = serde_json::from_slice(&out.stdout).unwrap();
     assert_eq!(v["status"], "Clean");
+    assert_eq!(v["profiles"][0]["id"], "bellbook-core-v1");
     assert_eq!(v["profiles"][0]["status"], "Conformant");
+    assert_eq!(v["profiles"][1]["id"], "delivery-receipt-v1");
+    assert_eq!(
+        v["profiles"][1]["status"], "Conformant",
+        "{}",
+        v["profiles"][1]
+    );
+    assert_eq!(v["profiles"][1]["declaration_matches"], true);
     assert_eq!(v["record_count"], 14, "7 subjects and their verdicts");
 
     // The query surface reports the bindings on the nodes it reaches, over
@@ -1948,15 +1969,24 @@ fn requirement_binding_story_from_the_cli_alone() {
         assert_eq!(target["artifacts"][0]["name"], "src");
         assert_eq!(target["artifacts"][1]["scheme"], "sha256-bytes");
         assert!(target.get("requirements").is_none());
+        // Evidence follows the selection's refs, which are canonically
+        // ordered by id, so look the entries up by the evaluation they name.
         let evidence = sel["evidence"].as_array().unwrap();
         assert_eq!(evidence.len(), 2);
-        assert_eq!(evidence[0]["node"]["id"], e0);
-        assert_eq!(evidence[0]["outcome"], "passed");
-        assert_eq!(evidence[0]["node"]["requirements"], serde_json::json!([r1]));
-        assert_eq!(evidence[0]["node"]["artifacts"][0]["digest"], TREE_A);
-        assert_eq!(evidence[1]["outcome"], "not_run");
-        assert_eq!(evidence[1]["node"]["requirements"], serde_json::json!([r2]));
-        assert!(evidence[1]["node"].get("artifacts").is_none());
+        let by_eval = |id: &str| {
+            evidence
+                .iter()
+                .find(|e| e["node"]["id"] == id)
+                .unwrap_or_else(|| panic!("no evidence entry for {id}"))
+        };
+        let unit = by_eval(&e0);
+        assert_eq!(unit["outcome"], "passed");
+        assert_eq!(unit["node"]["requirements"], serde_json::json!([r1]));
+        assert_eq!(unit["node"]["artifacts"][0]["digest"], TREE_A);
+        let lint = by_eval(&e1);
+        assert_eq!(lint["outcome"], "not_run");
+        assert_eq!(lint["node"]["requirements"], serde_json::json!([r2]));
+        assert_eq!(lint["node"]["artifacts"][0]["digest"], TREE_A);
     }
     let out = bellbook()
         .args(["query", "selected", "ship", "--receipt"])

@@ -5,6 +5,38 @@ All notable changes to Bellbook are documented in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and releases follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **The `delivery-receipt-v1` profile** (RFC-0003 sections 4.4 and 4.6,
+  SPEC section 12.2; #111). The grammar of a delivery claim over the spec
+  0.4 records: a claim is an accepted `Selected` Selection whose `Use`d
+  extended evaluations bind to requirements of exactly one Request (the
+  request is determined from the record, never declared; the latest sound
+  claim per request is evaluated and earlier ones reported superseded).
+  Clauses D0 through D7: a claim exists; every required requirement is
+  covered by a passing, unretracted evaluation at the receipt head; no
+  evaluation of a required requirement is non-passing; every evaluation
+  judges the one chosen candidate with non-empty evidence that the
+  candidate or an accepted Result in the thread carries; producer and
+  evaluator are distinct actors; the decider binding is complete, with the
+  weakest basis reported; `bellbook-core-v1` is met (declared and
+  matching, or evaluated as the fallback); the claim is sound, untainted,
+  and unretracted. `bellbook validate --require-profile
+  delivery-receipt-v1` and `export --profile delivery-receipt-v1` work on
+  every surface. The clause table and hash are published in
+  `spec/profiles/delivery-receipt-v1/profile.json`; `cases.json` beside it
+  is the fraud battery - four conformant shapes (baseline declared,
+  baseline as the fallback, evidence bound through a Result, a superseded
+  earlier claim) and one rejecting case per clause, including the
+  canonical forgeries (a claim over a failed evaluation with every digest
+  consistent; a passing evaluation reattached to another candidate). The
+  independent Python validator implements every clause from scratch and
+  agrees on every vector; the CLI and Python story gates now export a
+  receipt declaring both profiles and assert both are met. Core
+  conformance is byte-unchanged.
+
 ## [0.8.0] - 2026-09-02
 
 Requirement binding: spec epoch 0.4, the first spec change since 0.3
