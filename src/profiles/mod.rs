@@ -24,8 +24,15 @@
 //! evidence and the claimed candidate, producer/evaluator separation, the
 //! decider binding, the named capability profile, and standing - with a
 //! fraud battery of its own vectors.
+//!
+//! The third, [`BELLBOOK_CORE_SIGNED_V1`], is the signed tier above the
+//! baseline (RFC-0003 section 4.5): signatures required on every evolution
+//! kind, every such author key-pinned, and every evaluation a claim rests
+//! on attested. A baseline-conformant receipt reaches it by adding
+//! signatures and switching evaluation schema ids; nothing changes shape.
 
 mod delivery_v1;
+mod signed_v1;
 
 use serde::{Deserialize, Serialize};
 
@@ -42,9 +49,16 @@ pub const BELLBOOK_CORE_V1: &str = "bellbook-core-v1";
 /// Stable id of the delivery-receipt profile (RFC-0003 section 4.6).
 pub const DELIVERY_RECEIPT_V1: &str = "delivery-receipt-v1";
 
+/// Stable id of the signed tier above the baseline (RFC-0003 section 4.5).
+pub const BELLBOOK_CORE_SIGNED_V1: &str = "bellbook-core-signed-v1";
+
 /// Every profile id this validator knows how to evaluate.
 pub fn known_profiles() -> &'static [&'static str] {
-    &[BELLBOOK_CORE_V1, DELIVERY_RECEIPT_V1]
+    &[
+        BELLBOOK_CORE_V1,
+        DELIVERY_RECEIPT_V1,
+        BELLBOOK_CORE_SIGNED_V1,
+    ]
 }
 
 /// The clause table of `delivery-receipt-v1` (clauses D0 through D7; see
@@ -52,6 +66,16 @@ pub fn known_profiles() -> &'static [&'static str] {
 pub fn delivery_v1_table() -> ProfileTable {
     delivery_v1::table()
 }
+
+/// The clause table of `bellbook-core-signed-v1` (clauses S0 through S3;
+/// see `docs/profiles/bellbook-core-signed-v1.md`).
+pub fn signed_v1_table() -> ProfileTable {
+    signed_v1::table()
+}
+
+/// The evolution kinds the signed tier requires signatures for and pinned
+/// authors of (clauses S1 and S2).
+pub const SIGNED_TIER_KINDS: [Kind; 5] = signed_v1::SIGNED_KINDS;
 
 /// Outcome of evaluating one profile over one receipt.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
@@ -203,6 +227,7 @@ pub fn profile_table(id: &str) -> Option<ProfileTable> {
     match id {
         BELLBOOK_CORE_V1 => Some(core_v1_table()),
         DELIVERY_RECEIPT_V1 => Some(delivery_v1::table()),
+        BELLBOOK_CORE_SIGNED_V1 => Some(signed_v1::table()),
         _ => None,
     }
 }
@@ -221,6 +246,7 @@ pub fn evaluate_profile(id: &str, receipt: &Receipt, report: &Report) -> Profile
     match id {
         BELLBOOK_CORE_V1 => evaluate_core_v1(receipt, report),
         DELIVERY_RECEIPT_V1 => delivery_v1::evaluate(receipt, report),
+        BELLBOOK_CORE_SIGNED_V1 => signed_v1::evaluate(receipt, report),
         _ => ProfileResult {
             id: id.to_string(),
             hash: [0u8; 32],

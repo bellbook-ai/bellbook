@@ -1,0 +1,22 @@
+{
+  "id": "bellbook-core-signed-v1",
+  "version": 1,
+  "clauses": [
+    {
+      "id": "S0",
+      "statement": "The receipt conforms to bellbook-core-v1, and if it declares that profile the declaration names the evaluated table."
+    },
+    {
+      "id": "S1",
+      "statement": "signature_required_kinds includes Candidate, Evaluation, Selection, Retraction, and Requirement."
+    },
+    {
+      "id": "S2",
+      "statement": "author_keys pins every actor that authored an accepted Candidate, Evaluation, Selection, Retraction, or Requirement."
+    },
+    {
+      "id": "S3",
+      "statement": "Every evaluation Used by an accepted Selection with outcome Selected carries the schema bellbook.evaluation.attested.v1."
+    }
+  ]
+}

@@ -369,25 +369,28 @@ verdict, standing section, and query answer across the corpus, agreeing
 with this reference on every case - including the deliberately malformed and forged
 inputs it must reject.
 
-The repository also publishes two **profiles**, each a content-addressed
+The repository also publishes three **profiles**, each a content-addressed
 clause table with its own vectors under `spec/profiles/`, re-derived by
 the Python validator and reported alongside the verdict, never changing
 it: **`bellbook-core-v1`**, the shared minimum rule shape for comparing
 receipts across organizations
-([docs/profiles/bellbook-core-v1.md](docs/profiles/bellbook-core-v1.md)),
-and **`delivery-receipt-v1`**, the grammar of a delivery claim - every
+([docs/profiles/bellbook-core-v1.md](docs/profiles/bellbook-core-v1.md));
+**`delivery-receipt-v1`**, the grammar of a delivery claim - every
 required requirement judged passed by a distinct, fully bound evaluator
 over evidence the record carries for the claimed candidate, under the
 baseline, standing at the head - with a fraud battery of one rejecting
 vector per clause
-([docs/profiles/delivery-receipt-v1.md](docs/profiles/delivery-receipt-v1.md)).
+([docs/profiles/delivery-receipt-v1.md](docs/profiles/delivery-receipt-v1.md));
+and **`bellbook-core-signed-v1`**, the signed tier above the baseline -
+signatures required on every evolution kind, every such author key-pinned,
+every evaluation a selection rests on attested - reached from the baseline
+by adding signatures and switching evaluation schema ids
+([docs/profiles/bellbook-core-signed-v1.md](docs/profiles/bellbook-core-signed-v1.md)).
 
 Open work, **not implemented** (sequenced in
 [RFC-0003](docs/rfcs/0003-requirement-binding.md) and SPEC §12.2):
 
-1. **`bellbook-core-signed-v1`** - the signed tier above the baseline:
-   required signatures and pinned keys.
-2. **`PolicyDecision` record + `bellbook-policy-enforced-v1` profile** -
+1. **`PolicyDecision` record + `bellbook-policy-enforced-v1` profile** -
    first-class capture of external policy-engine permit/deny decisions,
    kept strictly separate from Bellbook's own Verdicts, followed by a
    reference adapter for an open-source authorization engine (see

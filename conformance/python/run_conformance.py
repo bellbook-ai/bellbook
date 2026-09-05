@@ -395,6 +395,11 @@ PROFILES = {
         "failable": {"D0", "D1", "D2", "D3", "D4", "D5", "D6", "D7"},
         "declaration_situations": False,
     },
+    "bellbook-core-signed-v1": {
+        "outcomes": {"Conformant", "NonConformant"},
+        "failable": {"S0", "S1", "S2", "S3"},
+        "declaration_situations": False,
+    },
 }
 
 
@@ -537,7 +542,8 @@ def main() -> int:
     print("structural log integrity, and the full verdict rule battery")
     print("(per-record verdicts, retraction, and taint), the RFC-0002")
     print("named query set, and the published profiles (bellbook-core-v1,")
-    print("delivery-receipt-v1 with its fraud battery), across the")
+    print("delivery-receipt-v1 with its fraud battery, bellbook-core-signed-v1")
+    print("with its signed vectors), across the")
     print("vectors and the entire conformance corpus of every supported")
     print("epoch (" + ", ".join(v for v, _, _ in EPOCHS) + ").")
     return 0
