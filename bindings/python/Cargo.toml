@@ -36,7 +36,7 @@ crate-type = ["cdylib"]
 # previous published line until the new core is on crates.io (the library API
 # is unchanged across the bump), avoiding a publish-ordering deadlock; it is
 # aligned to the current line right after publish, as this release does.
-bellbook_core = { package = "bellbook", version = "0.8", default-features = false, features = [
+bellbook_core = { package = "bellbook", version = "0.9", default-features = false, features = [
     "persist",
 ] }
 pyo3 = { version = "0.29", features = ["extension-module", "abi3-py39"] }
