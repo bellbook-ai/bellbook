@@ -72,8 +72,8 @@ COMMANDS:
                 evidence derivation, taint, and the standing section.
                 Every profile the receipt declares is evaluated and
                 reported alongside the verdict, never trusted;
-                --require-profile evaluates a named profile (currently
-                bellbook-core-v1) the receipt did not declare. A receipt
+                --require-profile evaluates a named profile (bellbook-core-v1
+                or delivery-receipt-v1) the receipt did not declare. A receipt
                 that validates but does not conform to a declared or
                 required profile exits 3, as does a declaration whose
                 version or hash is not the profile this binary evaluated.
