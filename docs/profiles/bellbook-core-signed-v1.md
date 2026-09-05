@@ -75,6 +75,38 @@ Three changes to a baseline setup, none of which reshapes a payload:
 Changing the rules changes `rules_hash`: a receipt exported under baseline
 rules stays valid under them and stays NonConformant here.
 
+From the CLI, with one secret per actor (any 32 random bytes, kept by the
+host; `openssl rand -hex 32 > agent.hex` is enough):
+
+```sh
+bellbook key public --secret agent.hex          # the hex to pin
+bellbook rules init --author human:user --author agent:provider --author evaluator:provider \
+  --signed --author-key human:HUMAN_PUB --author-key agent:AGENT_PUB \
+  --author-key evaluator:EVALUATOR_PUB --out rules.json
+bellbook candidate add ... --author agent --sign-key agent.hex
+bellbook eval add ... --author evaluator --evaluator harness --basis recomputed \
+  --attested --sign-key evaluator.hex
+bellbook select ... --author agent --sign-key agent.hex
+bellbook export --profile bellbook-core-v1 bellbook-core-signed-v1 delivery-receipt-v1 --out receipt.json
+```
+
+From Python:
+
+```python
+rules = bellbook.default_rules({"human": "user", "agent": "provider", "evaluator": "provider"},
+                               signed=True,
+                               author_keys={"human": [HUMAN_PUB], "agent": [AGENT_PUB],
+                                            "evaluator": [EVALUATOR_PUB]})
+w = bellbook.Writer("./log", rules, signers={"human": HUMAN_SECRET, "agent": AGENT_SECRET,
+                                             "evaluator": EVALUATOR_SECRET})
+e = w.evaluate(author="evaluator", ..., evaluator="harness", basis="recomputed", attested=True)
+```
+
+The writer signs every record a listed actor writes; an unsigned record by
+a pinned actor is rejected by the verifier as `SignatureMissing`, and a
+record signed with a key the rules do not pin for its author as
+`SignatureInvalid`. Both are durable rejected records, not errors.
+
 ## Declaring
 
 ```sh

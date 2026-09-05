@@ -2261,3 +2261,342 @@ fn artifact_and_extended_eval_flags_are_checked_before_the_write() {
     assert!(sel["evidence"][0]["node"].get("requirements").is_none());
     assert!(sel["evidence"][0]["node"].get("artifacts").is_none());
 }
+
+// ---------------------------------------------------------------------------
+// The signed tier from the CLI alone (bellbook-core-signed-v1)
+// ---------------------------------------------------------------------------
+
+/// `rules init --signed --author-key`, `key public`, `--sign-key` on every
+/// recording command, and `eval add --attested`: a receipt that declares all
+/// three profiles and meets them, recorded with nothing but the binary. The
+/// negative branches are the verifier's, reached through the CLI: an unsigned
+/// record by a pinned author, a record signed with another actor's key, an
+/// attested evaluation without a signature, and a pinned key for an actor
+/// with no role binding.
+#[test]
+fn signed_tier_story_from_the_cli_alone() {
+    let dir = tempfile::tempdir().unwrap();
+    let log = dir.path().join("log");
+    let rules = dir.path().join("rules.json");
+    let key_file = |name: &str, byte: u8| {
+        let p = dir.path().join(format!("{name}.hex"));
+        std::fs::write(&p, format!("{}\n", hex_encode(&[byte; 32]))).unwrap();
+        p
+    };
+    let human_key = key_file("human", 0x15);
+    let agent_key = key_file("agent", 0x16);
+    let evaluator_key = key_file("evaluator", 0x17);
+    let public = |secret: &PathBuf| -> String {
+        let out = bellbook()
+            .args(["key", "public", "--secret"])
+            .arg(secret)
+            .output()
+            .unwrap();
+        assert!(
+            out.status.success(),
+            "{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        String::from_utf8(out.stdout).unwrap().trim().to_string()
+    };
+    let (human_pub, agent_pub, evaluator_pub) = (
+        public(&human_key),
+        public(&agent_key),
+        public(&evaluator_key),
+    );
+    // `key public` derives exactly the key the core would pin.
+    assert_eq!(
+        human_pub,
+        Ed25519Signer::from_secret_bytes(&[0x15; 32]).public_key_hex()
+    );
+
+    // A pinned key for an actor with no role binding is refused, like an
+    // admin without one.
+    let out = bellbook()
+        .args([
+            "rules",
+            "init",
+            "--author",
+            "human:user",
+            "--author-key",
+            &format!("ghost:{human_pub}"),
+        ])
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(64));
+    assert!(String::from_utf8_lossy(&out.stderr).contains("--author-key \"ghost\" has no --author"));
+
+    let out = bellbook()
+        .args([
+            "rules",
+            "init",
+            "--author",
+            "human:user",
+            "--author",
+            "agent:provider",
+            "--author",
+            "evaluator:provider",
+            "--signed",
+            "--author-key",
+            &format!("human:{human_pub}"),
+            "--author-key",
+            &format!("agent:{agent_pub}"),
+            "--author-key",
+            &format!("evaluator:{evaluator_pub}"),
+            "--out",
+        ])
+        .arg(&rules)
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let parsed: VerifierRules =
+        serde_json::from_str(&std::fs::read_to_string(&rules).unwrap()).unwrap();
+    for kind in SIGNED_TIER_KINDS {
+        assert!(parsed.signature_required_kinds.contains(&kind), "{kind:?}");
+    }
+    assert_eq!(parsed.author_keys.len(), 3);
+    assert!(parsed.author_keys["human"]
+        .contains(&Ed25519Signer::from_secret_bytes(&[0x15; 32]).public_key()));
+
+    let env = Env {
+        _dir: dir,
+        log,
+        rules,
+    };
+    let human_key = human_key.to_str().unwrap();
+    let agent_key = agent_key.to_str().unwrap();
+    let evaluator_key = evaluator_key.to_str().unwrap();
+
+    // An unsigned record by a pinned author is impersonation: durably
+    // rejected, exit 65, the verifier's reason.
+    let out = run(
+        &env,
+        &[
+            "request",
+            "add",
+            "--author",
+            "human",
+            "--objective",
+            "ship the signed build",
+            "--json",
+        ],
+    );
+    assert_eq!(out.status.code(), Some(65));
+    let v: Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(v["result"], "reject");
+    assert_eq!(v["reason"], "SignatureMissing");
+
+    let req = committed_id(&run(
+        &env,
+        &[
+            "request",
+            "add",
+            "--author",
+            "human",
+            "--objective",
+            "ship the signed build",
+            "--sign-key",
+            human_key,
+            "--json",
+        ],
+    ));
+    let r1 = committed_id(&run(
+        &env,
+        &[
+            "requirement",
+            "add",
+            "--author",
+            "human",
+            "--request",
+            &req,
+            "--key",
+            "R1",
+            "--description",
+            "unit tests pass on the signed tree",
+            "--sign-key",
+            human_key,
+            "--json",
+        ],
+    ));
+    let c0 = committed_id(&run(
+        &env,
+        &[
+            "candidate",
+            "add",
+            "--author",
+            "agent",
+            "--git-tree",
+            TREE_A,
+            "--artifact",
+            &format!("git-tree-sha1:{TREE_A}:src"),
+            "--sign-key",
+            agent_key,
+            "--json",
+        ],
+    ));
+
+    // The attested schema is admitted only under a pinned signature; the
+    // CLI refuses to write one unsigned before anything is committed.
+    let procedure = hex_encode(&[0x51; 32]);
+    let input = hex_encode(&[0x52; 32]);
+    let eval_args = |extra: &[&str]| -> Vec<String> {
+        let mut a: Vec<String> = [
+            "eval",
+            "add",
+            "--author",
+            "evaluator",
+            "--candidate",
+            &c0,
+            "--criterion",
+            "unit-tests",
+            "--passed",
+            "--evaluator",
+            "test-harness",
+            "--basis",
+            "recomputed",
+            "--procedure-hash",
+            &procedure,
+            "--input-hash",
+            &input,
+            "--requirement",
+            &r1,
+            "--artifact",
+            &format!("git-tree-sha1:{TREE_A}"),
+            "--attested",
+            "--json",
+        ]
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
+        a.extend(extra.iter().map(|s| s.to_string()));
+        a
+    };
+    let unsigned = eval_args(&[]);
+    let out = run(
+        &env,
+        &unsigned.iter().map(String::as_str).collect::<Vec<_>>(),
+    );
+    assert_eq!(out.status.code(), Some(65));
+    assert!(String::from_utf8_lossy(&out.stderr).contains("--attested requires --sign-key"));
+    let signed = eval_args(&["--sign-key", evaluator_key]);
+    let e1 = committed_id(&run(
+        &env,
+        &signed.iter().map(String::as_str).collect::<Vec<_>>(),
+    ));
+
+    // A record signed with another actor's key: the signature verifies
+    // against the key it carries, but that key is not pinned for the author.
+    let out = run(
+        &env,
+        &[
+            "select",
+            "--author",
+            "agent",
+            "--objective",
+            "deliver",
+            "--consider",
+            &c0,
+            "--choose",
+            &c0,
+            "--uses-eval",
+            &e1,
+            "--sign-key",
+            evaluator_key,
+            "--json",
+        ],
+    );
+    assert_eq!(out.status.code(), Some(65));
+    let v: Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(v["reason"], "SignatureInvalid");
+
+    committed_id(&run(
+        &env,
+        &[
+            "select",
+            "--author",
+            "agent",
+            "--objective",
+            "deliver",
+            "--consider",
+            &c0,
+            "--choose",
+            &c0,
+            "--uses-eval",
+            &e1,
+            "--sign-key",
+            agent_key,
+            "--json",
+        ],
+    ));
+
+    // Export declaring all three profiles; every one met.
+    let receipt = env._dir.path().join("signed.json");
+    let out = run(
+        &env,
+        &[
+            "export",
+            "--profile",
+            BELLBOOK_CORE_V1,
+            BELLBOOK_CORE_SIGNED_V1,
+            DELIVERY_RECEIPT_V1,
+            "--out",
+            receipt.to_str().unwrap(),
+        ],
+    );
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let out = bellbook()
+        .args(["validate", "--json"])
+        .arg(&receipt)
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(0));
+    let v: Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(v["status"], "Clean");
+    let ids: Vec<&str> = v["profiles"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|p| p["id"].as_str().unwrap())
+        .collect();
+    assert_eq!(
+        ids,
+        [
+            BELLBOOK_CORE_V1,
+            BELLBOOK_CORE_SIGNED_V1,
+            DELIVERY_RECEIPT_V1
+        ]
+    );
+    for p in v["profiles"].as_array().unwrap() {
+        assert_eq!(p["status"], "Conformant", "{}", p["id"]);
+        assert_eq!(p["met"], true, "{}", p["id"]);
+    }
+    let signed_tier = &v["profiles"][1];
+    let clauses: Vec<&str> = signed_tier["clauses"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|c| c["id"].as_str().unwrap())
+        .collect();
+    assert_eq!(clauses, ["S0", "S1", "S2", "S3"]);
+    // Every record a pinned author wrote is signed in the exported receipt,
+    // except the one deliberately unsigned request, which stays in the log
+    // as a durable rejected record (verdicts are materialized unsigned by
+    // the commit protocol and are not authored by a pinned actor).
+    let exported: Receipt = serde_json::from_slice(&std::fs::read(&receipt).unwrap()).unwrap();
+    let unsigned: Vec<&Record> = exported
+        .records
+        .iter()
+        .filter(|r| r.kind != Kind::Verdict && r.author.signature.is_none())
+        .collect();
+    assert_eq!(unsigned.len(), 1);
+    assert_eq!(unsigned[0].kind, Kind::Request);
+    assert_eq!(unsigned[0].author.id, "human");
+}

@@ -51,7 +51,7 @@ USAGE:
                            [--evaluator <id> --basis recomputed|declared
                             [--evaluator-version <s>] [--procedure-hash <hex>]
                             [--input-hash <hex>] [--requirement <id> ...]
-                            [--artifact <scheme>:<digest>[:<name>] ...]]
+                            [--artifact <scheme>:<digest>[:<name>] ...] [--attested]]
     bellbook select        --log <dir> --rules <file> --author <id>
                            --objective <s> --consider <id> ...
                            (--choose <id> ... --uses-eval <id> ... | --none)
@@ -62,9 +62,15 @@ USAGE:
     bellbook query <name> [<id>|<objective>]
                            (--log <dir> --rules <file> | --receipt <file>) [--json]
     bellbook rules init    --author <id>:<role> ... [--admin <id>] ... [--reaffirmer <id>] ...
+                           [--signed] [--author-key <id>:<pubkey-hex>] ...
                            [--max-context <n>] [--out <file>]
+    bellbook key public    --secret <file>
     bellbook export        --log <dir> --rules <file> [--out <file>]
                            [--profile <id> ...]
+
+    Every recording command (request, requirement, candidate, eval, select,
+    retract) also takes [--sign-key <file>]: the record is signed with the
+    Ed25519 secret in <file> (64 hex characters or 32 raw bytes).
 
 COMMANDS:
     validate    Verify a receipt offline: ids (RFC 8785 canonical form),
@@ -130,6 +136,7 @@ fn main() -> ExitCode {
     match command {
         "validate" => cmd_validate(&rest),
         "rules" => cmd_rules(&rest),
+        "key" => cmd_key(&rest),
         "request" | "requirement" | "candidate" | "eval" | "select" | "retract" | "lineage"
         | "export" | "query" => cmd_evolution(command, &rest),
         other => {
@@ -179,9 +186,33 @@ fn cmd_rules(rest: &[String]) -> ExitCode {
     let mut reaffirmers: Vec<String> = Vec::new();
     let mut max_context: u32 = 200;
     let mut out: Option<String> = None;
+    let mut signed = false;
+    let mut author_keys: Vec<(String, PublicKeyBytes)> = Vec::new();
     let mut it = rest.iter();
     while let Some(arg) = it.next() {
         match arg.as_str() {
+            "--signed" => signed = true,
+            "--author-key" => {
+                let Some(v) = it.next() else {
+                    eprintln!("--author-key requires <id>:<pubkey-hex>");
+                    return ExitCode::from(64);
+                };
+                let Some((id, hex)) = v.rsplit_once(':') else {
+                    eprintln!("--author-key must be <id>:<pubkey-hex>, got {v:?}");
+                    return ExitCode::from(64);
+                };
+                if id.is_empty() {
+                    eprintln!("--author-key id must be non-empty");
+                    return ExitCode::from(64);
+                }
+                let Some(key) = hex_decode(hex) else {
+                    eprintln!(
+                        "--author-key {id}: the public key must be 64 lowercase hex characters"
+                    );
+                    return ExitCode::from(64);
+                };
+                author_keys.push((id.to_string(), key));
+            }
             "--admin" => {
                 let Some(v) = it.next() else {
                     eprintln!("--admin requires an actor id");
@@ -265,6 +296,14 @@ fn cmd_rules(rest: &[String]) -> ExitCode {
             }
         }
     }
+    // A pinned key for an actor with no role binding could never sign an
+    // accepted record; refuse the silent no-op the same way.
+    for (id, _) in &author_keys {
+        if !authors.iter().any(|(a, _)| a == id) {
+            eprintln!("--author-key {id:?} has no --author {id}:<role> binding; add one");
+            return ExitCode::from(64);
+        }
+    }
 
     // Baseline evidence thresholds (RFC-0003 clause B3) are on by default so
     // a generated rule set conforms to bellbook-core-v1 out of the box.
@@ -277,6 +316,18 @@ fn cmd_rules(rest: &[String]) -> ExitCode {
     }
     for id in reaffirmers {
         rules = rules.with_reaffirmation_actor(id);
+    }
+    // The signed tier's rule shape (bellbook-core-signed-v1 S1 and S2): a
+    // signature required on every evolution kind, and the keys each actor
+    // may sign with. A pinned actor's records always require a signature,
+    // whatever the kind.
+    if signed {
+        for kind in SIGNED_TIER_KINDS {
+            rules.signature_required_kinds.insert(kind);
+        }
+    }
+    for (id, key) in author_keys {
+        rules.author_keys.entry(id).or_default().insert(key);
     }
     let json = match serde_json::to_string(&rules) {
         Ok(s) => s,
@@ -419,6 +470,75 @@ fn cmd_validate(rest: &[String]) -> ExitCode {
     }
 }
 
+/// Read an Ed25519 secret from `path`: 64 hex characters (surrounding
+/// whitespace ignored) or exactly 32 raw bytes. The secret never leaves the
+/// process and is never printed. Key generation is the host's concern; any
+/// 32 random bytes are a valid secret (`openssl rand -hex 32 > secret.hex`).
+fn read_signer(path: &str) -> Result<Ed25519Signer, String> {
+    let bytes = std::fs::read(path).map_err(|e| format!("cannot read key file {path}: {e}"))?;
+    let secret: [u8; 32] = if bytes.len() == 32 {
+        bytes
+            .as_slice()
+            .try_into()
+            .map_err(|_| "unreachable".to_string())?
+    } else {
+        let text = String::from_utf8(bytes)
+            .map_err(|_| format!("key file {path}: expected 64 hex characters or 32 raw bytes"))?;
+        hex_decode(text.trim())
+            .ok_or_else(|| format!("key file {path}: expected 64 hex characters or 32 raw bytes"))?
+    };
+    Ok(Ed25519Signer::from_secret_bytes(&secret))
+}
+
+/// `key public --secret <file>` prints the public key (64 lowercase hex
+/// characters) of the Ed25519 secret in `<file>` - the value to pin with
+/// `rules init --author-key <id>:<hex>`. It is the only key operation the
+/// CLI offers: generating and storing secrets stays with the host.
+fn cmd_key(rest: &[String]) -> ExitCode {
+    let (sub, rest) = match rest.split_first() {
+        Some((s, r)) => (s.as_str(), r),
+        None => {
+            eprintln!("key needs a subcommand (public)\n\n{USAGE}");
+            return ExitCode::from(64);
+        }
+    };
+    if sub != "public" {
+        eprintln!("unknown key subcommand {sub:?} (expected public)\n\n{USAGE}");
+        return ExitCode::from(64);
+    }
+    let mut secret: Option<&str> = None;
+    let mut it = rest.iter();
+    while let Some(arg) = it.next() {
+        match arg.as_str() {
+            "--secret" => match it.next() {
+                Some(v) => secret = Some(v.as_str()),
+                None => {
+                    eprintln!("--secret requires a path");
+                    return ExitCode::from(64);
+                }
+            },
+            other => {
+                eprintln!("unexpected argument {other:?}\n\n{USAGE}");
+                return ExitCode::from(64);
+            }
+        }
+    }
+    let Some(path) = secret else {
+        eprintln!("key public requires --secret <file>");
+        return ExitCode::from(64);
+    };
+    match read_signer(path) {
+        Ok(signer) => {
+            println!("{}", signer.public_key_hex());
+            ExitCode::SUCCESS
+        }
+        Err(e) => {
+            eprintln!("{e}");
+            ExitCode::from(66)
+        }
+    }
+}
+
 #[cfg(not(feature = "persist"))]
 fn cmd_evolution(command: &str, _rest: &[String]) -> ExitCode {
     eprintln!("the {command:?} command requires the `persist` feature (build without --no-default-features)");
@@ -506,7 +626,8 @@ mod persist_cmds {
                         return Err(format!("--{name} requires at least one value"));
                     }
                     p.multis.entry(name.to_string()).or_default().extend(vals);
-                } else if singles.contains(&name) {
+                } else if singles.contains(&name) || name == "sign-key" {
+                    // Every recording command takes `--sign-key <file>`.
                     let Some(v) = rest.get(i + 1) else {
                         return Err(format!("--{name} requires a value"));
                     };
@@ -648,17 +769,34 @@ mod persist_cmds {
         reason: Option<String>,
     }
 
-    /// Commit a proposal, print its id, and map the verdict to an exit code.
+    /// The signer named by `--sign-key <file>`, if any: a file holding the
+    /// 32-byte Ed25519 secret as 64 hex characters (a trailing newline is
+    /// fine) or as 32 raw bytes. Key generation and storage are the host's
+    /// (`openssl rand -hex 32 > secret.hex` is enough); the CLI only reads
+    /// the secret and never prints it. `bellbook key public` derives the hex
+    /// to pin in `rules init --author-key`.
+    fn signer_from(p: &Parsed) -> Result<Option<Ed25519Signer>, String> {
+        let Some(path) = p.singles.get("sign-key") else {
+            return Ok(None);
+        };
+        crate::read_signer(path).map(Some)
+    }
+
+    /// Commit a proposal (signed when `--sign-key` was given), print its id,
+    /// and map the verdict to an exit code.
     fn commit_and_print(
         mut writer: LogWriter,
         rules: &VerifierRules,
         mut state: State,
         proposal: Proposal,
-        json: bool,
+        p: &Parsed,
     ) -> Result<ExitCode, String> {
-        let (id, verdict) = writer
-            .commit(proposal, rules, &mut state)
-            .map_err(|e| format!("commit failed: {e:?}"))?;
+        let json = p.bools.contains("json");
+        let (id, verdict) = match signer_from(p)? {
+            Some(signer) => writer.commit_signed(proposal, rules, &mut state, &signer),
+            None => writer.commit(proposal, rules, &mut state),
+        }
+        .map_err(|e| format!("commit failed: {e:?}"))?;
         let accepted = verdict.result == VerdictResult::Accept;
         let out = CommitOutput {
             id: hex_encode(&id),
@@ -760,7 +898,7 @@ mod persist_cmds {
             data,
             refs: Vec::new(),
         };
-        commit_and_print(writer, &rules, state, proposal, p.bools.contains("json"))
+        commit_and_print(writer, &rules, state, proposal, &p)
     }
 
     // --- requirement add ---------------------------------------------------
@@ -867,7 +1005,7 @@ mod persist_cmds {
                 target: request,
             }],
         };
-        commit_and_print(writer, &rules, state, proposal, p.bools.contains("json"))
+        commit_and_print(writer, &rules, state, proposal, &p)
     }
 
     // --- candidate add -----------------------------------------------------
@@ -1020,7 +1158,7 @@ mod persist_cmds {
             data,
             refs,
         };
-        commit_and_print(writer, &rules, state, proposal, p.bools.contains("json"))
+        commit_and_print(writer, &rules, state, proposal, &p)
     }
 
     // --- eval add ----------------------------------------------------------
@@ -1058,6 +1196,7 @@ mod persist_cmds {
                 "insufficient",
                 "stale",
                 "not-run",
+                "attested",
             ],
         )?;
         let rules = load_rules(&p)?;
@@ -1218,7 +1357,24 @@ mod persist_cmds {
                 evidence: parse_artifacts(&p)?.unwrap_or_default(),
                 requirements,
             })?;
-            (SCHEMA_EVALUATION_V2, data)
+            // `--attested` writes the same payload under the attested schema
+            // (base class Verified); the verifier admits it only under a
+            // signature from an author with pinned keys, so it needs
+            // `--sign-key` and a rules file that pins the evaluator.
+            if p.bools.contains("attested") {
+                if !p.singles.contains_key("sign-key") {
+                    return Err(
+                        "--attested requires --sign-key: the attested schema is admitted only under a pinned signature".into(),
+                    );
+                }
+                (SCHEMA_EVALUATION_ATTESTED, data)
+            } else {
+                (SCHEMA_EVALUATION_V2, data)
+            }
+        } else if p.bools.contains("attested") {
+            return Err(
+                "--attested requires the extended shape: give --evaluator and --basis".into(),
+            );
         } else {
             let outcome = match outcome_v2 {
                 EvaluationOutcomeV2::Passed => EvaluationOutcome::Passed,
@@ -1244,7 +1400,7 @@ mod persist_cmds {
             data,
             refs,
         };
-        commit_and_print(writer, &rules, state, proposal, p.bools.contains("json"))
+        commit_and_print(writer, &rules, state, proposal, &p)
     }
 
     // --- retract -----------------------------------------------------------
@@ -1291,7 +1447,7 @@ mod persist_cmds {
             data,
             refs,
         };
-        commit_and_print(writer, &rules, state, proposal, p.bools.contains("json"))
+        commit_and_print(writer, &rules, state, proposal, &p)
     }
 
     // --- select ------------------------------------------------------------
@@ -1384,7 +1540,7 @@ mod persist_cmds {
             data,
             refs,
         };
-        commit_and_print(writer, &rules, state, proposal, p.bools.contains("json"))
+        commit_and_print(writer, &rules, state, proposal, &p)
     }
 
     // --- lineage -----------------------------------------------------------

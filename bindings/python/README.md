@@ -200,6 +200,43 @@ report = bellbook.validate(w.receipt(profiles=["bellbook-core-v1"]))
 report.profiles[0]["met"]     # True: Conformant, and the declaration matches
 ```
 
+## Sign
+
+The signed tier (`bellbook-core-signed-v1`) needs three things, all
+available from Python: rules that require a signature on every evolution
+kind and pin each actor's Ed25519 public key, a writer that signs what
+those actors write, and attested evaluations.
+
+```python
+rules = bellbook.default_rules(
+    {"human": "user", "agent": "provider", "evaluator": "provider"},
+    signed=True,                                       # signature_required_kinds: the five evolution kinds
+    author_keys={"human": [HUMAN_PUB], "agent": [AGENT_PUB], "evaluator": [EVALUATOR_PUB]},
+)
+w = bellbook.Writer("./log", rules, signers={"human": HUMAN_SECRET, "agent": AGENT_SECRET,
+                                             "evaluator": EVALUATOR_SECRET})
+e = w.evaluate(author="evaluator", candidate=c0.id, criterion="unit-tests", passed=True,
+               evaluator="test-harness", basis="recomputed", attested=True)   # bellbook.evaluation.attested.v1
+```
+
+- `author_keys` values are lists of 64-hex-character public keys; every
+  listed actor must be in `authors`. A pinned actor's records always
+  require a signature, whatever the kind.
+- `signers` maps an actor to its secret (64 hex characters or 32 bytes).
+  Key generation and storage are yours; the secret is held only for the
+  writer's lifetime and never exposed. The public key a secret produces is
+  what the signature carries as `key_id` (`bellbook key public --secret
+  FILE` prints it from the CLI).
+- `attested=True` writes the same payload under the attested schema, whose
+  base class is `Verified`; it needs the extended shape and a signer for
+  the author, and the verifier admits it only when that author's key is
+  pinned.
+
+The verifier's answers come back as verdicts, not exceptions: an unsigned
+record by a pinned actor is a rejected record with reason
+`SignatureMissing`, and one signed with a key the rules do not pin for its
+author is `SignatureInvalid`.
+
 ## Retract
 
 `retract(author, target, reason)` asserts a committed record's content is
