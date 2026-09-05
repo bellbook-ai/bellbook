@@ -120,9 +120,12 @@ def test_signed_story_from_python_alone(tmp_path):
     for c in (req, r1, c0, e0, s0):
         assert c.accepted, c.reason
 
-    receipt = w.receipt(profiles=["bellbook-core-v1", "delivery-receipt-v1"])
+    receipt = w.receipt(profiles=["bellbook-core-v1", "delivery-receipt-v1", "bellbook-core-signed-v1"])
     report = bellbook.validate(receipt)
     assert report.status == "clean"
+    assert [p["id"] for p in report.profiles] == [
+        "bellbook-core-v1", "delivery-receipt-v1", "bellbook-core-signed-v1"
+    ]
     assert all(p["met"] for p in report.profiles)
     parsed = bellbook.read(receipt)
     by_id = {r.id: r for r in parsed.records}
@@ -144,11 +147,9 @@ def test_signed_story_from_python_alone(tmp_path):
 
 
 def test_signed_tier_profile_through_the_wheel(tmp_path):
-    """The signed tier as the pinned core reports it. The bindings track the
-    published crate: until the pin moves to the core that publishes
-    `bellbook-core-signed-v1`, requiring it is reported Unknown rather than
-    evaluated, and declaring it is refused as an unknown profile. Both
-    assertions flip at the pin bump."""
+    """The signed tier as the wheel reports it: a signed, attested loop
+    required against `bellbook-core-signed-v1` is Conformant on all four
+    clauses, and `met` is what the exit code would be derived from."""
     pubs = _pubs(tmp_path)
     rules = _signed_rules(tmp_path, pubs)
     w = bellbook.Writer(os.path.join(str(tmp_path), "log"), rules, signers={"agent": AGENT, "evaluator": EVALUATOR})
@@ -159,7 +160,7 @@ def test_signed_tier_profile_through_the_wheel(tmp_path):
     assert s0.accepted, s0.reason
     report = bellbook.validate(w.receipt(), require_profile="bellbook-core-signed-v1")
     p = report.profiles[0]
-    if p["status"] == "Unknown":
-        pytest.skip("pinned core predates bellbook-core-signed-v1; flips at the pin bump")
+    assert p["id"] == "bellbook-core-signed-v1"
     assert p["status"] == "Conformant" and p["met"]
+    assert p["declared"] is False and p["declaration_matches"] is None
     assert [c["id"] for c in p["clauses"]] == ["S0", "S1", "S2", "S3"]
