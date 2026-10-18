@@ -28,7 +28,7 @@ default = ["persist"]
 persist = ["dep:fs4"]
 
 [dependencies]
-sha2 = "0.10"
+sha2 = "0.11"
 serde = { version = "1", features = ["derive"] }
 # `float_roundtrip`: serde_json's default float parser is best-effort and can
 # land one ulp off the nearest double (411E44 parses to ...e29 instead of
