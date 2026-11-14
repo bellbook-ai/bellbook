@@ -5,6 +5,19 @@ All notable changes to Bellbook are documented in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and releases follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed
+
+- **Documentation: what `delivery-receipt-v1` does not check** (#162).
+  The profile document gains "What this profile does not check" (D2 judges
+  only the claim's used evaluations, D3 binds evidence to the thread
+  rather than a run, D1 judges requirements standing at the head), and
+  `docs/STABILITY.md` "What is not covered" states those limits and that
+  `validate` without a rules-hash and head comparison proves
+  self-consistency only. Clarifications: no clause, hash, vector, or
+  validator decision changes.
+
 ## [0.11.0] - 2026-09-05
 
 Number canonicalization. No API change (`cargo semver-checks` against

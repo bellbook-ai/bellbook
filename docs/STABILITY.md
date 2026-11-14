@@ -117,7 +117,21 @@ same exit codes. Its module and function names are not covered.
 - **Confidentiality.** Payloads are in the clear by design.
 - **Anything a profile does not check.** A conformant `delivery-receipt-v1`
   receipt proves the recorded process, not that the evaluator was
-  competent or the requirements were the right ones.
+  competent or the requirements were the right ones. Its clauses are also
+  narrower than "every check passed": D2 judges only the evaluations the
+  claim uses, not every evaluation of the candidate; D3 accepts evidence
+  from any accepted Result in the thread, not only the run that was
+  judged; and D1 judges the requirements standing at the head, which
+  their author may have retracted. The profile document states these
+  under "What this profile does not check". They are fixed by the
+  published clause table, so they hold for every 1.x release.
+- **Which rules and head a receipt should have.** `validate` replays a
+  receipt under the rules it embeds and reports the head it reaches.
+  Without a comparison of `rules_hash` against rules agreed out of band
+  and of `head_hash` against an anchored head attestation (SPEC sections
+  11.1 and 12), a Clean report proves the receipt self-consistent, not
+  that it was produced under the intended rules or that no later records
+  were dropped.
 - **Performance.** No throughput, latency, or size figure is a promise;
   the validation limits are, and they are documented.
 - **Internal module layout** below the documented paths, private items, and
