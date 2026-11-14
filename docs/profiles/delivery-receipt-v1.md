@@ -74,6 +74,40 @@ and re-run the procedure. An evaluator whose input is wider than the cited
 evidence (a tree plus a configuration, an environment) should say what the
 hash covers.
 
+## What this profile does not check
+
+The clauses mean exactly what their statements say, and three of them are
+narrower than "the delivery was judged and passed" might suggest. Version 1
+is published, so these are not tightened in place (a changed statement is a
+new version with a new hash; see `docs/STABILITY.md`). A consumer who needs
+more checks it from the receipt, which carries everything below.
+
+- **D2 judges only the evaluations the claim uses.** An accepted evaluation
+  of the claimed candidate over a required requirement that did not pass,
+  but that the Selection does not `Use`, is not considered. A producer that
+  ran several evaluations can cite only the passing one and still conform.
+  To rule this out, look at every accepted, unretracted Evaluation of the
+  claimed candidate in the receipt, not only the claim's.
+- **D3 binds evidence to the thread, not to a run.** Evidence counts if it
+  appears in the candidate's artifacts or in the artifacts of *any*
+  accepted Result in the same thread, including one from an unrelated run.
+  When evidence is bound through a Result, check that it is the Result of
+  the run the evaluation judged.
+- **D1 judges the requirements that stand at the head.** A Retraction is
+  valid when its author authored the target (or holds the rules'
+  administrative override), so whoever recorded a required Requirement can
+  retract it, before or after the claim, and it then drops out of D1. If
+  the producer authored the requirements, it can remove one it was
+  failing. Check who authored each Requirement under the claim's request
+  and whether any was retracted; under `bellbook-core-signed-v1` both the
+  Requirement and its Retraction carry a pinned signature, so the author is
+  at least authenticated.
+
+Under the baseline, actor ids are not authenticated at all, so "a
+different actor" in D4 is a claim about ids, not about keys; the signed
+tier is what binds them. A stricter successor profile is tracked in the
+issues.
+
 ## The fraud battery
 
 The vectors in `cases.json` pair each honest shape with the ways a claim
